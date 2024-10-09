@@ -7,12 +7,12 @@ import gsd.hoomd
 import hoomd
 import numpy
 
-m = 4
+m = 20
 N_particles = 4 * m**3
 spacing = 2
 K = math.ceil(N_particles ** (1 / 3))
 L = K * spacing
-x = numpy.linspace(- L / 4, L / 4, K, endpoint=False)
+x = numpy.linspace(- L / 2, L / 2, K, endpoint=False)
 position = list(itertools.product(x, repeat=3))
 
 frame = gsd.hoomd.Frame()
@@ -126,7 +126,7 @@ simulation.operations.integrator = integrator
 
 bubble = Bubble(center = [0, 0], radius = 3)
 
-simulation.state.thermalize_particle_momenta(filter=bubble(simulation.state), kT=2)
+simulation.state.thermalize_particle_momenta(filter=bubble(simulation.state), kT=80)
 
 simulation.run(25000)
 
