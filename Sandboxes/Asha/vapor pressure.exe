@@ -1,5 +1,6 @@
-m = 16 
-
+m = 16 #adjust this to adjust the number of particles - num particles is 4 times m cubed
+s = 2 #spacing between particles at setup
+k = 0.8 #kT
 
 import itertools
 import math
@@ -9,10 +10,10 @@ import hoomd
 import numpy
 
 N_particles = 4 * m**3
-spacing = 2
+spacing = s
 K = math.ceil(N_particles ** (1 / 3))
 L = K * spacing
-x = numpy.linspace(- L / 4, L / 4, K, endpoint=False)
+x = numpy.linspace(- L / 2, L / 2, K, endpoint=False)
 position = list(itertools.product(x, repeat=3))
 
 frame = gsd.hoomd.Frame()
@@ -37,13 +38,13 @@ lj.params[('A', 'A')] = dict(epsilon=1, sigma=1)
 lj.r_cut[('A', 'A')] = 2.5
 integrator.forces.append(lj)
 nvt = hoomd.md.methods.ConstantVolume(
-    filter=hoomd.filter.All(), thermostat=hoomd.md.methods.thermostats.Bussi(kT=0.8)
+    filter=hoomd.filter.All(), thermostat=hoomd.md.methods.thermostats.Bussi(kT=k)
 )
 integrator.methods.append(nvt)
 
 simulation.operations.integrator = integrator
 
-simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=0.8)
+simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=k)
 
 
 thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(
@@ -65,4 +66,4 @@ table_file = hoomd.write.Table(
 
 simulation.operations.writers.append(table_file) #logging
 
-simulation.run(30000)
+simulation.run(200000)
