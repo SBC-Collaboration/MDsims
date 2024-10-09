@@ -1,7 +1,4 @@
-# make m 25 instead of 20, how much longer does it take? 1H20M
-# render 2d plot
-# could use with function from Bubble class to get array of particle positions, no GSD
-# higher kT?
+#BUBBLE CLASS IS BROKEN!!!!!!!!!!!!! THIS CODE DOESN'T WORK :(
 
 import itertools
 import math
