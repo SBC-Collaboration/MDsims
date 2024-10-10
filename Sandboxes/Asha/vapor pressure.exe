@@ -1,7 +1,7 @@
 m = 3 #adjust this to adjust the number of particles - num particles is 4 times m cubed
 s = 2 #spacing between particles at setup
 k = 0.8 #kT
-timesteps = 20000 #recommended number of timesteps, do not go below 6000
+timesteps = 200000 #recommended number of timesteps, do not go below 6000
 
 #IGNORE BELOW
 
