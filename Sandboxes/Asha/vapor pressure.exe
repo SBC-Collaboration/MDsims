@@ -1,9 +1,13 @@
-m = 16 #adjust this to adjust the number of particles - num particles is 4 times m cubed
+m = 3 #adjust this to adjust the number of particles - num particles is 4 times m cubed
 s = 2 #spacing between particles at setup
 k = 0.8 #kT
+timesteps = 20000 #recommended number of timesteps, do not go below 6000
+
+#IGNORE BELOW
 
 import itertools
 import math
+import csv
 
 import gsd.hoomd
 import hoomd
@@ -54,16 +58,34 @@ simulation.operations.computes.append(thermodynamic_properties)
 simulation.run(0)
 
 logger = hoomd.logging.Logger(categories=['scalar'])
-logger.add(simulation, quantities=['timestep'])
 logger.add(thermodynamic_properties, quantities=['pressure'])
-logger.add(thermodynamic_properties, quantities=['volume'])
-logger.add(thermodynamic_properties, quantities=['num_particles'])
 
-file = open('log.txt', mode='w', newline='\n')
+file = open('log.csv', mode='w', newline='\n')
 table_file = hoomd.write.Table(
     output=file, trigger=hoomd.trigger.Periodic(period=50), logger=logger
 )
 
 simulation.operations.writers.append(table_file) #logging
 
-simulation.run(200000)
+simulation.run(timesteps)
+
+content = []
+
+with open('log.csv', mode ='r')as file:
+    csvFile = csv.reader(file)
+    for lines in csvFile:
+        data = lines[0].strip()
+        content.append(data)
+
+content.pop(0)
+
+start = int((timesteps / 50) - 100)
+
+content = content[start:]
+
+sum = 0
+
+for d in content:
+    sum = sum + float(d)
+
+print('The vapor pressure is ' + str(sum / 100))
