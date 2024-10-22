@@ -2,8 +2,7 @@ import numpy as np
 import hoomd
 
 
-def FillBoxCubicLattice(
-                        xlim=np.float64([-5, 5]), # x-limits of box to fill
+def FillBoxCubicLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
                         ylim=np.float64([-5, 5]), # y-limits of box to fill
                         zlim=np.float64([-5, 5]), # z-limits of box to fill
                         rho=np.float64(1), # density = 1 / dimension of cubic cell
@@ -14,8 +13,8 @@ def FillBoxCubicLattice(
     cellsize = 1/rho
 
     nx = np.intp(np.floor(np.diff(xlim)/cellsize))
-    ny = np.intp(np.floor(np.diff(xlim)/cellsize))
-    nz = np.intp(np.floor(np.diff(xlim)/cellsize))
+    ny = np.intp(np.floor(np.diff(ylim)/cellsize))
+    nz = np.intp(np.floor(np.diff(zlim)/cellsize))
 
     xoffset = xlim[0] + 0.5*(np.diff(xlim) - cellsize*nx)
     yoffset = ylim[0] + 0.5*(np.diff(ylim) - cellsize*ny)
@@ -35,8 +34,7 @@ def FillBoxCubicLattice(
     return positions
 
 
-def FillBoxFccLattice(
-                      xlim=np.float64([-5, 5]), # x-limits of box to fill
+def FillBoxFccLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
                       ylim=np.float64([-5, 5]), # y-limits of box to fill
                       zlim=np.float64([-5, 5]), # z-limits of box to fill
                       rho=np.float64(1), # density = 1 / dimension of cubic cell
@@ -47,8 +45,8 @@ def FillBoxFccLattice(
     cellsize = 2 / rho # start with a half-size cubic lattice, then apply cut
 
     nx = np.intp(np.floor(np.diff(xlim)/cellsize))
-    ny = np.intp(np.floor(np.diff(xlim)/cellsize))
-    nz = np.intp(np.floor(np.diff(xlim)/cellsize))
+    ny = np.intp(np.floor(np.diff(ylim)/cellsize))
+    nz = np.intp(np.floor(np.diff(zlim)/cellsize))
 
     xoffset = xlim[0] + 0.5*(np.diff(xlim) - cellsize*nx)
     yoffset = ylim[0] + 0.5*(np.diff(ylim) - cellsize*ny)
@@ -59,7 +57,7 @@ def FillBoxFccLattice(
     yvec_i = np.arange(ny)
     zvec_i = np.arange(nz)
 
-    pos_i = np.zeros((numparticles,3),dtype=xvec_i.dtype)
+    pos_i = np.zeros((numparticles,3),dtype=np.intp)
     pos_i_reshaped = pos_i.reshape((nx,ny,nz,3))
     pos_i_reshaped[:,:,:,0] = xvec_i[:,None,None]
     pos_i_reshaped[:,:,:,1] = yvec_i[None,:,None]
@@ -71,8 +69,7 @@ def FillBoxFccLattice(
     return positions
 
 
-def FillBoxRandom(
-                  xlim=np.float64([-5, 5]), # x-limits of box to fill
+def FillBoxRandom(xlim=np.float64([-5, 5]), # x-limits of box to fill
                   ylim=np.float64([-5, 5]), # y-limits of box to fill
                   zlim=np.float64([-5, 5]), # z-limits of box to fill
                   rho=np.float64(1), # density = 1 / dimension of cubic cell
@@ -87,8 +84,7 @@ def FillBoxRandom(
     return positions
 
 
-def AddNoise2Positions(
-                       positions, # (N,3) np.float64 ndarray
+def AddNoise2Positions(positions, # (N,3) np.float64 ndarray
                        noise_sigma, # Gaussian noise term, radial sigma
                        noise_cap # noise cutoff (max radial shift)
                        ):
@@ -110,7 +106,12 @@ def AddNoise2Positions(
     return positions
 
 
-def SelectLJModel(rcut=3.0, forceshift=False, tail_correction=False, mode="none", r_on=2.9):
+def SelectLJModel(rcut=3.0,
+                  forceshift=False,
+                  tail_correction=False,
+                  mode="none",
+                  r_on=2.9
+                  ):
     nl = hoomd.md.nlist.Cell(buffer=0.4)
     if forceshift:
         lj = hoomd.md.pair.ForceShiftedLJ(nlist=nl, default_r_cut=rcut)
