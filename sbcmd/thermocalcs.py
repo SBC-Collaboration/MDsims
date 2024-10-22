@@ -9,7 +9,9 @@ def BuildCubicLattice(
                       nz=np.intp(-1), # number of cells in z direction
                       xoffset=np.float64(0), # x coord of center of lattice
                       yoffset=np.float64(0), # y coord of center of lattice
-                      zoffset=np.float64(0) # z coord of center of lattice
+                      zoffset=np.float64(0), # z coord of center of lattice
+                      noise_sigma = np.float64(0), # Gaussian noise term, radial sigma
+                      noise_cap = np.float64(0), # noise cutoff
                       ):
     ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
         N particles arranged in a cubic lattice.'''
@@ -30,17 +32,30 @@ def BuildCubicLattice(
     positions_reshaped[:,:,:,1] = yvec[None,:,None]
     positions_reshaped[:,:,:,2] = zvec[None,None,:]
 
+    if noise_sigma > 0:
+        noise_r = np.random.randn(numparticles) * noise_sigma
+        noise_r[noise_r>noise_cap] = noise_cap
+        noise_r[noise_r<-noise_cap] = -noise_cap
+        noise_phi = np.random.rand(numparticles) * 2 * np.pi
+        noise_costheta = np.random.rand(numparticles) * 2 - 1
+        noise_x = noise_r * np.cos(noise_phi) * np.sqrt(1 - noise_costheta*noise_costheta)
+        noise_y = noise_r * np.sin(noise_phi) * np.sqrt(1 - noise_costheta*noise_costheta)
+        noise_z = noise_r * noise_costheta
+        positions[:,0] = positions[:,0] + noise_x
+        positions[:,1] = positions[:,1] + noise_y
+        positions[:,2] = positions[:,2] + noise_z
+
     return positions
 
 def BuildFccLatice():
     pass
 
-def CalculateVaporPressure():
+def RunVaporPressureCalc():
     pass
 
-def CalculateSurfaceTension():
+def RunSurfaceTensionCalc():
     pass
 
-def CalculateHeatOfVaporization():
+def RunHeatOfVaporizationCalc():
     pass
 
