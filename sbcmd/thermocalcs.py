@@ -1,5 +1,6 @@
 import numpy as np
 import hoomd
+import gsd.hoomd
 
 
 def FillBoxCubicLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
@@ -128,13 +129,69 @@ def SelectLJModel(rcut=3.0,
     return lj
 
 
-def RunVaporPressureCalc(logfile, lj, n=40, kT=1.0, nsteps=1e5):
+def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     ''' Creates and runs a hoomd md simulation object, writing a logfile'''
+
+    # get initial positions
+    boxlimit = np.float64([-0.5*L, 0.5*L])
+    positions = FillBoxCubicLattice(xlim=boxlimit, ylim=boxlimit, zlim=boxlimit, rho=0.125) # start with unstable density
+    N_particles = positions.shape[0]
+
+    # create initial frame
+    frame = gsd.hoomd.Frame()
+    frame.particles.N = N_particles
+    frame.particles.position = positions
+    frame.particles.typeid = [0] * N_particles
+    frame.configuration.box = [L, L, L, 0, 0, 0]
+    frame.particles.types = ['A']
+
+
+    # create simulation object and initialize state
+    cpu=hoomd.device.CPU()
+    simulation = hoomd.Simulation(device=cpu, seed=1)
+    simulation.create_state_from_snapshot(frame)
+    simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=kT)
+
+    # add integrator to simulation object
+    integrator = hoomd.md.Integrator(dt=0.01)
+    integrator.forces.append(lj)
+    nvt = hoomd.md.methods.ConstantVolume(filter=hoomd.filter.All(),
+                                          thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT)
+                                          )
+    integrator.methods.append(nvt)
+    simulation.operations.integrator = integrator
+
+    # add thermo computation to simulation object
+    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.all())
+    simulation.operations.computes.append(thermodynamic_properties)
+    simulation.run(0)
+
+    # add logfile
+    logger = hoomd.logging.Logger(categories=['scalar'])
+    logger.add(simulation, quantities=['timestep'])
+    logger.add(thermodynamic_properties, quantities=['pressure'])
+    logger.add(thermodynamic_properties, quantities=['volume'])
+    logger.add(thermodynamic_properties, quantities=['num_particles'])
+    file = open(logfile, mode='w', newline='\n')
+    table_file = hoomd.write.Table(output=file,
+                                  trigger=hoomd.trigger.Periodic(period=50),
+                                  logger=logger
+                                  )
+    simulation.operations.writers.append(table_file)
+
+    # now run the simulation
+    simulation.run(200000)
+
+    simulation.operations.writers.remove(table_file)
+
     return True
 
 
 def CalcVaporPresure(logfile):
     ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
+    with open(logfile, mode='r') as file:
+        pass
+
     vpdict = dict(vapor_pressure=np.float64(0), vapor_pressure_rms=np.float64(0), vapor_pressure_slope=np.float64(0))
     return vpdict
 
