@@ -129,7 +129,7 @@ def SelectLJModel(rcut=3.0,
     return lj
 
 
-def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
+def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=2e5):
     ''' Creates and runs a hoomd md simulation object, writing a logfile'''
 
     # get initial positions
@@ -180,7 +180,7 @@ def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     simulation.operations.writers.append(table_file)
 
     # now run the simulation
-    simulation.run(200000)
+    simulation.run(nsteps)
 
     simulation.operations.writers.remove(table_file)
 
