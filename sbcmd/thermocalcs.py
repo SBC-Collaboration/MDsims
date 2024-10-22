@@ -2,32 +2,33 @@ import numpy as np
 import hoomd
 import gsd.hoomd
 
-def BuildCubicLattice(
-                      cellsize=np.float64(1), # dimension of cubic cell
-                      nx=np.intp(10), # number of cells (1 - # of particles) in x direction
-                      ny=np.intp(-1), # number of cells in y direction
-                      nz=np.intp(-1), # number of cells in z direction
-                      xoffset=np.float64(0), # x coord of center of lattice
-                      yoffset=np.float64(0), # y coord of center of lattice
-                      zoffset=np.float64(0), # z coord of center of lattice
-                      noise_sigma = np.float64(0), # Gaussian noise term, radial sigma
-                      noise_cap = np.float64(0), # noise cutoff
-                      ):
+
+def FillBoxCubicLattice(
+                        xlim=np.float64([-5, 5]), # number of cells (1 - # of particles) in x direction
+                        ylim=np.float64([-5, 5]), # number of cells in y direction
+                        zlim=np.float64([-5, 5]), # number of cells in z direction
+                        cellsize=np.float64(1), # dimension of cubic cell
+                        noise_sigma = np.float64(0), # Gaussian noise term, radial sigma
+                        noise_cap = np.float64(0), # noise cutoff
+                        ):
     ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
         N particles arranged in a cubic lattice.'''
 
-    if ny<0:
-        ny = nx
-    if nz<0:
-        nz = nx
+    nx = np.intp(np.floor(np.diff(xlim)/cellsize))
+    ny = np.intp(np.floor(np.diff(xlim)/cellsize))
+    nz = np.intp(np.floor(np.diff(xlim)/cellsize))
 
-    numparticles = (nx+1)*(ny+1)*(nz+1)
-    xvec = cellsize * (np.linspace(0,nx,nx+1,dtype=np.float64) - nx*0.5)
-    yvec = cellsize * (np.linspace(0,ny,ny+1,dtype=np.float64) - ny*0.5)
-    zvec = cellsize * (np.linspace(0,nz,nz+1,dtype=np.float64) - nz*0.5)
+    xoffset = xlim[0] + 0.5*(np.diff(xlim) - cellsize*nx)
+    yoffset = ylim[0] + 0.5*(np.diff(ylim) - cellsize*ny)
+    zoffset = zlim[0] + 0.5*(np.diff(zlim) - cellsize*nz)
+
+    numparticles = nx*ny*nz
+    xvec = cellsize * np.float64(range(nx)) + xoffset
+    yvec = cellsize * np.float64(range(ny)) + yoffset
+    zvec = cellsize * np.float64(range(nz)) + zoffset
 
     positions = np.zeros((numparticles, 3), dtype=np.float64)
-    positions_reshaped = positions.reshape((nx+1,ny+1,nz+1,3))
+    positions_reshaped = positions.reshape((nx,ny,nz,3))
     positions_reshaped[:,:,:,0] = xvec[:,None,None]
     positions_reshaped[:,:,:,1] = yvec[None,:,None]
     positions_reshaped[:,:,:,2] = zvec[None,None,:]
@@ -47,8 +48,27 @@ def BuildCubicLattice(
 
     return positions
 
+
 def BuildFccLatice():
     pass
+
+
+def FillBoxRandom(
+                  xlim=np.float64([-5, 5]), # number of cells (1 - # of particles) in x direction
+                  ylim=np.float64([-5, 5]), # number of cells in y direction
+                  zlim=np.float64([-5, 5]), # number of cells in z direction
+                  rho=np.float64(1) # average particle density
+                  ):
+    ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
+        N particles randomly filling the box, with average density rho '''
+    Lx = np.diff(xlim)
+    Ly = np.diff(ylim)
+    Lz = np.diff(zlim)
+    numparticles = np.int(np.floor(Lx*Ly*Lz*rho))
+    positions = np.random.rand(numparticles,3) * np.float64([Lx,Ly,Lz]) + np.float64([xlim[0],ylim[0],zlim[0]])
+    return positions
+
+
 
 def SelectLJModel(rcut=3.0, forceshift=False, tail_correction=False, mode="none", r_on=2.9):
     nl = hoomd.md.nlist.Cell(buffer=0.4)
@@ -66,18 +86,22 @@ def SelectLJModel(rcut=3.0, forceshift=False, tail_correction=False, mode="none"
     lj.params[('A', 'A')] = dict(epsilon=1.0, sigma=1.0)
     return lj
 
+
 def RunVaporPressureCalc(logfile, lj, n=40, kT=1.0, nsteps=1e5):
-  ''' Creates and runs a hoomd md simulation object, writing a logfile'''
-    pass
+    ''' Creates and runs a hoomd md simulation object, writing a logfile'''
+    return True
+
 
 def CalcVaporPresure(logfile):
-  ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
-  vpdict = dict(vapor_pressure=np.float64(0), vapor_pressure_rms=np.float64(0), vapor_pressure_slope=np.float64(0))
-  return vpdict
+    ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
+    vpdict = dict(vapor_pressure=np.float64(0), vapor_pressure_rms=np.float64(0), vapor_pressure_slope=np.float64(0))
+    return vpdict
+
 
 def RunSurfaceTensionCalc():
-    pass
+    return True
+
 
 def RunHeatOfVaporizationCalc():
-    pass
+    return True
 
