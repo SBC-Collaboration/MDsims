@@ -66,8 +66,14 @@ def SelectLJModel(rcut=3.0, forceshift=False, tail_correction=False, mode="none"
     lj.params[('A', 'A')] = dict(epsilon=1.0, sigma=1.0)
     return lj
 
-def RunVaporPressureCalc(lj, n=40, kT=1.0):
+def RunVaporPressureCalc(logfile, lj, n=40, kT=1.0, nsteps=1e5):
+  ''' Creates and runs a hoomd md simulation object, writing a logfile'''
     pass
+
+def CalcVaporPresure(logfile):
+  ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
+  vpdict = dict(vapor_pressure=np.float64(0), vapor_pressure_rms=np.float64(0), vapor_pressure_slope=np.float64(0))
+  return vpdict
 
 def RunSurfaceTensionCalc():
     pass
