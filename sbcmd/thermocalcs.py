@@ -66,7 +66,7 @@ def SelectLJModel(rcut=3.0, forceshift=False, tail_correction=False, mode="none"
     lj.params[('A', 'A')] = dict(epsilon=1.0, sigma=1.0)
     return lj
 
-def RunVaporPressureCalc(n=40, kT=1.0, ):
+def RunVaporPressureCalc(lj, n=40, kT=1.0):
     pass
 
 def RunSurfaceTensionCalc():
