@@ -50,7 +50,23 @@ def BuildCubicLattice(
 def BuildFccLatice():
     pass
 
-def RunVaporPressureCalc():
+def SelectLJModel(rcut=3.0, forceshift=False, tail_correction=False, mode="none", r_on=2.9):
+    nl = hoomd.md.nlist.Cell(buffer=0.4)
+    if forceshift:
+        lj = hoomd.md.pair.ForceShiftedLJ(nlist=nl, default_r_cut=rcut)
+    else:
+        if mode == "xplor":
+            lj = hoomd.md.pair.LJ(nlist=nl, default_r_cut=rcut,
+                                  default_r_on = r_on,
+                                  mode=mode, tail_correction=tail_correction)
+        else:
+            lj = hoomd.md.pair.LJ(nlist=nl, default_r_cut=rcut,
+                                  mode=mode, tail_correction=tail_correction)
+
+    lj.params[('A', 'A')] = dict(epsilon=1.0, sigma=1.0)
+    return lj
+
+def RunVaporPressureCalc(n=40, kT=1.0, ):
     pass
 
 def RunSurfaceTensionCalc():
