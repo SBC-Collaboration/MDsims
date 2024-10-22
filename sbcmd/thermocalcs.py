@@ -1,18 +1,17 @@
 import numpy as np
 import hoomd
-import gsd.hoomd
 
 
 def FillBoxCubicLattice(
-                        xlim=np.float64([-5, 5]), # number of cells (1 - # of particles) in x direction
-                        ylim=np.float64([-5, 5]), # number of cells in y direction
-                        zlim=np.float64([-5, 5]), # number of cells in z direction
-                        cellsize=np.float64(1), # dimension of cubic cell
-                        noise_sigma = np.float64(0), # Gaussian noise term, radial sigma
-                        noise_cap = np.float64(0), # noise cutoff
+                        xlim=np.float64([-5, 5]), # x-limits of box to fill
+                        ylim=np.float64([-5, 5]), # y-limits of box to fill
+                        zlim=np.float64([-5, 5]), # z-limits of box to fill
+                        rho=np.float64(1), # density = 1 / dimension of cubic cell
                         ):
     ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
         N particles arranged in a cubic lattice.'''
+
+    cellsize = 1/rho
 
     nx = np.intp(np.floor(np.diff(xlim)/cellsize))
     ny = np.intp(np.floor(np.diff(xlim)/cellsize))
@@ -23,9 +22,9 @@ def FillBoxCubicLattice(
     zoffset = zlim[0] + 0.5*(np.diff(zlim) - cellsize*nz)
 
     numparticles = nx*ny*nz
-    xvec = cellsize * np.float64(range(nx)) + xoffset
-    yvec = cellsize * np.float64(range(ny)) + yoffset
-    zvec = cellsize * np.float64(range(nz)) + zoffset
+    xvec = cellsize * np.arange(nx,dtype=np.float64) + xoffset
+    yvec = cellsize * np.arange(ny,dtype=np.float64) + yoffset
+    zvec = cellsize * np.arange(nz,dtype=np.float64) + zoffset
 
     positions = np.zeros((numparticles, 3), dtype=np.float64)
     positions_reshaped = positions.reshape((nx,ny,nz,3))
@@ -33,31 +32,50 @@ def FillBoxCubicLattice(
     positions_reshaped[:,:,:,1] = yvec[None,:,None]
     positions_reshaped[:,:,:,2] = zvec[None,None,:]
 
-    if noise_sigma > 0:
-        noise_r = np.random.randn(numparticles) * noise_sigma
-        noise_r[noise_r>noise_cap] = noise_cap
-        noise_r[noise_r<-noise_cap] = -noise_cap
-        noise_phi = np.random.rand(numparticles) * 2 * np.pi
-        noise_costheta = np.random.rand(numparticles) * 2 - 1
-        noise_x = noise_r * np.cos(noise_phi) * np.sqrt(1 - noise_costheta*noise_costheta)
-        noise_y = noise_r * np.sin(noise_phi) * np.sqrt(1 - noise_costheta*noise_costheta)
-        noise_z = noise_r * noise_costheta
-        positions[:,0] = positions[:,0] + noise_x
-        positions[:,1] = positions[:,1] + noise_y
-        positions[:,2] = positions[:,2] + noise_z
-
     return positions
 
 
-def BuildFccLatice():
-    pass
+def FillBoxFccLattice(
+                      xlim=np.float64([-5, 5]), # x-limits of box to fill
+                      ylim=np.float64([-5, 5]), # y-limits of box to fill
+                      zlim=np.float64([-5, 5]), # z-limits of box to fill
+                      rho=np.float64(1), # density = 1 / dimension of cubic cell
+                      ):
+    ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
+        N particles arranged in a cubic lattice.'''
+
+    cellsize = 2 / rho # start with a half-size cubic lattice, then apply cut
+
+    nx = np.intp(np.floor(np.diff(xlim)/cellsize))
+    ny = np.intp(np.floor(np.diff(xlim)/cellsize))
+    nz = np.intp(np.floor(np.diff(xlim)/cellsize))
+
+    xoffset = xlim[0] + 0.5*(np.diff(xlim) - cellsize*nx)
+    yoffset = ylim[0] + 0.5*(np.diff(ylim) - cellsize*ny)
+    zoffset = zlim[0] + 0.5*(np.diff(zlim) - cellsize*nz)
+
+    numparticles = nx*ny*nz
+    xvec_i = np.arange(nx)
+    yvec_i = np.arange(ny)
+    zvec_i = np.arange(nz)
+
+    pos_i = np.zeros((numparticles,3),dtype=xvec_i.dtype)
+    pos_i_reshaped = pos_i.reshape((nx,ny,nz,3))
+    pos_i_reshaped[:,:,:,0] = xvec_i[:,None,None]
+    pos_i_reshaped[:,:,:,1] = yvec_i[None,:,None]
+    pos_i_reshaped[:,:,:,2] = zvec_i[None,None,:]
+
+    fcc_cut = np.mod(np.sum(pos_i, axis=1),2) == 0
+
+    positions = np.float64(pos_i[fcc_cut,:]) * cellsize + np.float64([xoffset, yoffset, zoffset])
+    return positions
 
 
 def FillBoxRandom(
-                  xlim=np.float64([-5, 5]), # number of cells (1 - # of particles) in x direction
-                  ylim=np.float64([-5, 5]), # number of cells in y direction
-                  zlim=np.float64([-5, 5]), # number of cells in z direction
-                  rho=np.float64(1) # average particle density
+                  xlim=np.float64([-5, 5]), # x-limits of box to fill
+                  ylim=np.float64([-5, 5]), # y-limits of box to fill
+                  zlim=np.float64([-5, 5]), # z-limits of box to fill
+                  rho=np.float64(1), # density = 1 / dimension of cubic cell
                   ):
     ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
         N particles randomly filling the box, with average density rho '''
@@ -68,6 +86,28 @@ def FillBoxRandom(
     positions = np.random.rand(numparticles,3) * np.float64([Lx,Ly,Lz]) + np.float64([xlim[0],ylim[0],zlim[0]])
     return positions
 
+
+def AddNoise2Positions(
+                       positions, # (N,3) np.float64 ndarray
+                       noise_sigma, # Gaussian noise term, radial sigma
+                       noise_cap # noise cutoff (max radial shift)
+                       ):
+    ''' randomly shifts the input position array by independently adding 
+        an isotropic 3D Gaussian with cutoff to each position '''
+
+    numparticles = positions.shape[0]
+    noise_r = np.random.randn(numparticles) * noise_sigma
+    noise_r[noise_r>noise_cap] = noise_cap
+    noise_r[noise_r<-noise_cap] = -noise_cap
+    noise_phi = np.random.rand(numparticles) * 2 * np.pi
+    noise_costheta = np.random.rand(numparticles) * 2 - 1
+    noise_x = noise_r * np.cos(noise_phi) * np.sqrt(1 - noise_costheta*noise_costheta)
+    noise_y = noise_r * np.sin(noise_phi) * np.sqrt(1 - noise_costheta*noise_costheta)
+    noise_z = noise_r * noise_costheta
+    positions[:,0] = positions[:,0] + noise_x
+    positions[:,1] = positions[:,1] + noise_y
+    positions[:,2] = positions[:,2] + noise_z
+    return positions
 
 
 def SelectLJModel(rcut=3.0, forceshift=False, tail_correction=False, mode="none", r_on=2.9):
