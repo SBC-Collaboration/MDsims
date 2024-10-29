@@ -208,7 +208,7 @@ def RunSurfaceTensionCalc(filename, logfile, L=50.0, kT=0.0, nsteps=1000):
    
     # cubic lattice
     boxlimit = np.float64([-0.5 * L, 0.5 * L])
-    positions = FillBoxCubicLattice(xlim=boxlimit, ylim=boxlimit, zlim=boxlimit, rho=0.125)
+    positions = FillBoxCubicLattice(xlim=boxlimit, ylim=boxlimit, zlim=boxlimit, rho=0.9)
     N_particles = positions.shape[0]
 
     cpu = hoomd.device.CPU()
@@ -216,7 +216,7 @@ def RunSurfaceTensionCalc(filename, logfile, L=50.0, kT=0.0, nsteps=1000):
     frame = gsd.hoomd.Frame()
     frame.particles.N = N_particles
     frame.particles.position = positions
-    frame.configuration.box = [L, L, L, 0, 0, 0]
+    frame.configuration.box = [L, L, 2*L, 0, 0, 0]
     frame.particles.types = ['A']
     
     simulation.create_state_from_snapshot(frame)
