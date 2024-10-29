@@ -234,8 +234,8 @@ def RunSurfaceTensionCalc(filename, logfile, L=50.0, kT=0.0, nsteps=1000):
     thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.All())
     simulation.operations.computes.append(thermodynamic_properties)
     
-    logger.add(simulation, quantities=['timestep'])
-    logger.add(thermodynamic_properties, quantities=['pressure', 'volume', 'num_particles'])
+    logger.add(simulation, quantities=['timestep','sequence'])
+    logger.add(thermodynamic_properties, quantities=['pressure', 'volume', 'num_particles', 'pressure_tensor'])
     
     file = open(logfile, mode='w', newline='\n')
     table_file = hoomd.write.Table(output=file,
