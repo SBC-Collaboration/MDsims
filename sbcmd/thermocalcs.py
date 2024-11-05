@@ -191,12 +191,23 @@ def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
 def CalcVaporPresure(logfile):
     ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
     with open(logfile, mode='r') as file:
-        pass
+        for line in file:
+        data = line.strip()
+        content.append(data)
 
-    vpdict = dict(vapor_pressure=np.float64(0), vapor_pressure_rms=np.float64(0), vapor_pressure_slope=np.float64(0))
-    return vpdict
+    content.pop(0)
 
+    start = int((timesteps / 50) - 100)
 
+    content = content[start:]
+
+    sum = 0
+
+    for d in content:
+        sum = sum + float(d)
+
+    vp = sum / 100
+    return vp
 
 def RunSurfaceTensionCalc(filename, logfile, L=50.0, kT=0.0, nsteps=1000):
   
