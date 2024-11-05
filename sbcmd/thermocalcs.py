@@ -192,8 +192,8 @@ def CalcVaporPresure(logfile):
     ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
     with open(logfile, mode='r') as file:
         for line in file:
-        data = line.strip()
-        content.append(data)
+          data = line.strip()
+          content.append(data)
 
     content.pop(0)
 
