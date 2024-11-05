@@ -270,15 +270,17 @@ def CalcVaporPresure(logfile):
     vp = sum / 100
     return vp
 
-def RunSurfaceTensionCalc(filename, logfile, L=50.0, kT=0.0, nsteps=1000):
-  
-        # filename (str): The HDF5 file to log data to.
-        # logfile (str): The file to log simulation properties.
-        # L (float): The size of the simulation box.
-        # kT (float): The thermal energy of the particles.
-        # nsteps (int): Number of simulation steps to run.
-   
-    # cubic lattice
+def RunSurfaceTensionCalc(nsteps=1000):
+    # Ask user for output format
+    output_format = input("Do you want the output as CSV or HDF5? (Enter 'csv' or 'hdf5'): ").strip().lower()
+    
+    # Parameters
+    filename = "surface_tension_data.h5"  # default filename
+    logfile = "simulation_log.txt"  # default log filename
+    L = 50.0
+    kT = 0.0
+    
+    # Cubic lattice setup
     boxlimit = np.float64([-0.5 * L, 0.5 * L])
     positions = FillBoxCubicLattice(xlim=boxlimit, ylim=boxlimit, zlim=boxlimit, rho=0.9)
     N_particles = positions.shape[0]
@@ -288,7 +290,7 @@ def RunSurfaceTensionCalc(filename, logfile, L=50.0, kT=0.0, nsteps=1000):
     frame = gsd.hoomd.Frame()
     frame.particles.N = N_particles
     frame.particles.position = positions
-    frame.configuration.box = [L, L, 2*L, 0, 0, 0]
+    frame.configuration.box = [L, L, 2 * L, 0, 0, 0] # make rectangular
     frame.particles.types = ['A']
     
     simulation.create_state_from_snapshot(frame)
@@ -306,31 +308,38 @@ def RunSurfaceTensionCalc(filename, logfile, L=50.0, kT=0.0, nsteps=1000):
     thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.All())
     simulation.operations.computes.append(thermodynamic_properties)
     
-    logger.add(simulation, quantities=['timestep','sequence'])
+    logger.add(simulation, quantities=['timestep', 'sequence'])
     logger.add(thermodynamic_properties, quantities=['pressure', 'volume', 'num_particles', 'pressure_tensor'])
     
-    file = open(logfile, mode='w', newline='\n')
-    table_file = hoomd.write.Table(output=file,
-                                   trigger=hoomd.trigger.Periodic(period=50),
-                                   logger=logger
-                                  )
-    simulation.operations.writers.append(table_file)
+    with open(logfile, mode='w', newline='\n') as file:
+        table_file = hoomd.write.Table(output=file,
+                                        trigger=hoomd.trigger.Periodic(period=50),
+                                        logger=logger)
+        simulation.operations.writers.append(table_file)
 
-    surface_tension_log = []
-    for step in range(nsteps):
-        simulation.run(1)
-        
-        with h5py.File(filename, 'r') as hdf5_file:
-            pressure_tens = np.float64(hdf5_file['hoomd-data/md/compute/ThermodynamicQuantities/pressure_tensor'][:])
-          
-        # do calculation on sim
+        simulation.run(nsteps)
+
+        # Access pressure tensor directly from the compute object after the simulation
+        pressure_tens = thermodynamic_properties.pressure_tensor[:]
         P_xx = pressure_tens[:, 0]
         P_yy = pressure_tens[:, 4]
         surface_tension = (P_yy - P_xx) / 2
-        surface_tension_log.append([step, surface_tension])
 
     simulation.operations.writers.remove(table_file)
-    file.close()
+
+    if output_format == 'csv':
+        import pandas as pd
+        df = pd.DataFrame({'Surface Tension': surface_tension})
+        df.to_csv('surface_tension_output.csv', index=False)
+    elif output_format == 'hdf5':
+        import h5py
+        with h5py.File(filename, 'w') as hdf5_file:
+            hdf5_file.create_dataset('surface_tension', data=surface_tension)
+    else:
+        print("Invalid output format specified. No output file will be created.")
+    
+    return {"final_surface_tension": surface_tension}
+
 
 def RunHeatOfVaporizationCalc():
     return True
