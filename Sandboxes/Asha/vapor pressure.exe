@@ -1,0 +1,91 @@
+m = 3 #adjust this to adjust the number of particles - num particles is 4 times m cubed
+s = 2 #spacing between particles at setup
+k = 0.8 #kT
+timesteps = 200000 #recommended number of timesteps, do not go below 6000
+
+#IGNORE BELOW
+
+import itertools
+import math
+import csv
+
+import gsd.hoomd
+import hoomd
+import numpy
+
+N_particles = 4 * m**3
+spacing = s
+K = math.ceil(N_particles ** (1 / 3))
+L = K * spacing
+x = numpy.linspace(- L / 2, L / 2, K, endpoint=False)
+position = list(itertools.product(x, repeat=3))
+
+frame = gsd.hoomd.Frame()
+frame.particles.N = N_particles
+frame.particles.position = position[0:N_particles]
+frame.particles.typeid = [0] * N_particles
+frame.configuration.box = [L, L, L, 0, 0, 0]
+
+frame.particles.types = ['A']
+
+with gsd.hoomd.open(name='lattice.gsd', mode='w') as f:
+    f.append(frame)
+cpu = hoomd.device.CPU()
+simulation = hoomd.Simulation(device=cpu, seed=1)
+simulation.create_state_from_gsd(filename='lattice.gsd')
+
+
+integrator = hoomd.md.Integrator(dt=0.01)
+cell = hoomd.md.nlist.Cell(buffer=0.4)
+lj = hoomd.md.pair.LJ(nlist=cell)
+lj.params[('A', 'A')] = dict(epsilon=1, sigma=1)
+lj.r_cut[('A', 'A')] = 2.5
+integrator.forces.append(lj)
+nvt = hoomd.md.methods.ConstantVolume(
+    filter=hoomd.filter.All(), thermostat=hoomd.md.methods.thermostats.Bussi(kT=k)
+)
+integrator.methods.append(nvt)
+
+simulation.operations.integrator = integrator
+
+simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=k)
+
+
+thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(
+    filter=hoomd.filter.All()
+)
+simulation.operations.computes.append(thermodynamic_properties)
+simulation.run(0)
+
+logger = hoomd.logging.Logger(categories=['scalar'])
+logger.add(thermodynamic_properties, quantities=['pressure'])
+
+file = open('log.csv', mode='w', newline='\n')
+table_file = hoomd.write.Table(
+    output=file, trigger=hoomd.trigger.Periodic(period=50), logger=logger
+)
+
+simulation.operations.writers.append(table_file) #logging
+
+simulation.run(timesteps)
+
+content = []
+
+with open('log.csv', mode ='r')as file:
+    csvFile = csv.reader(file)
+    for lines in csvFile:
+        data = lines[0].strip()
+        content.append(data)
+
+content.pop(0)
+
+start = int((timesteps / 50) - 100)
+
+content = content[start:]
+
+sum = 0
+
+for d in content:
+    sum = sum + float(d)
+
+print('The vapor pressure is ' + str(sum / 100))

@@ -1,0 +1,127 @@
+import itertools
+import math
+
+import gsd.hoomd
+import hoomd
+import numpy
+
+m = 4
+N_particles = 4 * m**3
+spacing = 2
+K = math.ceil(N_particles ** (1 / 3))
+L = K * spacing
+x = numpy.linspace(- L / 2, L / 2, K, endpoint=False)
+position = list(itertools.product(x, repeat=3))
+
+frame = gsd.hoomd.Frame()
+frame.particles.N = N_particles
+frame.particles.position = position[0:N_particles]
+frame.particles.typeid = [0] * N_particles
+frame.configuration.box = [L, L, L, 0, 0, 0]
+
+frame.particles.types = ['A']
+
+with gsd.hoomd.open(name='lattice.gsd', mode='w') as f:
+    f.append(frame)
+cpu = hoomd.device.CPU()
+simulation = hoomd.Simulation(device=cpu, seed=1)
+simulation.create_state_from_gsd(filename='lattice.gsd')
+
+
+integrator = hoomd.md.Integrator(dt=0.01)
+cell = hoomd.md.nlist.Cell(buffer=0.4)
+lj = hoomd.md.pair.LJ(nlist=cell)
+lj.params[('A', 'A')] = dict(epsilon=1, sigma=1)
+lj.r_cut[('A', 'A')] = 2.5
+integrator.forces.append(lj)
+nvt = hoomd.md.methods.ConstantVolume(
+    filter=hoomd.filter.All(), thermostat=hoomd.md.methods.thermostats.Bussi(kT=0.8)
+)
+integrator.methods.append(nvt)
+
+simulation.operations.integrator = integrator
+
+simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=0.8)
+
+
+thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(
+    filter=hoomd.filter.All()
+)
+simulation.operations.computes.append(thermodynamic_properties)
+simulation.run(0)
+
+logger = hoomd.logging.Logger(categories=['scalar'])
+logger.add(simulation, quantities=['timestep'])
+logger.add(thermodynamic_properties, quantities=['pressure'])
+logger.add(thermodynamic_properties, quantities=['volume'])
+logger.add(thermodynamic_properties, quantities=['num_particles'])
+
+file = open('log.txt', mode='w', newline='\n')
+table_file = hoomd.write.Table(
+    output=file, trigger=hoomd.trigger.Periodic(period=50), logger=logger
+)
+
+simulation.operations.writers.append(table_file) #logging
+
+simulation.run(30000)
+
+ramp = hoomd.variant.Ramp(A=0, B=1, t_start=simulation.timestep, t_ramp=5000) #number of timesteps to run the ramp
+rho = simulation.state.N_particles / simulation.state.box.volume #measure density
+print(rho)
+initial_box = simulation.state.box
+final_box = hoomd.Box.from_box(initial_box)  #make a copy of initial_box
+final_rho = 0.8 #final rho after all resizing
+final_box.volume = simulation.state.N_particles / final_rho #do not change
+box_resize_trigger = hoomd.trigger.Periodic(10)
+box_resize = hoomd.update.BoxResize(
+    box1=initial_box, box2=final_box, variant=ramp, trigger=box_resize_trigger
+)
+simulation.operations.updaters.append(box_resize)
+
+simulation.run(30000) #run
+
+ramp = hoomd.variant.Ramp(A=0, B=1, t_start=simulation.timestep, t_ramp=5000) #number of timesteps to run the ramp
+rho = simulation.state.N_particles / simulation.state.box.volume #measure density
+print(rho)
+initial_box = simulation.state.box
+final_box = hoomd.Box.from_box(initial_box)  #make a copy of initial_box
+final_rho = 0.66 #final rho after all resizing
+final_box.volume = simulation.state.N_particles / final_rho #do not change
+box_resize_trigger = hoomd.trigger.Periodic(10)
+box_resize = hoomd.update.BoxResize(
+    box1=initial_box, box2=final_box, variant=ramp, trigger=box_resize_trigger
+)
+simulation.operations.updaters.append(box_resize)
+
+simulation.run(30000)
+
+class Bubble(hoomd.filter.CustomFilter):
+    def __init__(self, radius):
+        self.radius = radius
+
+    def __hash__(self):
+        return hash((self.radius))
+
+    def __eq__(self, other):
+        return (isinstance(other, Bubble)
+                and self.radius == other.radius)
+
+    def __call__(self, state):
+        with state.cpu_local_snapshot as snap:
+            positions = snap.particles.position
+            distances = (numpy.sum(positions*positions, axis=1) < (self.radius*self.radius))
+            return numpy.copy(snap.particles.tag[distances])
+
+nve = hoomd.md.methods.ConstantVolume(filter=hoomd.filter.All())
+integrator.methods.append(nve)
+
+simulation.operations.integrator = integrator
+
+
+bubble = Bubble(radius = 3)
+
+simulation.state.thermalize_particle_momenta(filter=bubble(simulation.state), kT=80)
+
+simulation.run(25000)
+
+print("done")
