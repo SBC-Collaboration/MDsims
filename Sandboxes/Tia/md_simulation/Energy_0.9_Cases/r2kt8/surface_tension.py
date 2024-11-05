@@ -3,19 +3,35 @@ import h5py
 import matplotlib.pyplot as plt
 import argparse
 
+# create a simulation object completely seperate from 
+# create a fluid , calculate surface tension, run for a couple hours (COMPLETELY SEPERATE FROM BUBBLE) 
+# this helps us learn surface tension of the fluid 
+# don't quite think big picture yet
+# vapor pressure give a single number
+# look at standard dev of pressure
+# avg of last few pts
+# is there a slope to pressure
+
+# have it be an input w/ a default value
+
+# asha and i can edit placeholders
+
+# somethings can be hard coded for our purpose --- neighbors particles
+
+
 def calculate_surface_tension(filename, radius, tempSpike):
     with h5py.File(filename, 'r') as hdf5_file:
-        pressure_tens = np.float64(hdf5_file['hoomd-data/md/compute/ThermodynamicQuantities/pressure_tensor'][:])
+        pressure_tens = np.float64(hdf5_file['hoomd-data/md/compute/ThermodynamicQuantities/pressure_tensor'][:]) # change bc dependent on md
 
         # [pxx,pxy,pxz,pyy,pyz,pzz]
         P_xx = pressure_tens[:, 0]  # pressure in x-direction
         P_yy = pressure_tens[:, 4]  # pressure in y-direction
-        surface_tension = (P_yy - P_xx) / 2
+        
         
         timesteps = np.arange(len(surface_tension))
         
         # output surface tension data to a file
-        output_filename = f"surface_tension_r{radius}_kt{tempSpike}.txt"
+        output_filename = f"surface_tension_r{radius}_kt{tempSpike}.txt" #create a log file on disk 
         np.savetxt(output_filename, np.column_stack((timesteps, surface_tension)), 
                    header="Timestep Surface_Tension", fmt="%d %.6f")
         
