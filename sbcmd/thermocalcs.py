@@ -128,6 +128,67 @@ def SelectLJModel(rcut=3.0,
     lj.params[('A', 'A')] = dict(epsilon=1.0, sigma=1.0)
     return lj
 
+def RunPressureTime(logfile, lj, L, kT, rho, nsteps):
+    '''Plot pressure versus time'''
+
+    boxlimit = np.float64([-0.5*L, 0.5*L])
+    positions = FillBoxCubicLattice(xlim=boxlimit, ylim=boxlimit, zlim=boxlimit, rho=rho) # start with unstable density
+    N_particles = positions.shape[0]
+
+
+    frame = gsd.hoomd.Frame()
+    frame.particles.N = N_particles
+    frame.particles.position = positions
+    frame.particles.typeid = [0] * N_particles
+    frame.configuration.box = [L, L, L, 0, 0, 0]
+    frame.particles.types = ['A']
+
+    cpu=hoomd.device.CPU()
+    simulation = hoomd.Simulation(device=cpu, seed=1)
+    simulation.create_state_from_snapshot(frame)
+    simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=kT)
+
+    integrator = hoomd.md.Integrator(dt=0.01)
+    integrator.forces.append(lj)
+    nvt = hoomd.md.methods.ConstantVolume(filter=hoomd.filter.All(),
+                                          thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT)
+                                          )
+    integrator.methods.append(nvt)
+    simulation.operations.integrator = integrator
+
+    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.all())
+    simulation.operations.computes.append(thermodynamic_properties)
+    simulation.run(0)
+
+    logger = hoomd.logging.Logger(categories=['scalar'])
+    logger.add(simulation, quantities=['timestep'])
+    logger.add(thermodynamic_properties, quantities=['pressure'])
+    file = open(logfile, mode='w', newline='\n')
+    table_file = hoomd.write.Table(output=file,
+                                  trigger=hoomd.trigger.Periodic(period=50),
+                                  logger=logger
+                                  )
+    simulation.operations.writers.append(table_file)
+
+    simulation.run(200000)
+
+    simulation.operations.writers.remove(table_file)
+
+    return True
+
+def PlotPressureTime(logfile):
+    import pandas as pd
+    data = pd.read_csv(logfile,sep='\s+',header=None)
+    data = pd.DataFrame(data)
+
+    import matplotlib.pyplot as plt
+    x = data[0]
+    y = data[1]
+    plt.plot(x, y,'r--')
+    plt.show()
+
+    return True
+
 
 def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     ''' Creates and runs a hoomd md simulation object, writing a logfile'''
