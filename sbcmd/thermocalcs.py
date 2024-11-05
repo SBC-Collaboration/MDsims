@@ -1,6 +1,9 @@
 import numpy as np
 import hoomd
 import gsd.hoomd
+import pandas as pd
+import h5py
+import matplotlib.pyplot as plt
 
 
 def FillBoxCubicLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
@@ -177,11 +180,9 @@ def RunPressureTime(logfile, lj, L, kT, rho, nsteps):
     return True
 
 def PlotPressureTime(logfile):
-    import pandas as pd
     data = pd.read_csv(logfile,sep='\s+',header=None)
     data = pd.DataFrame(data)
 
-    import matplotlib.pyplot as plt
     x = data[0]
     y = data[1]
     plt.plot(x, y,'r--')
@@ -328,11 +329,9 @@ def RunSurfaceTensionCalc(nsteps=1000):
     simulation.operations.writers.remove(table_file)
 
     if output_format == 'csv':
-        import pandas as pd
         df = pd.DataFrame({'Surface Tension': surface_tension})
         df.to_csv('surface_tension_output.csv', index=False)
     elif output_format == 'hdf5':
-        import h5py
         with h5py.File(filename, 'w') as hdf5_file:
             hdf5_file.create_dataset('surface_tension', data=surface_tension)
     else:
