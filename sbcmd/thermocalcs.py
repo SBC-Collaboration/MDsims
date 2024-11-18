@@ -209,8 +209,8 @@ def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
 
 
     # create simulation object and initialize state
-    cpu=hoomd.device.CPU()
-    simulation = hoomd.Simulation(device=cpu, seed=1)
+    gpu=hoomd.device.GPU()
+    simulation = hoomd.Simulation(device=gpu, seed=1)
     simulation.create_state_from_snapshot(frame)
     simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=kT)
 
