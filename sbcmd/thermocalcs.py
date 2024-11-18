@@ -252,12 +252,15 @@ def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
 
 def CalcVaporPresure(logfile):
     ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
+    content = []
+
     with open(logfile, mode='r') as file:
         for line in file:
           data = line.strip()
           content.append(data)
 
     content.pop(0)
+    timesteps = len(content)
 
     start = int((timesteps / 50) - 100)
 
