@@ -16,9 +16,9 @@ def FillBoxCubicLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
 
     cellsize = 1/rho
 
-    nx = np.intp(np.floor(np.diff(xlim)/cellsize))
-    ny = np.intp(np.floor(np.diff(ylim)/cellsize))
-    nz = np.intp(np.floor(np.diff(zlim)/cellsize))
+    nx = np.intp(np.floor(np.diff(xlim)/cellsize))[0]
+    ny = np.intp(np.floor(np.diff(ylim)/cellsize))[0]
+    nz = np.intp(np.floor(np.diff(zlim)/cellsize))[0]
 
     xoffset = xlim[0] + 0.5*(np.diff(xlim) - cellsize*nx)
     yoffset = ylim[0] + 0.5*(np.diff(ylim) - cellsize*ny)
@@ -80,9 +80,9 @@ def FillBoxRandom(xlim=np.float64([-5, 5]), # x-limits of box to fill
                   ):
     ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
         N particles randomly filling the box, with average density rho '''
-    Lx = np.diff(xlim)
-    Ly = np.diff(ylim)
-    Lz = np.diff(zlim)
+    Lx = np.diff(xlim)[0]
+    Ly = np.diff(ylim)[0]
+    Lz = np.diff(zlim)[0]
     numparticles = np.int(np.floor(Lx*Ly*Lz*rho))
     positions = np.random.rand(numparticles,3) * np.float64([Lx,Ly,Lz]) + np.float64([xlim[0],ylim[0],zlim[0]])
     return positions
