@@ -14,7 +14,7 @@ def FillBoxCubicLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
     ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
         N particles arranged in a cubic lattice.'''
 
-    cellsize = 1/rho
+    cellsize = np.float_power(rho, -1.0/3.0)
 
     nx = np.intp(np.floor(np.diff(xlim)/cellsize))[0]
     ny = np.intp(np.floor(np.diff(ylim)/cellsize))[0]
@@ -46,7 +46,7 @@ def FillBoxFccLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
     ''' outputs an ndarray with shape (N,3) giving the x,y,z positions of
         N particles arranged in a cubic lattice.'''
 
-    cellsize = 2 / rho # start with a half-size cubic lattice, then apply cut
+    cellsize = np.float_power(2.0*rho, -1.0/3.0) # start with a half-size cubic lattice, then apply cut
 
     nx = np.intp(np.floor(np.diff(xlim)/cellsize))[0]
     ny = np.intp(np.floor(np.diff(ylim)/cellsize))[0]
