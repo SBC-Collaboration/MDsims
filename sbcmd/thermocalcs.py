@@ -173,7 +173,7 @@ def RunPressureTime(logfile, lj, L, kT, rho, nsteps):
                                   )
     simulation.operations.writers.append(table_file)
 
-    simulation.run(200000)
+    simulation.run(nsteps)
 
     simulation.operations.writers.remove(table_file)
 
