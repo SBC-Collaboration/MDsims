@@ -159,7 +159,7 @@ def RunPressureTime(logfile, lj, L, kT, rho, nsteps):
     integrator.methods.append(nvt)
     simulation.operations.integrator = integrator
 
-    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.all())
+    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.All())
     simulation.operations.computes.append(thermodynamic_properties)
     simulation.run(0)
 
@@ -224,7 +224,7 @@ def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     simulation.operations.integrator = integrator
 
     # add thermo computation to simulation object
-    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.all())
+    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.All())
     simulation.operations.computes.append(thermodynamic_properties)
     simulation.run(0)
 
