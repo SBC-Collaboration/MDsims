@@ -242,7 +242,7 @@ def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     simulation.operations.writers.append(table_file)
 
     # now run the simulation
-    simulation.run(200000)
+    simulation.run(nsteps)
 
     simulation.operations.writers.remove(table_file)
 
