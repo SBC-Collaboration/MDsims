@@ -25,8 +25,11 @@ It's recommended to set up ssh-key authentication for github, per the instructio
 
 For first-time use, also create the md conda environt as above, and define the python kernel you'll want to use.  You probably need these commands:
 > conda init
+> 
 > source ~/.bashrc
+> 
 > (conda environment commands above)
+> 
 > python -m ipykernel install --user --name <your_kernel_name>
 
 If the conda md enviroment is created already, you can also source the launch_hoomd_kernel.sh script in this repository
