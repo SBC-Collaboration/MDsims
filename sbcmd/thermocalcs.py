@@ -279,7 +279,7 @@ def RunSurfaceTensionCalc(nsteps=1000):
     # import thermocalcs.py
     # thermocalcs.RunSurfaceTensionCalc()
     #python -c "import h5py, pandas as pd; f = h5py.File('surface_tension_data.h5', 'r'); pd.DataFrame(f['surface_tension'][:], columns=['Surface_Tension']).to_csv('surface_tension_data.csv', index=False)"
-''' convert to csv ^'''
+    ''' convert to csv ^'''
     filename = "surface_tension_data.h5"  # auto make output HDF5
     L = 50.0
     kT = 0.0
