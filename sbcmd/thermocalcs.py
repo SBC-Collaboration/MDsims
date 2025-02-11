@@ -333,25 +333,6 @@ def RunSurfaceTensionCalc(nsteps=1000):
 def RunHeatOfVaporizationCalc():
     return True
 
-def colormap_histogram(gsd_file, in_bins = 50):
-    # silly question, should we force a gsd file name convention
-    # perhaps have z num as input
-    # assumming continous file -> no need for my method for connecting timesteps(?)
-    with gsd.hoomd.open(file_name, 'r') as f:
-        num_frames = len(f)
-        last_frame = f[num_frames -1]
 
-    # filter particles with |z| < 3 and get x, y positions
-    positions = last_frame.particles.position[np.abs(last_frame.particles.position[:, 2]) < 3]
-    positions = np.array(positions)
-    
-    # Histogram
-    plt.figure(figsize=(8, 6))
-    plt.hist2d(positions[:, 0], positions[:, 1], bins=in_bins, cmap='viridis')
-    plt.colorbar(label='Counts')
-    plt.xlabel('X Position')
-    plt.ylabel('Y Position')
-    plt.title('2D Histogram of Particle Positions (Last Timestep Frame) z < 3')
-    plt.show()
     
 
