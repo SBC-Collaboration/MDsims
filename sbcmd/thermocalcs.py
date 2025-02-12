@@ -69,7 +69,7 @@ def FillBoxFccLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
 
     fcc_cut = np.mod(np.sum(pos_i, axis=1),2) == 0
 
-    positions = np.float64(pos_i[fcc_cut,:]) * cellsize + np.float64([xoffset, yoffset, zoffset])
+    positions = np.float64(pos_i[fcc_cut,:]) * cellsize + np.float64([xoffset[0], yoffset[0], zoffset[0]])
     return positions
 
 
