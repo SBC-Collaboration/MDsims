@@ -179,7 +179,7 @@ def RunPressureTime(logfile, lj, L, kT, rho, nsteps):
 
     return True
 
-def PlotPressureTime(logfile):
+'''def PlotPressureTime(logfile):
     data = pd.read_csv(logfile,sep='\s+',header=None)
     data = pd.DataFrame(data)
 
@@ -189,7 +189,7 @@ def PlotPressureTime(logfile):
     plt.show()
 
     return True
-
+'''
 
 def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     ''' Creates and runs a hoomd md simulation object, writing a logfile'''
