@@ -3,7 +3,6 @@ import hoomd
 import gsd.hoomd
 import pandas as pd
 import h5py
-import matplotlib.pyplot as plt
 
 
 def FillBoxCubicLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
@@ -131,66 +130,6 @@ def SelectLJModel(rcut=3.0,
     lj.params[('A', 'A')] = dict(epsilon=1.0, sigma=1.0)
     return lj
 
-def RunPressureTime(logfile, lj, L, kT, rho, nsteps):
-    '''Plot pressure versus time'''
-
-    boxlimit = np.float64([-0.5*L, 0.5*L])
-    positions = FillBoxCubicLattice(xlim=boxlimit, ylim=boxlimit, zlim=boxlimit, rho=rho) # start with unstable density
-    N_particles = positions.shape[0]
-
-
-    frame = gsd.hoomd.Frame()
-    frame.particles.N = N_particles
-    frame.particles.position = positions
-    frame.particles.typeid = [0] * N_particles
-    frame.configuration.box = [L, L, L, 0, 0, 0]
-    frame.particles.types = ['A']
-
-    cpu=hoomd.device.CPU()
-    simulation = hoomd.Simulation(device=cpu, seed=1)
-    simulation.create_state_from_snapshot(frame)
-    simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=kT)
-
-    integrator = hoomd.md.Integrator(dt=0.01)
-    integrator.forces.append(lj)
-    nvt = hoomd.md.methods.ConstantVolume(filter=hoomd.filter.All(),
-                                          thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT)
-                                          )
-    integrator.methods.append(nvt)
-    simulation.operations.integrator = integrator
-
-    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.All())
-    simulation.operations.computes.append(thermodynamic_properties)
-    simulation.run(0)
-
-    logger = hoomd.logging.Logger(categories=['scalar'])
-    logger.add(simulation, quantities=['timestep'])
-    logger.add(thermodynamic_properties, quantities=['pressure'])
-    file = open(logfile, mode='w', newline='\n')
-    table_file = hoomd.write.Table(output=file,
-                                  trigger=hoomd.trigger.Periodic(period=50),
-                                  logger=logger
-                                  )
-    simulation.operations.writers.append(table_file)
-
-    simulation.run(nsteps)
-
-    simulation.operations.writers.remove(table_file)
-
-    return True
-
-'''def PlotPressureTime(logfile):
-    data = pd.read_csv(logfile,sep='\s+',header=None)
-    data = pd.DataFrame(data)
-
-    x = data[0]
-    y = data[1]
-    plt.plot(x, y,'r--')
-    plt.show()
-
-    return True
-'''
-
 def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     ''' Creates and runs a hoomd md simulation object, writing a logfile'''
 
@@ -247,92 +186,3 @@ def RunVaporPressureCalc(logfile, lj, L=10., kT=1.0, nsteps=1e5):
     simulation.operations.writers.remove(table_file)
 
     return True
-
-
-
-def CalcVaporPresure(logfile):
-    ''' Opens logfile created by RunVaporPressureCalc, and analyzes it '''
-    content = []
-
-    with open(logfile, mode='r') as file:
-        for line in file:
-          data = line.strip()
-          content.append(data)
-
-    content.pop(0)
-    timesteps = len(content)
-
-    start = int((timesteps / 50) - 100)
-
-    content = content[start:]
-
-    sum = 0
-
-    for d in content:
-        sum = sum + float(d)
-
-    vp = sum / 100
-    return vp
-
-def RunSurfaceTensionCalc(nsteps=1000):
-    # plan: run this code and compare in *excel*
-    # import thermocalcs.py
-    # thermocalcs.RunSurfaceTensionCalc()
-    #python -c "import h5py, pandas as pd; f = h5py.File('surface_tension_data.h5', 'r'); pd.DataFrame(f['surface_tension'][:], columns=['Surface_Tension']).to_csv('surface_tension_data.csv', index=False)"
-    ''' convert to csv ^'''
-    filename = "surface_tension_data.h5"  # auto make output HDF5
-    L = 50.0
-    kT = 0.0
-    
-    # Cubic lattice setup
-    boxlimit = np.float64([-0.5 * L, 0.5 * L])
-    positions = FillBoxCubicLattice(xlim=boxlimit, ylim=boxlimit, zlim=boxlimit, rho=0.9) 
-    # should rho be dynamic?
-    N_particles = positions.shape[0]
-
-    cpu = hoomd.device.CPU()
-    simulation = hoomd.Simulation(device=cpu, seed=1)
-    frame = gsd.hoomd.Frame()
-    frame.particles.N = N_particles
-    frame.particles.position = positions
-    frame.configuration.box = [L, L, 2 * L, 0, 0, 0] # make rectangular
-    frame.particles.types = ['A']
-    
-    simulation.create_state_from_snapshot(frame)
-    simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(), kT=kT)
-
-    lj = SelectLJModel(rcut=3.0) #nist uses 2.5
-    integrator = hoomd.md.Integrator(dt=0.01)
-    integrator.forces.append(lj)
-    nvt = hoomd.md.methods.ConstantVolume(filter=hoomd.filter.All(),
-                                          thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT))
-    integrator.methods.append(nvt)
-    simulation.operations.integrator = integrator
-
-    thermodynamic_properties = hoomd.md.compute.ThermodynamicQuantities(filter=hoomd.filter.All())
-    simulation.operations.computes.append(thermodynamic_properties)
-    
-    # logger.add(simulation, quantities=['timestep', 'sequence'])
-    # logger.add(thermodynamic_properties, quantities=['pressure', 'volume', 'num_particles', 'pressure_tensor'])
-    
-    simulation.run(nsteps)
-
-        # Access pressure tensor directly from the compute object after the simulation
-    pressure_tens = thermodynamic_properties.pressure_tensor[:]
-    P_xx = pressure_tens[:, 0]
-    P_yy = pressure_tens[:, 4]
-    surface_tension = (P_yy - P_xx) / 2
-
-
-    with h5py.File(filename, 'w') as hdf5_file:
-        hdf5_file.create_dataset('surface_tension', data=surface_tension)
-    
-    return {"final_surface_tension": surface_tension}
-
-
-def RunHeatOfVaporizationCalc():
-    return True
-
-
-    
-
