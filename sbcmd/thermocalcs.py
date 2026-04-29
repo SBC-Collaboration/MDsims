@@ -48,9 +48,9 @@ def FillBoxFccLattice(xlim=np.float64([-5, 5]), # x-limits of box to fill
 
     cellsize = np.float_power(2.0*rho, -1.0/3.0) # start with a half-size cubic lattice, then apply cut
 
-    nx = np.intp(np.floor(np.diff(xlim)/cellsize))[0]
-    ny = np.intp(np.floor(np.diff(ylim)/cellsize))[0]
-    nz = np.intp(np.floor(np.diff(zlim)/cellsize))[0]
+    nx = np.intp(2.0*np.floor(0.5*np.diff(xlim)/cellsize))[0]
+    ny = np.intp(2.0*np.floor(0.5*np.diff(ylim)/cellsize))[0]
+    nz = np.intp(2.0*np.floor(0.5*np.diff(zlim)/cellsize))[0]
 
     xoffset = xlim[0] + 0.5*(np.diff(xlim) - cellsize*nx)
     yoffset = ylim[0] + 0.5*(np.diff(ylim) - cellsize*ny)
