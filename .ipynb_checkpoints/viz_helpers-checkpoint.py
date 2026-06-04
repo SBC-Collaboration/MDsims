@@ -1,3 +1,5 @@
+#viz_helpers.py
+
 import math
 import os
 import warnings
@@ -5,6 +7,8 @@ import warnings
 import fresnel
 import IPython
 import packaging.version
+import numpy as np
+import matplotlib.pyplot as plt
 
 device = fresnel.Device()
 tracer = fresnel.tracer.Path(device=device, w=300, h=300)
@@ -49,3 +53,203 @@ def render(snapshot):
     if "CI" in os.environ:
         samples = 100
     return IPython.display.Image(tracer.sample(scene, samples=samples)._repr_png_())
+
+
+
+
+
+
+
+def plot_voxel_histogram(sim, nbins=10, use_density=False):
+    """
+    Compute voxel occupancy histogram and plot it with integer-centered bins.
+
+    Parameters:
+    - sim: HOOMD simulation
+    - nbins: number of bins per dimension (voxel resolution)
+    - use_density: if True, plots density instead of raw counts
+    """
+
+    # ============================================================
+    # Extract positions
+    # ============================================================
+    snap = sim.state.get_snapshot()
+    positions = snap.particles.position
+
+    # Box size (assuming cubic)
+    L = sim.state.box.Lx
+    bounds = [[-L/2, L/2]] * 3
+    voxel_volume = (L / nbins)**3
+
+    # ============================================================
+    # Compute voxel histogram
+    # ============================================================
+    hist, _ = np.histogramdd(
+        positions,
+        bins=nbins,
+        range=bounds
+    )
+
+
+
+    # Flatten to 1D
+    data = hist.ravel()
+
+    # ============================================================
+    # Build integer-centered bins
+    # ============================================================
+    min_val = int(np.floor(data.min()))
+    max_val = int(np.ceil(data.max()))
+
+    bins = np.arange(min_val - 0.5, max_val + 1.5, 1)
+    hist2 = np.histogram(data, bins=bins)
+
+    
+    # ============================================================
+    # Plot
+    # ============================================================
+    plt.figure(figsize=(6, 4))
+    plt.stairs(hist2[0], edges=hist2[1]/voxel_volume, edgecolor='black')
+
+    # plt.xticks(np.arange(min_val, max_val + 1))
+    plt.xlabel("Particles per voxel" if not use_density else "Density per voxel")
+    plt.ylabel("Count")
+    plt.title(f"Voxel distribution (nbins={nbins})")
+
+    plt.show()
+
+    return bins
+
+
+
+
+
+
+
+
+
+def plot_xy_particles(sim, point_size=1, alpha=0.7):
+    """
+    Make a rasterized scatterplot of all particles in the x-y plane.
+
+    Parameters:
+    - sim: HOOMD simulation
+    - point_size: marker size for each particle
+    - alpha: marker transparency
+    """
+
+    # ============================================================
+    # Extract positions
+    # ============================================================
+    snap = sim.state.get_snapshot()
+    positions = snap.particles.position
+
+    x = positions[:, 0]
+    y = positions[:, 1]
+
+    # ============================================================
+    # Get box dimensions
+    # ============================================================
+    box = sim.state.box
+    Lx = box.Lx
+    Ly = box.Ly
+
+    # ============================================================
+    # Plot
+    # ============================================================
+    plt.figure(figsize=(6, 6))
+
+    plt.scatter(
+        x,
+        y,
+        s=point_size,
+        alpha=alpha,
+        rasterized=True,
+    )
+
+    plt.xlim(-Lx / 2, Lx / 2)
+    plt.ylim(-Ly / 2, Ly / 2)
+
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.title("Particle positions in x-y plane")
+
+    plt.gca().set_aspect("equal")
+
+    plt.show()
+
+
+
+
+
+def plot_xy_slice(sim, fraction=0.25, point_size=1, alpha=0.7):
+    """
+    Plot an x-y slice through the middle of the box.
+
+    Parameters:
+    - sim: HOOMD simulation
+    - fraction: fraction of box thickness to include in z
+                (0 < fraction <= 1)
+    - point_size: marker size
+    - alpha: transparency
+    """
+
+    # ============================================================
+    # Validate input
+    # ============================================================
+    if fraction <= 0 or fraction > 1:
+        raise ValueError("fraction must satisfy 0 < fraction <= 1")
+
+    # ============================================================
+    # Extract positions
+    # ============================================================
+    snap = sim.state.get_snapshot()
+    positions = snap.particles.position
+
+    x = positions[:, 0]
+    y = positions[:, 1]
+    z = positions[:, 2]
+
+    # ============================================================
+    # Determine z slice thickness
+    # ============================================================
+    box = sim.state.box
+
+    Lx = box.Lx
+    Ly = box.Ly
+    Lz = box.Lz
+
+    half_thickness = 0.5 * fraction * Lz
+
+    # ============================================================
+    # Keep only particles near z = 0
+    # ============================================================
+    mask = np.abs(z) <= half_thickness
+
+    x_slice = x[mask]
+    y_slice = y[mask]
+
+    # ============================================================
+    # Plot
+    # ============================================================
+    plt.figure(figsize=(6, 6))
+
+    plt.scatter(
+        x_slice,
+        y_slice,
+        s=point_size,
+        alpha=alpha,
+        rasterized=True,
+    )
+
+    plt.xlim(-Lx / 2, Lx / 2)
+    plt.ylim(-Ly / 2, Ly / 2)
+
+    plt.xlabel("x")
+    plt.ylabel("y")
+
+    plt.title(f"Middle {100*fraction:.0f}% z-slice")
+
+    plt.gca().set_aspect("equal")
+
+    plt.show()

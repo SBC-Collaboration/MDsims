@@ -1,4 +1,7 @@
+#Simulation_Helpers.py
+
 import hoomd
+import Logging_Helpers as lh
 
 
 def make_simulation(
@@ -10,7 +13,7 @@ def make_simulation(
     sigma_LJ=1.0,
     r_cut_LJ=2.5,
     buffer_LJ=0.4,
-    lj_mode="shift",
+    lj_mode="xplor",
     r_on_LJ=2.0,
 ):
     """
@@ -21,13 +24,27 @@ def make_simulation(
     """
 
     # ============================================================
-    # Force CPU usage here
+    # Figure out appropriate device
     # ============================================================
-    cpu = hoomd.device.CPU()
+    try:
+        dev = hoomd.device.GPU()
+        simulation = hoomd.Simulation(device=dev, seed=seed)
+        simulation.create_state_from_snapshot(frame)
+    
+        print("Using GPU device")
+    
+    except Exception as e:
+        print("GPU initialization failed:")
+        print(e)
+        print("Falling back to CPU")
+    
+        dev = hoomd.device.CPU()
+        simulation = hoomd.Simulation(device=dev, seed=seed)
+        simulation.create_state_from_snapshot(frame)
+    
+    print("Final device:", simulation.device)
 
-    simulation = hoomd.Simulation(device=cpu, seed=seed)
-    simulation.create_state_from_snapshot(frame)
-
+    
     # ============================================================
     # Build integrator
     # ============================================================
@@ -38,9 +55,7 @@ def make_simulation(
     lj = hoomd.md.pair.LJ(nlist=cell, mode=lj_mode)
     lj.params[("A", "A")] = dict(epsilon=epsilon_LJ, sigma=sigma_LJ)
     lj.r_cut[("A", "A")] = r_cut_LJ
-
-    if lj_mode == "xplor":
-        lj.r_on[("A", "A")] = r_on_LJ
+    lj.r_on[("A", "A")] = r_on_LJ #Only for xlpor
 
     integrator.forces.append(lj)
 
@@ -52,17 +67,78 @@ def make_simulation(
 
     simulation.operations.integrator = integrator
 
+    
+    # ============================================================
+    # Store metadata on simulation
+    # ============================================================
+    simulation.metadata = {
+        "BoxLength": frame.configuration.box[0],
+        "rho": frame.particles.N / frame.configuration.box[0]**3,
+        "N": frame.particles.N,
+        "seed": seed,
+        "dt": dt,
+        "kT": kT,
+        "epsilon_LJ": epsilon_LJ,
+        "sigma_LJ": sigma_LJ,
+        "r_cut_LJ": r_cut_LJ,
+        "buffer_LJ": buffer_LJ,
+        "lj_mode": lj_mode,
+        "r_on_LJ": r_on_LJ,
+    }
     return simulation
 
 
-def thermalize_and_randomize(simulation, kT=1.5, nsteps=10_000):
+
+
+
+def thermalize_and_randomize(
+    simulation,
+    kT=1.5,
+    nsteps=10_000,
+    log=False,
+    phase_name="randomization",
+    log_period=1_000,
+):
     """
     Thermalize momenta and run simulation for nsteps.
+    Optionally log and save the final state.
     """
 
-    simulation.state.thermalize_particle_momenta(filter=hoomd.filter.All(),kT=kT,)
+    simulation.state.thermalize_particle_momenta(
+        filter=hoomd.filter.All(),
+        kT=kT,
+    )
 
-    simulation.run(0)
-    simulation.run(nsteps)
+    if not log:
+        simulation.run(0)
+        simulation.run(nsteps)
+        return simulation
+
+    if not hasattr(simulation, "metadata"):
+        raise ValueError(
+            "simulation.metadata was not found. "
+            "Create the simulation using sh.make_simulation(frame)."
+        )
+
+    metadata = simulation.metadata
+
+    paths = lh.run_logged_phase(
+        simulation=simulation,
+        BoxLength=metadata["BoxLength"],
+        rho=metadata["rho"],
+        phase_name=phase_name,
+        nsteps=nsteps,
+        log_period=log_period,
+        seed=metadata["seed"],
+        dt=metadata["dt"],
+        kT=kT,
+        epsilon_LJ=metadata["epsilon_LJ"],
+        sigma_LJ=metadata["sigma_LJ"],
+        r_cut_LJ=metadata["r_cut_LJ"],
+        r_on_LJ=metadata["r_on_LJ"],
+        lj_mode=metadata["lj_mode"],
+    )
+
+    simulation.logged_paths = paths
 
     return simulation

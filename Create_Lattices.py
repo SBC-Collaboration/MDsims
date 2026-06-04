@@ -1,6 +1,11 @@
+#Create_Lattices.py
+
 import numpy as np
 import gsd.hoomd
 from pathlib import Path
+
+from Project_Paths import SIMPLE_LATTICES_ROOT
+
 
 
 def FillBoxCubicLattice(BoxLength, rho):
@@ -20,6 +25,7 @@ def FillBoxCubicLattice(BoxLength, rho):
     pos[:, :, :, 2] = vec[None, None, :]
 
     return positions
+
 
 
 def FillBoxFccLattice(BoxLength, rho):
@@ -50,7 +56,7 @@ def FillBoxFccLattice(BoxLength, rho):
 
 
 
-def get_lattice_path(BoxLength, rho, lattice_type="cubic", base_folder="Simple_Lattices"):
+def get_lattice_path(BoxLength, rho, lattice_type="fcc", base_folder=SIMPLE_LATTICES_ROOT):
     BoxLength_str = f"{BoxLength:.1f}"
     rho_str = f"{rho:.2f}"
 
@@ -74,10 +80,10 @@ def get_lattice_path(BoxLength, rho, lattice_type="cubic", base_folder="Simple_L
 def make_lattice_frame(
     BoxLength,
     rho,
-    lattice_type="cubic",
+    lattice_type="fcc",
     particle_type="A",
     end_print=True,
-    base_folder="Simple_Lattices",
+    base_folder=SIMPLE_LATTICES_ROOT,
 ):
     filepath = get_lattice_path(
         BoxLength=BoxLength,
@@ -133,7 +139,7 @@ def make_lattice_frame(
     # ============================================================
     filepath.parent.mkdir(parents=True, exist_ok=True)
 
-    with gsd.hoomd.open(name=str(filepath), mode="x") as f:
+    with gsd.hoomd.open(name=str(filepath), mode="w") as f:
         f.append(frame)
 
     if end_print:
