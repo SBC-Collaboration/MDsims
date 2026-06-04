@@ -31,8 +31,6 @@ def make_simulation(
         simulation = hoomd.Simulation(device=dev, seed=seed)
         simulation.create_state_from_snapshot(frame)
     
-        print("Using GPU device")
-    
     except Exception as e:
         print("GPU initialization failed:")
         print(e)
@@ -42,7 +40,7 @@ def make_simulation(
         simulation = hoomd.Simulation(device=dev, seed=seed)
         simulation.create_state_from_snapshot(frame)
     
-    print("Final device:", simulation.device)
+    print("Starting Simulation -------------- Final device:", simulation.device)
 
     
     # ============================================================

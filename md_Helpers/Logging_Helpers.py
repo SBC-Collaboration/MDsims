@@ -120,7 +120,6 @@ def start_hdf5_logger(
 
     print("Started HDF5 logger")
     print("Log file:", log_path)
-    print("Log period:", log_period)
 
     return logger_objects
 
@@ -171,7 +170,6 @@ def stop_hdf5_logger(
         simulation.operations.computes.remove(thermo)
 
     print("Stopped HDF5 logger")
-    print("Log file:", logger_objects["log_path"])
 
 
 
@@ -219,8 +217,6 @@ def write_hdf5_metadata(
             metadata_group.attrs[key] = value
 
     print("Wrote HDF5 metadata")
-    print("Log file:", log_path)
-    print("Metadata group:", group_name)
 
 
 
@@ -383,30 +379,45 @@ def build_simulation_metadata(
 def get_phase_paths(
     BoxLength,
     rho,
+    kT,
+    nsteps,
     phase_name,
     base_folder=THERMALIZED_STATES_ROOT,
 ):
     """
     Build standard paths for a logged simulation phase.
+
+    Folder structure:
+
+        base_folder/
+            BoxLength_<L>/
+                rho_<rho>/
+                    kT_<kT>/
+                        <phase_name>_nsteps_<nsteps>.gsd
+                        <phase_name>_nsteps_<nsteps>_log.hdf5
     """
 
     BoxLength_str = f"{BoxLength:.1f}"
     rho_str = f"{rho:.2f}"
+    kT_str = f"{kT:.2f}"
 
     folder = (
         Path(base_folder)
         / f"BoxLength_{BoxLength_str}"
         / f"rho_{rho_str}"
+        / f"kT_{kT_str}"
     )
 
-    log_path = folder / f"{phase_name}_log.hdf5"
-    state_path = folder / f"{phase_name}_final_state.gsd"
+    log_path = folder / f"{phase_name}_nsteps_{nsteps}_log.hdf5"
+    state_path = folder / f"{phase_name}_nsteps_{nsteps}.gsd"
 
     return {
         "folder": folder,
         "log_path": log_path,
         "state_path": state_path,
         "phase_name": phase_name,
+        "nsteps": nsteps,
+        "kT": kT,
     }
 
 
@@ -442,9 +453,12 @@ def run_logged_phase(
     paths = get_phase_paths(
         BoxLength=BoxLength,
         rho=rho,
+        kT=kT,
+        nsteps=nsteps,
         phase_name=phase_name,
         base_folder=base_folder,
     )
+    
 
     logger_handle = start_hdf5_logger(
         simulation=simulation,
