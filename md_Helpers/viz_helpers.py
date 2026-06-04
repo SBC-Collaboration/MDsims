@@ -253,3 +253,91 @@ def plot_xy_slice(sim, fraction=0.25, point_size=1, alpha=0.7):
     plt.gca().set_aspect("equal")
 
     plt.show()
+
+
+
+
+
+def plot_pressure_log(log, figsize=(8, 5)):
+    """
+    Plot pressure vs timestep from a log dictionary returned by
+    Logging_Helpers.read_hdf5_log().
+
+    Parameters
+    ----------
+    log : dict
+        Output of lh.read_hdf5_log()
+
+    figsize : tuple
+        Matplotlib figure size.
+    """
+
+    # ============================================================
+    # Extract data
+    # ============================================================
+    timestep = log["hoomd-data"]["Simulation"]["timestep"]
+
+    pressure = (
+        log["hoomd-data"]["md"]
+           ["compute"]
+           ["ThermodynamicQuantities"]
+           ["pressure"]
+    )
+
+    # ============================================================
+    # Plot
+    # ============================================================
+    plt.figure(figsize=figsize)
+
+    plt.plot(timestep, pressure)
+
+    plt.xlabel("Timestep")
+    plt.ylabel("Pressure")
+    plt.title("Pressure vs Timestep")
+
+    plt.grid(alpha=0.3)
+
+    plt.show()
+
+
+
+
+
+def plot_log_quantity(
+    log,
+    quantity,
+    figsize=(8, 5),
+):
+    """
+    Plot a ThermodynamicQuantities quantity against timestep.
+
+    Examples
+    --------
+
+    vh.plot_log_quantity(log, "pressure")
+
+    vh.plot_log_quantity(log, "kinetic_temperature")
+
+    vh.plot_log_quantity(log, "potential_energy")
+    """
+
+    timestep = log["hoomd-data"]["Simulation"]["timestep"]
+
+    values = (
+        log["hoomd-data"]["md"]
+           ["compute"]
+           ["ThermodynamicQuantities"]
+           [quantity]
+    )
+
+    plt.figure(figsize=figsize)
+
+    plt.plot(timestep, values)
+
+    plt.xlabel("Timestep")
+    plt.ylabel(quantity.replace("_", " ").title())
+    plt.title(quantity.replace("_", " ").title())
+
+    plt.grid(alpha=0.3)
+
+    plt.show()
