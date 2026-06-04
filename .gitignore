@@ -1,4 +1,10 @@
 MDsims - Copy/
 
 .local/share/Trash/files/Molecular_Dynamics_Simulation_2024/
-MDsims - Copy/
+
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
