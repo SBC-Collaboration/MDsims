@@ -4,7 +4,7 @@ import numpy as np
 import gsd.hoomd
 from pathlib import Path
 
-from Project_Paths import SIMPLE_LATTICES_ROOT
+from .Project_Paths import SIMPLE_LATTICES_ROOT
 
 
 

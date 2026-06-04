@@ -1,7 +1,7 @@
 #Simulation_Helpers.py
 
 import hoomd
-import Logging_Helpers as lh
+from . import Logging_Helpers as lh
 
 
 def make_simulation(

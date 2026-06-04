@@ -5,7 +5,7 @@ import hoomd
 import h5py
 import gsd.hoomd
 
-from Project_Paths import PROJECT_ROOT, SIMPLE_LATTICES_ROOT, THERMALIZED_STATES_ROOT
+from .Project_Paths import PROJECT_ROOT, SIMPLE_LATTICES_ROOT, THERMALIZED_STATES_ROOT
 
 
 
