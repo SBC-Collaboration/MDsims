@@ -15,10 +15,11 @@ def make_simulation(
     buffer_LJ=0.4,
     lj_mode="xplor",
     r_on_LJ=2.0,
+    starting_state_path=None,
 ):
     """
     Create a HOOMD simulation that:
-    - always uses CPU
+    - tries GPU first, then falls back to CPU
     - initializes from a frame
     - attaches integrator + LJ + thermostat
     """
@@ -30,19 +31,18 @@ def make_simulation(
         dev = hoomd.device.GPU()
         simulation = hoomd.Simulation(device=dev, seed=seed)
         simulation.create_state_from_snapshot(frame)
-    
+
     except Exception as e:
         print("GPU initialization failed:")
         print(e)
         print("Falling back to CPU")
-    
+
         dev = hoomd.device.CPU()
         simulation = hoomd.Simulation(device=dev, seed=seed)
         simulation.create_state_from_snapshot(frame)
-    
-    print("Starting Simulation -------------- Final device:", simulation.device)
 
-    
+    print("Starting Simulation --------------- Final device:", simulation.device)
+
     # ============================================================
     # Build integrator
     # ============================================================
@@ -53,7 +53,9 @@ def make_simulation(
     lj = hoomd.md.pair.LJ(nlist=cell, mode=lj_mode)
     lj.params[("A", "A")] = dict(epsilon=epsilon_LJ, sigma=sigma_LJ)
     lj.r_cut[("A", "A")] = r_cut_LJ
-    lj.r_on[("A", "A")] = r_on_LJ #Only for xlpor
+
+    if lj_mode == "xplor":
+        lj.r_on[("A", "A")] = r_on_LJ
 
     integrator.forces.append(lj)
 
@@ -61,11 +63,11 @@ def make_simulation(
         filter=hoomd.filter.All(),
         thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT),
     )
+
     integrator.methods.append(nvt)
 
     simulation.operations.integrator = integrator
 
-    
     # ============================================================
     # Store metadata on simulation
     # ============================================================
@@ -82,16 +84,14 @@ def make_simulation(
         "buffer_LJ": buffer_LJ,
         "lj_mode": lj_mode,
         "r_on_LJ": r_on_LJ,
+        "starting_state_path": str(starting_state_path) if starting_state_path is not None else "",
     }
+
     return simulation
-
-
-
 
 
 def thermalize_and_randomize(
     simulation,
-    kT=1.5,
     nsteps=10_000,
     log=False,
     phase_name="randomization",
@@ -99,18 +99,11 @@ def thermalize_and_randomize(
 ):
     """
     Thermalize momenta and run simulation for nsteps.
-    Optionally log and save the final state.
+
+    Temperature is taken from simulation.metadata["kT"], which is set in
+    make_simulation(). This avoids accidentally using one kT for the
+    thermostat and another kT for the velocity draw.
     """
-
-    simulation.state.thermalize_particle_momenta(
-        filter=hoomd.filter.All(),
-        kT=kT,
-    )
-
-    if not log:
-        simulation.run(0)
-        simulation.run(nsteps)
-        return simulation
 
     if not hasattr(simulation, "metadata"):
         raise ValueError(
@@ -119,7 +112,27 @@ def thermalize_and_randomize(
         )
 
     metadata = simulation.metadata
+    kT = metadata["kT"]
 
+    # ============================================================
+    # Thermalize particle momenta using simulation kT
+    # ============================================================
+    simulation.state.thermalize_particle_momenta(
+        filter=hoomd.filter.All(),
+        kT=kT,
+    )
+
+    # ============================================================
+    # Run without logging
+    # ============================================================
+    if not log:
+        simulation.run(0)
+        simulation.run(nsteps)
+        return simulation
+
+    # ============================================================
+    # Run with logging and save final state
+    # ============================================================
     paths = lh.run_logged_phase(
         simulation=simulation,
         BoxLength=metadata["BoxLength"],

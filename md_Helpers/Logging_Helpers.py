@@ -303,6 +303,7 @@ def build_simulation_metadata(
     lj_mode=None,
     log_period=None,
     nsteps=None,
+    starting_state_path=None,
 ):
     """
     Build a metadata dictionary for the current simulation state.
@@ -359,6 +360,7 @@ def build_simulation_metadata(
         "lj_mode": lj_mode,
         "log_period": log_period,
         "nsteps": nsteps,
+        "starting_state_path": starting_state_path,
     }
 
     for key, value in optional_metadata.items():
@@ -488,6 +490,7 @@ def run_logged_phase(
         lj_mode=lj_mode,
         log_period=log_period,
         nsteps=nsteps,
+        starting_state_path=simulation.metadata.get("starting_state_path", "unknown"),
     )
 
     write_hdf5_metadata(
