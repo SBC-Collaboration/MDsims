@@ -31,7 +31,9 @@ def FillBoxCubicLattice(BoxLength, rho):
 def FillBoxFccLattice(BoxLength, rho):
     cellsize = (2.0 * rho) ** (-1.0 / 3.0)
 
-    n = int(np.floor(BoxLength / cellsize))
+    n = int(np.floor(BoxLength / 2 / cellsize)*2)
+
+    cellsize = BoxLength/n
 
     offset = -BoxLength / 2 + 0.5 * (BoxLength - n * cellsize)
 
@@ -84,6 +86,7 @@ def make_lattice_frame(
     particle_type="A",
     end_print=True,
     base_folder=SIMPLE_LATTICES_ROOT,
+    return_path=False,
 ):
     filepath = get_lattice_path(
         BoxLength=BoxLength,
@@ -101,7 +104,11 @@ def make_lattice_frame(
         with gsd.hoomd.open(name=str(filepath), mode="r") as f:
             frame = f[0]
 
+        if return_path:
+            return frame, filepath
+        
         return frame
+
 
     #Otherwise create a new lattice and save it into proper folder
     if lattice_type == "cubic":
@@ -145,4 +152,7 @@ def make_lattice_frame(
     if end_print:
         print(f"Saved lattice to {filepath}")
 
+    if return_path:
+        return frame, filepath
+    
     return frame

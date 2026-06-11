@@ -1,11 +1,16 @@
 #Simulation_Helpers.py
 
+from pathlib import Path
 import hoomd
+import gsd.hoomd
+
 from . import Logging_Helpers as lh
+from . import Create_Lattices as cl
 
 
 def make_simulation(
     frame,
+    target_rho=None,
     seed=1,
     dt=0.005,
     kT=1.5,
@@ -15,13 +20,14 @@ def make_simulation(
     buffer_LJ=0.4,
     lj_mode="xplor",
     r_on_LJ=2.0,
-    starting_state_path=None,
+    starting_state_path="unknown",
 ):
     """
-    Create a HOOMD simulation that:
-    - tries GPU first, then falls back to CPU
-    - initializes from a frame
-    - attaches integrator + LJ + thermostat
+    Create a HOOMD simulation from a GSD frame.
+
+    Important density convention:
+    - target_rho is the density you asked for
+    - actual_rho is N / V after integer lattice construction
     """
 
     # ============================================================
@@ -32,6 +38,8 @@ def make_simulation(
         simulation = hoomd.Simulation(device=dev, seed=seed)
         simulation.create_state_from_snapshot(frame)
 
+        print("Using GPU device")
+
     except Exception as e:
         print("GPU initialization failed:")
         print(e)
@@ -41,7 +49,7 @@ def make_simulation(
         simulation = hoomd.Simulation(device=dev, seed=seed)
         simulation.create_state_from_snapshot(frame)
 
-    print("Starting Simulation --------------- Final device:", simulation.device)
+    print("Final device:", simulation.device)
 
     # ============================================================
     # Build integrator
@@ -63,7 +71,6 @@ def make_simulation(
         filter=hoomd.filter.All(),
         thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT),
     )
-
     integrator.methods.append(nvt)
 
     simulation.operations.integrator = integrator
@@ -71,10 +78,18 @@ def make_simulation(
     # ============================================================
     # Store metadata on simulation
     # ============================================================
+    BoxLength = frame.configuration.box[0]
+    N = frame.particles.N
+    actual_rho = N / BoxLength**3
+
+    if target_rho is None:
+        target_rho = actual_rho
+
     simulation.metadata = {
-        "BoxLength": frame.configuration.box[0],
-        "rho": frame.particles.N / frame.configuration.box[0]**3,
-        "N": frame.particles.N,
+        "BoxLength": BoxLength,
+        "target_rho": target_rho,
+        "actual_rho": actual_rho,
+        "N": N,
         "seed": seed,
         "dt": dt,
         "kT": kT,
@@ -84,7 +99,7 @@ def make_simulation(
         "buffer_LJ": buffer_LJ,
         "lj_mode": lj_mode,
         "r_on_LJ": r_on_LJ,
-        "starting_state_path": str(starting_state_path) if starting_state_path is not None else "",
+        "starting_state_path": starting_state_path,
     }
 
     return simulation
@@ -92,6 +107,7 @@ def make_simulation(
 
 def thermalize_and_randomize(
     simulation,
+    kT=1.5,
     nsteps=10_000,
     log=False,
     phase_name="randomization",
@@ -99,11 +115,18 @@ def thermalize_and_randomize(
 ):
     """
     Thermalize momenta and run simulation for nsteps.
-
-    Temperature is taken from simulation.metadata["kT"], which is set in
-    make_simulation(). This avoids accidentally using one kT for the
-    thermostat and another kT for the velocity draw.
+    Optionally log and save the final state.
     """
+
+    simulation.state.thermalize_particle_momenta(
+        filter=hoomd.filter.All(),
+        kT=kT,
+    )
+
+    if not log:
+        simulation.run(0)
+        simulation.run(nsteps)
+        return simulation
 
     if not hasattr(simulation, "metadata"):
         raise ValueError(
@@ -112,31 +135,11 @@ def thermalize_and_randomize(
         )
 
     metadata = simulation.metadata
-    kT = metadata["kT"]
 
-    # ============================================================
-    # Thermalize particle momenta using simulation kT
-    # ============================================================
-    simulation.state.thermalize_particle_momenta(
-        filter=hoomd.filter.All(),
-        kT=kT,
-    )
-
-    # ============================================================
-    # Run without logging
-    # ============================================================
-    if not log:
-        simulation.run(0)
-        simulation.run(nsteps)
-        return simulation
-
-    # ============================================================
-    # Run with logging and save final state
-    # ============================================================
     paths = lh.run_logged_phase(
         simulation=simulation,
         BoxLength=metadata["BoxLength"],
-        rho=metadata["rho"],
+        rho=metadata["target_rho"],
         phase_name=phase_name,
         nsteps=nsteps,
         log_period=log_period,
@@ -148,8 +151,122 @@ def thermalize_and_randomize(
         r_cut_LJ=metadata["r_cut_LJ"],
         r_on_LJ=metadata["r_on_LJ"],
         lj_mode=metadata["lj_mode"],
+        starting_state_path=metadata["starting_state_path"],
     )
 
     simulation.logged_paths = paths
 
     return simulation
+
+
+def get_or_make_thermalized_state(
+    BoxLength,
+    target_rho,
+    nsteps,
+    kT=1.5,
+    lattice_type="fcc",
+    phase_name="randomization",
+    log_period=1_000,
+    seed=1,
+    dt=0.005,
+    epsilon_LJ=1.0,
+    sigma_LJ=1.0,
+    r_cut_LJ=2.5,
+    buffer_LJ=0.4,
+    lj_mode="xplor",
+    r_on_LJ=2.0,
+    overwrite=False,
+):
+    """
+    Main reusable database function.
+
+    Workflow:
+    1. Check whether thermalized state already exists.
+    2. If yes, load and return it.
+    3. If no, check/load/create the lattice.
+    4. Make the simulation.
+    5. Thermalize and save the logged state.
+
+    Density convention:
+    - target_rho: density requested by the user
+    - actual_rho: N / V after lattice particle count is chosen
+    """
+
+    # ============================================================
+    # Build expected thermalized-state paths using target rho
+    # ============================================================
+    paths = lh.get_phase_paths(
+        BoxLength=BoxLength,
+        rho=target_rho,
+        kT=kT,
+        nsteps=nsteps,
+        phase_name=phase_name,
+    )
+
+    state_path = paths["state_path"]
+    log_path = paths["log_path"]
+
+    # ============================================================
+    # Return existing thermalized state if present
+    # ============================================================
+    if state_path.exists() and log_path.exists() and not overwrite:
+        print("Loaded existing thermalized state:")
+        print(state_path)
+
+        with gsd.hoomd.open(name=str(state_path), mode="r") as f:
+            frame = f[0]
+
+        return {
+            "frame": frame,
+            "simulation": None,
+            "paths": paths,
+            "created_new": False,
+        }
+
+    # ============================================================
+    # Create/load lattice using target rho
+    # ============================================================
+    frame, lattice_path = cl.make_lattice_frame(
+        BoxLength=BoxLength,
+        rho=target_rho,
+        lattice_type=lattice_type,
+        end_print=True,
+        return_path=True,
+    )
+
+    # ============================================================
+    # Create simulation, preserving target_rho separately
+    # ============================================================
+    simulation = make_simulation(
+        frame=frame,
+        target_rho=target_rho,
+        seed=seed,
+        dt=dt,
+        kT=kT,
+        epsilon_LJ=epsilon_LJ,
+        sigma_LJ=sigma_LJ,
+        r_cut_LJ=r_cut_LJ,
+        buffer_LJ=buffer_LJ,
+        lj_mode=lj_mode,
+        r_on_LJ=r_on_LJ,
+        starting_state_path=str(lattice_path),
+    )
+
+    # ============================================================
+    # Thermalize and save
+    # ============================================================
+    simulation = thermalize_and_randomize(
+        simulation=simulation,
+        kT=kT,
+        nsteps=nsteps,
+        log=True,
+        phase_name=phase_name,
+        log_period=log_period,
+    )
+
+    return {
+        "frame": frame,
+        "simulation": simulation,
+        "paths": simulation.logged_paths,
+        "created_new": True,
+    }

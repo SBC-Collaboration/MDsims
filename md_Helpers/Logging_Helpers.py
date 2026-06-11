@@ -4,6 +4,7 @@ from pathlib import Path
 import hoomd
 import h5py
 import gsd.hoomd
+import numpy as np
 
 from .Project_Paths import PROJECT_ROOT, SIMPLE_LATTICES_ROOT, THERMALIZED_STATES_ROOT
 
@@ -304,6 +305,7 @@ def build_simulation_metadata(
     log_period=None,
     nsteps=None,
     starting_state_path=None,
+    phase_separated=None,
 ):
     """
     Build a metadata dictionary for the current simulation state.
@@ -361,6 +363,7 @@ def build_simulation_metadata(
         "log_period": log_period,
         "nsteps": nsteps,
         "starting_state_path": starting_state_path,
+        "phase_separated": phase_separated,
     }
 
     for key, value in optional_metadata.items():
@@ -446,6 +449,7 @@ def run_logged_phase(
     r_cut_LJ=None,
     r_on_LJ=None,
     lj_mode=None,
+    starting_state_path="unknown",
     base_folder=THERMALIZED_STATES_ROOT,
 ):
     """
@@ -475,7 +479,11 @@ def run_logged_phase(
         simulation=simulation,
         logger_objects=logger_handle,
     )
-
+    
+    phase_separated = check_phase_separated(
+        simulation=simulation,
+    )
+    
     metadata = build_simulation_metadata(
         simulation=simulation,
         phase_name=phase_name,
@@ -490,7 +498,8 @@ def run_logged_phase(
         lj_mode=lj_mode,
         log_period=log_period,
         nsteps=nsteps,
-        starting_state_path=simulation.metadata.get("starting_state_path", "unknown"),
+        starting_state_path=starting_state_path,
+        phase_separated=phase_separated,
     )
 
     write_hdf5_metadata(
@@ -555,3 +564,252 @@ def read_hdf5_log(
         read_group(hdf, data)
 
     return data
+
+
+
+
+
+# ============================================================
+# Check for phase separation using voxel density
+# ============================================================
+
+def check_phase_separated(
+    simulation,
+    nbins=20,
+    density_threshold=0.2,
+    voxel_fraction_threshold=0.1,
+):
+    """
+    Check whether a simulation appears phase separated using voxel densities.
+
+    Default rule:
+    - Divide the box into nbins x nbins x nbins voxels.
+    - Compute density in each voxel.
+    - If more than 5% of voxels have density below 0.2,
+      return True.
+    - Otherwise return False.
+    """
+
+    # ============================================================
+    # Extract positions
+    # ============================================================
+    snapshot = simulation.state.get_snapshot()
+    positions = snapshot.particles.position
+
+    # ============================================================
+    # Box information
+    # ============================================================
+    Lx = snapshot.configuration.box[0]
+    Ly = snapshot.configuration.box[1]
+    Lz = snapshot.configuration.box[2]
+
+    bounds = [
+        [-Lx / 2, Lx / 2],
+        [-Ly / 2, Ly / 2],
+        [-Lz / 2, Lz / 2],
+    ]
+
+    voxel_volume = (Lx / nbins) * (Ly / nbins) * (Lz / nbins)
+
+    # ============================================================
+    # Count particles in each voxel
+    # ============================================================
+    voxel_counts, _ = np.histogramdd(
+        positions,
+        bins=nbins,
+        range=bounds,
+    )
+
+    voxel_densities = voxel_counts.ravel() / voxel_volume
+
+    # ============================================================
+    # Check low-density voxel fraction
+    # ============================================================
+    low_density_fraction = np.mean(voxel_densities < density_threshold)
+
+    phase_separated = low_density_fraction > voxel_fraction_threshold
+
+    return bool(phase_separated)
+
+
+
+
+
+
+
+# ============================================================
+# Get mean and std from the last N logged values
+# ============================================================
+
+def get_log_tail_stats(
+    log_path=None,
+    log=None,
+    quantity="pressure",
+    n_last=100,
+    per_particle=False,
+    N=None,
+    ddof=1,
+):
+    """
+    Compute the mean and standard deviation of the last n_last logged values.
+
+    Important:
+    - n_last means the last n_last LOGGER ENTRIES, not MD timesteps.
+    - If log_period = 2000 and n_last = 100,
+      this uses the last 200,000 MD steps.
+
+    Examples
+    --------
+    pressure_stats = get_log_tail_stats(
+        log_path=log_path,
+        quantity="pressure",
+        n_last=100,
+    )
+
+    pe_stats = get_log_tail_stats(
+        log_path=log_path,
+        quantity="PE_per_particle",
+        n_last=100,
+    )
+
+    ke_stats = get_log_tail_stats(
+        log_path=log_path,
+        quantity="KE_per_particle",
+        n_last=100,
+    )
+    """
+
+    # ============================================================
+    # Load log if needed
+    # ============================================================
+    if log is None:
+        if log_path is None:
+            raise ValueError("You must provide either log_path or log.")
+
+        log = read_hdf5_log(log_path)
+
+    # ============================================================
+    # Quantity aliases
+    # ============================================================
+    quantity_aliases = {
+        # Pressure
+        "pressure": ("pressure", False),
+
+        # Potential energy
+        "PE": ("potential_energy", False),
+        "pe": ("potential_energy", False),
+        "potential": ("potential_energy", False),
+        "potential_energy": ("potential_energy", False),
+
+        # Potential energy per particle
+        "PE_per_particle": ("potential_energy", True),
+        "pe_per_particle": ("potential_energy", True),
+        "potential_per_particle": ("potential_energy", True),
+        "potential_energy_per_particle": ("potential_energy", True),
+
+        # Kinetic energy
+        "KE": ("kinetic_energy", False),
+        "ke": ("kinetic_energy", False),
+        "kinetic": ("kinetic_energy", False),
+        "kinetic_energy": ("kinetic_energy", False),
+
+        # Kinetic energy per particle
+        "KE_per_particle": ("kinetic_energy", True),
+        "ke_per_particle": ("kinetic_energy", True),
+        "kinetic_per_particle": ("kinetic_energy", True),
+        "kinetic_energy_per_particle": ("kinetic_energy", True),
+
+        # Kinetic temperature, separate from kinetic energy
+        "temperature": ("kinetic_temperature", False),
+        "kinetic_temperature": ("kinetic_temperature", False),
+
+        # Tensor, if you ever want it later
+        "pressure_tensor": ("pressure_tensor", False),
+    }
+
+    if quantity not in quantity_aliases:
+        raise ValueError(
+            "Unknown quantity. Use one of: "
+            f"{list(quantity_aliases.keys())}"
+        )
+
+    quantity_name, alias_per_particle = quantity_aliases[quantity]
+
+    if alias_per_particle:
+        per_particle = True
+
+    # ============================================================
+    # Extract timestep and thermodynamic quantity
+    # ============================================================
+    timestep = log["hoomd-data"]["Simulation"]["timestep"]
+
+    values = (
+        log["hoomd-data"]["md"]
+           ["compute"]
+           ["ThermodynamicQuantities"]
+           [quantity_name]
+    )
+
+    timestep = np.asarray(timestep)
+    values = np.asarray(values)
+
+    # ============================================================
+    # Divide by particle number if requested
+    # ============================================================
+    if per_particle:
+        if N is None:
+            try:
+                N = log["metadata"]["attrs"]["N"]
+            except KeyError:
+                raise ValueError(
+                    "N was not found in the metadata. "
+                    "Pass N manually using N=..."
+                )
+
+        values = values / N
+
+    # ============================================================
+    # Keep only the last n_last logger entries
+    # ============================================================
+    tail_timesteps = timestep[-n_last:]
+    tail_values = values[-n_last:]
+
+    n_used = tail_values.shape[0]
+
+    if n_used == 0:
+        raise ValueError("No logged values were found.")
+
+    # ============================================================
+    # Compute mean and standard deviation
+    # ============================================================
+    mean_value = np.mean(tail_values, axis=0)
+
+    if n_used > ddof:
+        std_value = np.std(tail_values, axis=0, ddof=ddof)
+    else:
+        std_value = np.nan
+
+    # ============================================================
+    # Clean NumPy outputs
+    # ============================================================
+    def clean_output(x):
+        x = np.asarray(x)
+
+        if x.shape == ():
+            return float(x)
+
+        return x.tolist()
+
+    stats = {
+        "quantity": quantity_name,
+        "per_particle": bool(per_particle),
+        "N": int(N) if per_particle else None,
+        "n_last_requested": int(n_last),
+        "n_values_used": int(n_used),
+        "first_timestep_used": int(tail_timesteps[0]),
+        "last_timestep_used": int(tail_timesteps[-1]),
+        "mean": clean_output(mean_value),
+        "std": clean_output(std_value),
+    }
+
+    return stats

@@ -59,15 +59,19 @@ def render(snapshot):
 
 
 
-
-def plot_voxel_histogram(sim, nbins=10, use_density=False):
+def plot_voxel_histogram(sim, nbins=10):
     """
-    Compute voxel occupancy histogram and plot it with integer-centered bins.
+    Compute voxel density histogram.
 
-    Parameters:
-    - sim: HOOMD simulation
-    - nbins: number of bins per dimension (voxel resolution)
-    - use_density: if True, plots density instead of raw counts
+    The x-axis is always voxel density:
+
+        voxel_density = particles_in_voxel / voxel_volume
+
+    Returns
+    -------
+    hist2 : tuple
+        hist2[0] = number of voxels in each density bin
+        hist2[1] = density bin edges
     """
 
     # ============================================================
@@ -76,51 +80,63 @@ def plot_voxel_histogram(sim, nbins=10, use_density=False):
     snap = sim.state.get_snapshot()
     positions = snap.particles.position
 
-    # Box size (assuming cubic)
+    # ============================================================
+    # Box information
+    # ============================================================
     L = sim.state.box.Lx
-    bounds = [[-L/2, L/2]] * 3
+    bounds = [[-L / 2, L / 2]] * 3
     voxel_volume = (L / nbins)**3
 
     # ============================================================
-    # Compute voxel histogram
+    # Count particles in each voxel
     # ============================================================
-    hist, _ = np.histogramdd(
+    voxel_counts, _ = np.histogramdd(
         positions,
         bins=nbins,
-        range=bounds
+        range=bounds,
     )
 
-
-
-    # Flatten to 1D
-    data = hist.ravel()
+    voxel_counts = voxel_counts.ravel()
 
     # ============================================================
-    # Build integer-centered bins
+    # Convert particle counts to voxel densities
     # ============================================================
-    min_val = int(np.floor(data.min()))
-    max_val = int(np.ceil(data.max()))
+    voxel_densities = voxel_counts / voxel_volume
 
-    bins = np.arange(min_val - 0.5, max_val + 1.5, 1)
-    hist2 = np.histogram(data, bins=bins)
+    # ============================================================
+    # Build density-bin edges from integer particle-count bins
+    # ============================================================
+    min_count = int(np.floor(voxel_counts.min()))
+    max_count = int(np.ceil(voxel_counts.max()))
 
-    
+    count_edges = np.arange(min_count - 0.5, max_count + 1.5, 1)
+    density_edges = count_edges / voxel_volume
+
+    hist_y, hist_x_edges = np.histogram(
+        voxel_densities,
+        bins=density_edges,
+    )
+
+    hist2 = (hist_y, hist_x_edges)
+
     # ============================================================
     # Plot
     # ============================================================
     plt.figure(figsize=(6, 4))
-    plt.stairs(hist2[0], edges=hist2[1]/voxel_volume, edgecolor='black')
 
-    # plt.xticks(np.arange(min_val, max_val + 1))
-    plt.xlabel("Particles per voxel" if not use_density else "Density per voxel")
-    plt.ylabel("Count")
-    plt.title(f"Voxel distribution (nbins={nbins})")
+    plt.stairs(
+        hist2[0],
+        edges=hist2[1],
+        edgecolor="black",
+    )
+
+    plt.xlabel("Voxel density")
+    plt.ylabel("Number of voxels")
+    plt.title(f"Voxel density distribution (nbins={nbins})")
 
     plt.show()
 
-    return bins
-
-
+    return hist2
 
 
 
