@@ -1,16 +1,13 @@
-#Logging_Helpers.py
+# Logging_Helpers.py
 
 from pathlib import Path
+
 import hoomd
 import h5py
 import gsd.hoomd
 import numpy as np
 
-from .Project_Paths import PROJECT_ROOT, SIMPLE_LATTICES_ROOT, THERMALIZED_STATES_ROOT
-
-
-
-
+from .Project_Paths import THERMALIZED_STATES_V2_ROOT
 
 
 # ============================================================
@@ -24,35 +21,6 @@ def start_hdf5_logger(
 ):
     """
     Start an HDF5 logger for a HOOMD simulation.
-
-    This function:
-    - creates a ThermodynamicQuantities compute
-    - creates a HOOMD logger
-    - logs timestep, TPS, temperature, pressure, pressure tensor, and energies
-    - attaches an HDF5 writer to simulation.operations.writers
-
-    It does NOT:
-    - run the simulation
-    - check whether files already exist
-    - save the final state
-    - write metadata
-
-    Parameters
-    ----------
-    simulation : hoomd.Simulation
-        Existing HOOMD simulation.
-
-    log_path : str or pathlib.Path
-        Path to the HDF5 log file.
-
-    log_period : int
-        Number of timesteps between log entries.
-
-    Returns
-    -------
-    logger_objects : dict
-        Dictionary containing the thermo compute, logger, writer,
-        log path, and log period.
     """
 
     # ============================================================
@@ -121,14 +89,9 @@ def start_hdf5_logger(
 
     print("Started HDF5 logger")
     print("Log file:", log_path)
+    print("Log period:", log_period)
 
     return logger_objects
-
-
-
-
-
-
 
 
 # ============================================================
@@ -141,15 +104,6 @@ def stop_hdf5_logger(
 ):
     """
     Stop an active HDF5 logger.
-
-    This function:
-    - removes the HDF5 writer from simulation.operations.writers
-    - removes the thermo compute from simulation.operations.computes
-
-    It does NOT:
-    - save the final state
-    - write metadata
-    - delete or modify the HDF5 file
     """
 
     # ============================================================
@@ -173,10 +127,6 @@ def stop_hdf5_logger(
     print("Stopped HDF5 logger")
 
 
-
-
-
-
 # ============================================================
 # Write HDF5 metadata
 # ============================================================
@@ -188,16 +138,6 @@ def write_hdf5_metadata(
 ):
     """
     Write metadata attributes into an existing HDF5 log file.
-
-    This function:
-    - opens the existing HDF5 file
-    - creates a metadata group if needed
-    - stores simple metadata values as HDF5 attributes
-
-    It does NOT:
-    - run the simulation
-    - start or stop logging
-    - save the final state
     """
 
     # ============================================================
@@ -215,13 +155,17 @@ def write_hdf5_metadata(
         metadata_group = hdf.require_group(group_name)
 
         for key, value in metadata.items():
+            if value is None:
+                continue
+
+            if isinstance(value, Path):
+                value = str(value)
+
             metadata_group.attrs[key] = value
 
     print("Wrote HDF5 metadata")
-
-
-
-
+    print("Log file:", log_path)
+    print("Metadata group:", group_name)
 
 
 # ============================================================
@@ -280,12 +224,6 @@ def save_final_state(
     print("GSD file:", gsd_path)
 
 
-
-
-    
-
-
-
 # ============================================================
 # Build simulation metadata
 # ============================================================
@@ -293,6 +231,9 @@ def save_final_state(
 def build_simulation_metadata(
     simulation,
     phase_name="simulation",
+    lattice_type="fcc",
+    density_mode="fixed_N_variable_L",
+    n_fcc_cells=None,
     target_rho=None,
     seed=None,
     dt=None,
@@ -301,6 +242,7 @@ def build_simulation_metadata(
     sigma_LJ=None,
     r_cut_LJ=None,
     r_on_LJ=None,
+    buffer_LJ=None,
     lj_mode=None,
     log_period=None,
     nsteps=None,
@@ -310,14 +252,12 @@ def build_simulation_metadata(
     """
     Build a metadata dictionary for the current simulation state.
 
-    This function:
-    - computes actual density from the current simulation state
-    - stores box size, particle count, phase name, and run parameters
-
-    It does NOT:
-    - write metadata to file
-    - start or stop logging
-    - save the final state
+    V2 convention:
+    - n_fcc_cells is the chosen system size
+    - N = 4 * n_fcc_cells**3
+    - target_rho is the requested density
+    - BoxLength is derived from N / target_rho
+    - actual_rho is recomputed from the saved state
     """
 
     # ============================================================
@@ -325,56 +265,73 @@ def build_simulation_metadata(
     # ============================================================
     snapshot = simulation.state.get_snapshot()
 
-    N = snapshot.particles.N
-    Lx = snapshot.configuration.box[0]
-    Ly = snapshot.configuration.box[1]
-    Lz = snapshot.configuration.box[2]
+    N = int(snapshot.particles.N)
+
+    Lx = float(snapshot.configuration.box[0])
+    Ly = float(snapshot.configuration.box[1])
+    Lz = float(snapshot.configuration.box[2])
 
     volume = Lx * Ly * Lz
     actual_rho = N / volume
 
     # ============================================================
+    # Derived FCC metadata
+    # ============================================================
+    fcc_cell_size = None
+    
+    if n_fcc_cells is not None:
+        n_fcc_cells = int(n_fcc_cells)
+        fcc_cell_size = Lx / n_fcc_cells
+
+    
+    # ============================================================
     # Build metadata dictionary
     # ============================================================
     metadata = {
         "phase_name": phase_name,
-        "N": N,
-        "Lx": Lx,
-        "Ly": Ly,
-        "Lz": Lz,
-        "volume": volume,
-        "actual_rho": actual_rho,
-        "final_timestep": simulation.timestep,
-    }
+        "lattice_type": lattice_type,
+        "density_mode": density_mode,
 
-    # ============================================================
-    # Optional user-provided metadata
-    # ============================================================
-    optional_metadata = {
+        "n_fcc_cells": n_fcc_cells,
+
+        "N": N,
         "target_rho": target_rho,
+        "actual_rho": actual_rho,
+
+        "BoxLength": Lx,
+        "volume": volume,
+
+        "fcc_cell_size": fcc_cell_size,
+
         "seed": seed,
         "dt": dt,
         "kT": kT,
+
         "epsilon_LJ": epsilon_LJ,
         "sigma_LJ": sigma_LJ,
         "r_cut_LJ": r_cut_LJ,
         "r_on_LJ": r_on_LJ,
+        "buffer_LJ": buffer_LJ,
         "lj_mode": lj_mode,
+
         "log_period": log_period,
         "nsteps": nsteps,
+        "final_timestep": simulation.timestep,
+
         "starting_state_path": starting_state_path,
         "phase_separated": phase_separated,
     }
 
-    for key, value in optional_metadata.items():
-        if value is not None:
-            metadata[key] = value
+    # ============================================================
+    # Remove None values
+    # ============================================================
+    metadata = {
+        key: value
+        for key, value in metadata.items()
+        if value is not None
+    }
 
     return metadata
-
-
-
-
 
 
 # ============================================================
@@ -382,52 +339,74 @@ def build_simulation_metadata(
 # ============================================================
 
 def get_phase_paths(
-    BoxLength,
-    rho,
+    n_fcc_cells,
+    target_rho,
     kT,
     nsteps,
+    seed,
     phase_name,
-    base_folder=THERMALIZED_STATES_ROOT,
+    base_folder=THERMALIZED_STATES_V2_ROOT,
 ):
     """
-    Build standard paths for a logged simulation phase.
+    Build standard V2 paths for a logged simulation phase.
 
     Folder structure:
 
-        base_folder/
-            BoxLength_<L>/
-                rho_<rho>/
-                    kT_<kT>/
-                        <phase_name>_nsteps_<nsteps>.gsd
-                        <phase_name>_nsteps_<nsteps>_log.hdf5
+        Thermalized_States_v2/
+            FCC/
+                n_cells_30/
+                    rho_0.500/
+                        kT_0.400/
+                            nsteps_1000000/
+                                seed_1/
+                                    randomization.gsd
+                                    randomization_log.hdf5
     """
 
-    BoxLength_str = f"{BoxLength:.1f}"
-    rho_str = f"{rho:.2f}"
-    kT_str = f"{kT:.2f}"
+    # ============================================================
+    # Format folder names
+    # ============================================================
+    n_cells_str = f"{int(n_fcc_cells)}"
+    rho_str = f"{target_rho:.3f}"
+    kT_str = f"{kT:.3f}"
+    nsteps_str = f"{int(nsteps)}"
 
+    if seed is None:
+        seed_str = "unknown"
+    else:
+        seed_str = f"{int(seed)}"
+
+    # ============================================================
+    # Build folder
+    # ============================================================
     folder = (
         Path(base_folder)
-        / f"BoxLength_{BoxLength_str}"
+        / "FCC"
+        / f"n_cells_{n_cells_str}"
         / f"rho_{rho_str}"
         / f"kT_{kT_str}"
+        / f"nsteps_{nsteps_str}"
+        / f"seed_{seed_str}"
     )
 
-    log_path = folder / f"{phase_name}_nsteps_{nsteps}_log.hdf5"
-    state_path = folder / f"{phase_name}_nsteps_{nsteps}.gsd"
+    # ============================================================
+    # Build files
+    # ============================================================
+    log_path = folder / f"{phase_name}_log.hdf5"
+    state_path = folder / f"{phase_name}.gsd"
 
     return {
         "folder": folder,
         "log_path": log_path,
         "state_path": state_path,
+
         "phase_name": phase_name,
-        "nsteps": nsteps,
+        "n_fcc_cells": int(n_fcc_cells),
+        "target_rho": target_rho,
         "kT": kT,
+        "nsteps": int(nsteps),
+        "seed": seed,
     }
-
-
-
-
 
 
 # ============================================================
@@ -436,8 +415,8 @@ def get_phase_paths(
 
 def run_logged_phase(
     simulation,
-    BoxLength,
-    rho,
+    n_fcc_cells,
+    target_rho,
     phase_name="simulation",
     nsteps=500_000,
     log_period=1_000,
@@ -448,46 +427,112 @@ def run_logged_phase(
     sigma_LJ=None,
     r_cut_LJ=None,
     r_on_LJ=None,
+    buffer_LJ=None,
     lj_mode=None,
     starting_state_path="unknown",
-    base_folder=THERMALIZED_STATES_ROOT,
+    base_folder=THERMALIZED_STATES_V2_ROOT,
 ):
     """
     Run a simulation phase with HDF5 logging and save the final state.
+
+    V2 path convention:
+    - input system size is n_fcc_cells
+    - input density is target_rho
+    - BoxLength is not part of the path because it is derived
     """
 
+    # ============================================================
+    # Pull missing values from simulation metadata if available
+    # ============================================================
+    if hasattr(simulation, "metadata"):
+        sim_metadata = simulation.metadata
+
+        if seed is None:
+            seed = sim_metadata.get("seed", seed)
+
+        if dt is None:
+            dt = sim_metadata.get("dt", dt)
+
+        if kT is None:
+            kT = sim_metadata.get("kT", kT)
+
+        if epsilon_LJ is None:
+            epsilon_LJ = sim_metadata.get("epsilon_LJ", epsilon_LJ)
+
+        if sigma_LJ is None:
+            sigma_LJ = sim_metadata.get("sigma_LJ", sigma_LJ)
+
+        if r_cut_LJ is None:
+            r_cut_LJ = sim_metadata.get("r_cut_LJ", r_cut_LJ)
+
+        if r_on_LJ is None:
+            r_on_LJ = sim_metadata.get("r_on_LJ", r_on_LJ)
+
+        if buffer_LJ is None:
+            buffer_LJ = sim_metadata.get("buffer_LJ", buffer_LJ)
+
+        if lj_mode is None:
+            lj_mode = sim_metadata.get("lj_mode", lj_mode)
+
+        if starting_state_path in [None, "unknown"]:
+            starting_state_path = sim_metadata.get(
+                "starting_state_path",
+                "unknown",
+            )
+
+    # ============================================================
+    # Build paths
+    # ============================================================
     paths = get_phase_paths(
-        BoxLength=BoxLength,
-        rho=rho,
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
         kT=kT,
         nsteps=nsteps,
+        seed=seed,
         phase_name=phase_name,
         base_folder=base_folder,
     )
-    
 
+    # ============================================================
+    # Start logger
+    # ============================================================
     logger_handle = start_hdf5_logger(
         simulation=simulation,
         log_path=paths["log_path"],
         log_period=log_period,
     )
-    
+
+    # ============================================================
+    # Run simulation
+    # ============================================================
     simulation.run(0)
     simulation.run(nsteps)
 
+    # ============================================================
+    # Stop logger
+    # ============================================================
     stop_hdf5_logger(
         simulation=simulation,
         logger_objects=logger_handle,
     )
-    
+
+    # ============================================================
+    # Check phase separation
+    # ============================================================
     phase_separated = check_phase_separated(
         simulation=simulation,
     )
-    
+
+    # ============================================================
+    # Build metadata
+    # ============================================================
     metadata = build_simulation_metadata(
         simulation=simulation,
         phase_name=phase_name,
-        target_rho=rho,
+        lattice_type="fcc",
+        density_mode="fixed_N_variable_L",
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
         seed=seed,
         dt=dt,
         kT=kT,
@@ -495,6 +540,7 @@ def run_logged_phase(
         sigma_LJ=sigma_LJ,
         r_cut_LJ=r_cut_LJ,
         r_on_LJ=r_on_LJ,
+        buffer_LJ=buffer_LJ,
         lj_mode=lj_mode,
         log_period=log_period,
         nsteps=nsteps,
@@ -502,6 +548,12 @@ def run_logged_phase(
         phase_separated=phase_separated,
     )
 
+    metadata["log_path"] = str(paths["log_path"])
+    metadata["state_path"] = str(paths["state_path"])
+
+    # ============================================================
+    # Write metadata and save state
+    # ============================================================
     write_hdf5_metadata(
         log_path=paths["log_path"],
         metadata=metadata,
@@ -515,10 +567,6 @@ def run_logged_phase(
     return paths
 
 
-
-
-
-
 # ============================================================
 # Read HDF5 log
 # ============================================================
@@ -528,9 +576,6 @@ def read_hdf5_log(
 ):
     """
     Read an HDF5 log file into a nested dictionary.
-
-    This function is meant to load logged data so plotting helpers
-    can use it later.
     """
 
     log_path = Path(log_path)
@@ -550,23 +595,19 @@ def read_hdf5_log(
 
         if len(group.attrs) > 0:
             attrs = {}
-        
+
             for key, value in group.attrs.items():
                 if hasattr(value, "shape") and value.shape == ():
                     attrs[key] = value.item()
                 else:
                     attrs[key] = value
-        
+
             output["attrs"] = attrs
-    
 
     with h5py.File(log_path, mode="r") as hdf:
         read_group(hdf, data)
 
     return data
-
-
-
 
 
 # ============================================================
@@ -577,7 +618,7 @@ def check_phase_separated(
     simulation,
     nbins=20,
     density_threshold=0.2,
-    voxel_fraction_threshold=0.1,
+    voxel_fraction_threshold=0.05,
 ):
     """
     Check whether a simulation appears phase separated using voxel densities.
@@ -625,191 +666,12 @@ def check_phase_separated(
     # ============================================================
     # Check low-density voxel fraction
     # ============================================================
-    low_density_fraction = np.mean(voxel_densities < density_threshold)
+    low_density_fraction = np.mean(
+        voxel_densities < density_threshold
+    )
 
-    phase_separated = low_density_fraction > voxel_fraction_threshold
+    phase_separated = (
+        low_density_fraction > voxel_fraction_threshold
+    )
 
     return bool(phase_separated)
-
-
-
-
-
-
-
-# ============================================================
-# Get mean and std from the last N logged values
-# ============================================================
-
-def get_log_tail_stats(
-    log_path=None,
-    log=None,
-    quantity="pressure",
-    n_last=100,
-    per_particle=False,
-    N=None,
-    ddof=1,
-):
-    """
-    Compute the mean and standard deviation of the last n_last logged values.
-
-    Important:
-    - n_last means the last n_last LOGGER ENTRIES, not MD timesteps.
-    - If log_period = 2000 and n_last = 100,
-      this uses the last 200,000 MD steps.
-
-    Examples
-    --------
-    pressure_stats = get_log_tail_stats(
-        log_path=log_path,
-        quantity="pressure",
-        n_last=100,
-    )
-
-    pe_stats = get_log_tail_stats(
-        log_path=log_path,
-        quantity="PE_per_particle",
-        n_last=100,
-    )
-
-    ke_stats = get_log_tail_stats(
-        log_path=log_path,
-        quantity="KE_per_particle",
-        n_last=100,
-    )
-    """
-
-    # ============================================================
-    # Load log if needed
-    # ============================================================
-    if log is None:
-        if log_path is None:
-            raise ValueError("You must provide either log_path or log.")
-
-        log = read_hdf5_log(log_path)
-
-    # ============================================================
-    # Quantity aliases
-    # ============================================================
-    quantity_aliases = {
-        # Pressure
-        "pressure": ("pressure", False),
-
-        # Potential energy
-        "PE": ("potential_energy", False),
-        "pe": ("potential_energy", False),
-        "potential": ("potential_energy", False),
-        "potential_energy": ("potential_energy", False),
-
-        # Potential energy per particle
-        "PE_per_particle": ("potential_energy", True),
-        "pe_per_particle": ("potential_energy", True),
-        "potential_per_particle": ("potential_energy", True),
-        "potential_energy_per_particle": ("potential_energy", True),
-
-        # Kinetic energy
-        "KE": ("kinetic_energy", False),
-        "ke": ("kinetic_energy", False),
-        "kinetic": ("kinetic_energy", False),
-        "kinetic_energy": ("kinetic_energy", False),
-
-        # Kinetic energy per particle
-        "KE_per_particle": ("kinetic_energy", True),
-        "ke_per_particle": ("kinetic_energy", True),
-        "kinetic_per_particle": ("kinetic_energy", True),
-        "kinetic_energy_per_particle": ("kinetic_energy", True),
-
-        # Kinetic temperature, separate from kinetic energy
-        "temperature": ("kinetic_temperature", False),
-        "kinetic_temperature": ("kinetic_temperature", False),
-
-        # Tensor, if you ever want it later
-        "pressure_tensor": ("pressure_tensor", False),
-    }
-
-    if quantity not in quantity_aliases:
-        raise ValueError(
-            "Unknown quantity. Use one of: "
-            f"{list(quantity_aliases.keys())}"
-        )
-
-    quantity_name, alias_per_particle = quantity_aliases[quantity]
-
-    if alias_per_particle:
-        per_particle = True
-
-    # ============================================================
-    # Extract timestep and thermodynamic quantity
-    # ============================================================
-    timestep = log["hoomd-data"]["Simulation"]["timestep"]
-
-    values = (
-        log["hoomd-data"]["md"]
-           ["compute"]
-           ["ThermodynamicQuantities"]
-           [quantity_name]
-    )
-
-    timestep = np.asarray(timestep)
-    values = np.asarray(values)
-
-    # ============================================================
-    # Divide by particle number if requested
-    # ============================================================
-    if per_particle:
-        if N is None:
-            try:
-                N = log["metadata"]["attrs"]["N"]
-            except KeyError:
-                raise ValueError(
-                    "N was not found in the metadata. "
-                    "Pass N manually using N=..."
-                )
-
-        values = values / N
-
-    # ============================================================
-    # Keep only the last n_last logger entries
-    # ============================================================
-    tail_timesteps = timestep[-n_last:]
-    tail_values = values[-n_last:]
-
-    n_used = tail_values.shape[0]
-
-    if n_used == 0:
-        raise ValueError("No logged values were found.")
-
-    # ============================================================
-    # Compute mean and standard deviation
-    # ============================================================
-    mean_value = np.mean(tail_values, axis=0)
-
-    if n_used > ddof:
-        std_value = np.std(tail_values, axis=0, ddof=ddof)
-    else:
-        std_value = np.nan
-
-    # ============================================================
-    # Clean NumPy outputs
-    # ============================================================
-    def clean_output(x):
-        x = np.asarray(x)
-
-        if x.shape == ():
-            return float(x)
-
-        return x.tolist()
-
-    stats = {
-        "quantity": quantity_name,
-        "per_particle": bool(per_particle),
-        "N": int(N) if per_particle else None,
-        "n_last_requested": int(n_last),
-        "n_values_used": int(n_used),
-        "first_timestep_used": int(tail_timesteps[0]),
-        "last_timestep_used": int(tail_timesteps[-1]),
-        "mean": clean_output(mean_value),
-        "std": clean_output(std_value),
-    }
-
-    return stats
