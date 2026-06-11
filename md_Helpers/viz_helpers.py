@@ -19,32 +19,54 @@ FRESNEL_MAX_VERSION = packaging.version.parse("0.14.0")
 
 
 # ============================================================
-# Convert input object to snapshot/frame-like object
+# Convert input to snapshot/frame
 # ============================================================
 
-def _get_snapshot(obj):
+def _as_snapshot(obj):
     """
-    Return a snapshot/frame-like object from any supported input.
+    Accept:
+    - result dictionary from sh.get_or_make_thermalized_state(...)
+    - HOOMD simulation
+    - HOOMD state
+    - HOOMD snapshot
+    - GSD frame
 
-    Supported inputs:
-    - HOOMD simulation: sim
-    - HOOMD state: sim.state
-    - HOOMD snapshot: sim.state.get_snapshot()
-    - GSD frame: frame
-
-    The returned object must have:
-    - obj.configuration.box
-    - obj.particles.position
+    Return something with:
+    - configuration.box
+    - particles.position
     """
 
     # ============================================================
-    # HOOMD Simulation
+    # Result dictionary from get_or_make_thermalized_state
+    # ============================================================
+    if isinstance(obj, dict):
+        if "frame" in obj and obj["frame"] is not None:
+            return _as_snapshot(obj["frame"])
+
+        if "simulation" in obj and obj["simulation"] is not None:
+            return _as_snapshot(obj["simulation"])
+
+        raise TypeError(
+            "Result dictionary does not contain a usable frame or simulation."
+        )
+
+    # ============================================================
+    # None check
+    # ============================================================
+    if obj is None:
+        raise TypeError(
+            "Cannot render None. If this came from result['simulation'], "
+            "the state was probably loaded from disk. Use result['frame'] instead."
+        )
+
+    # ============================================================
+    # HOOMD simulation
     # ============================================================
     if hasattr(obj, "state") and hasattr(obj.state, "get_snapshot"):
         return obj.state.get_snapshot()
 
     # ============================================================
-    # HOOMD State
+    # HOOMD state
     # ============================================================
     if hasattr(obj, "get_snapshot"):
         return obj.get_snapshot()
@@ -56,8 +78,8 @@ def _get_snapshot(obj):
         return obj
 
     raise TypeError(
-        "Input must be a HOOMD simulation, HOOMD state, "
-        "HOOMD snapshot, or GSD frame."
+        "vh.render expects a result dictionary, HOOMD simulation, "
+        "HOOMD state, HOOMD snapshot, or GSD frame."
     )
 
 
@@ -90,25 +112,8 @@ def _get_positions_and_box(obj):
 
 
 def render(obj):
-    """
-    Render a GSD frame, HOOMD snapshot, or HOOMD simulation.
+    snapshot = _as_snapshot(obj)
 
-    This keeps the original V1 render settings as closely as possible.
-    """
-
-    # ============================================================
-    # Accept simulation, state, frame, or snapshot
-    # ============================================================
-    if hasattr(obj, "state") and hasattr(obj.state, "get_snapshot"):
-        snapshot = obj.state.get_snapshot()
-    elif hasattr(obj, "get_snapshot"):
-        snapshot = obj.get_snapshot()
-    else:
-        snapshot = obj
-
-    # ============================================================
-    # Original V1 render code
-    # ============================================================
     if (
         "version" not in dir(fresnel)
         or packaging.version.parse(fresnel.version.version) < FRESNEL_MIN_VERSION
@@ -136,22 +141,12 @@ def render(obj):
     geometry.position[:] = snapshot.particles.position[:]
     geometry.outline_width = 0.04
 
-    fresnel.geometry.Box(
-        scene,
-        [L, L, L, 0, 0, 0],
-        box_radius=0.02,
-    )
+    fresnel.geometry.Box(scene, [L, L, L, 0, 0, 0], box_radius=0.02)
 
     scene.lights = [
+        fresnel.light.Light(direction=(0, 0, 1), color=(0.8, 0.8, 0.8), theta=math.pi),
         fresnel.light.Light(
-            direction=(0, 0, 1),
-            color=(0.8, 0.8, 0.8),
-            theta=math.pi,
-        ),
-        fresnel.light.Light(
-            direction=(1, 1, 1),
-            color=(1.1, 1.1, 1.1),
-            theta=math.pi / 3,
+            direction=(1, 1, 1), color=(1.1, 1.1, 1.1), theta=math.pi / 3
         ),
     ]
 
