@@ -89,35 +89,25 @@ def _get_positions_and_box(obj):
     return positions, Lx, Ly, Lz, snapshot
 
 
-# ============================================================
-# Render frame / snapshot / simulation
-# ============================================================
-
-def render(
-    obj,
-    radius=0.5,
-    samples=2000,
-    max_particles=None,
-    seed=1,
-):
+def render(obj):
     """
-    Render a HOOMD simulation, HOOMD snapshot, or GSD frame.
+    Render a GSD frame, HOOMD snapshot, or HOOMD simulation.
 
-    Examples
-    --------
-    vh.render(sim)
-
-    vh.render(sim.state.get_snapshot())
-
-    vh.render(frame)
-
-    For very large systems, use:
-
-    vh.render(frame, max_particles=10000)
+    This keeps the original V1 render settings as closely as possible.
     """
 
     # ============================================================
-    # Fresnel version check
+    # Accept simulation, state, frame, or snapshot
+    # ============================================================
+    if hasattr(obj, "state") and hasattr(obj.state, "get_snapshot"):
+        snapshot = obj.state.get_snapshot()
+    elif hasattr(obj, "get_snapshot"):
+        snapshot = obj.get_snapshot()
+    else:
+        snapshot = obj
+
+    # ============================================================
+    # Original V1 render code
     # ============================================================
     if (
         "version" not in dir(fresnel)
@@ -128,59 +118,29 @@ def render(
             f"Unsupported fresnel version {fresnel.version.version} - expect errors."
         )
 
-    # ============================================================
-    # Extract state information
-    # ============================================================
-    positions, Lx, Ly, Lz, snapshot = _get_positions_and_box(obj)
+    L = snapshot.configuration.box[0]
 
-    # ============================================================
-    # Optionally render a random subset
-    # ============================================================
-    if max_particles is not None and len(positions) > max_particles:
-        rng = np.random.default_rng(seed)
-
-        keep = rng.choice(
-            len(positions),
-            size=int(max_particles),
-            replace=False,
-        )
-
-        positions_to_render = positions[keep]
-
-    else:
-        positions_to_render = positions
-
-    # ============================================================
-    # Build Fresnel scene
-    # ============================================================
     scene = fresnel.Scene(device)
 
     geometry = fresnel.geometry.Sphere(
         scene,
-        N=len(positions_to_render),
-        radius=radius,
+        N=len(snapshot.particles.position),
+        radius=0.5,
     )
 
     geometry.material = fresnel.material.Material(
-        color=fresnel.color.linear(
-            [252 / 255, 209 / 255, 1 / 255]
-        ),
+        color=fresnel.color.linear([252 / 255, 209 / 255, 1 / 255]),
         roughness=0.5,
     )
 
-    geometry.position[:] = positions_to_render[:]
+    geometry.position[:] = snapshot.particles.position[:]
     geometry.outline_width = 0.04
 
     fresnel.geometry.Box(
         scene,
-        [Lx, Ly, Lz, 0, 0, 0],
+        [L, L, L, 0, 0, 0],
         box_radius=0.02,
     )
-
-    # ============================================================
-    # Lights and camera
-    # ============================================================
-    L_camera = max(Lx, Ly, Lz)
 
     scene.lights = [
         fresnel.light.Light(
@@ -196,14 +156,16 @@ def render(
     ]
 
     scene.camera = fresnel.camera.Orthographic(
-        position=(2 * L_camera, L_camera, 2 * L_camera),
+        position=(L * 2, L, L * 2),
         look_at=(0, 0, 0),
         up=(0, 1, 0),
-        height=L_camera * 1.4 + 1,
+        height=L * 1.4 + 1,
     )
 
     scene.background_alpha = 1
     scene.background_color = (1, 1, 1)
+
+    samples = 2000
 
     if "CI" in os.environ:
         samples = 100
