@@ -73,6 +73,9 @@ metadata/lj
 metadata/source
 metadata/paths
 metadata/classification
+metadata/classification/phase_separation
+metadata/classification/phase_separation/voxel
+metadata/classification/phase_separation/PE_drop
 ```
 
 The migration is copy-only. Original V2 files stay unchanged; the copied V3

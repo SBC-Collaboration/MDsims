@@ -246,7 +246,7 @@ def _split_thermalized_metadata(old_attrs, info, old_state_path, old_log_path, n
         "metadata/lj": lj,
         "metadata/source": source,
         "metadata/paths": paths,
-        "metadata/classification": classification,
+        "metadata/classification/phase_separation": classification,
     }
 
 
@@ -276,7 +276,7 @@ def write_v3_thermalized_metadata(
     )
 
     if voxel_attrs:
-        groups["metadata/classification/voxel"] = voxel_attrs
+        groups["metadata/classification/phase_separation/voxel"] = voxel_attrs
 
     pe_drop_attrs = metadata_helpers.read_attrs(
         hdf5_path=log_path,
@@ -284,7 +284,7 @@ def write_v3_thermalized_metadata(
     )
 
     if pe_drop_attrs:
-        groups["metadata/classification/PE_drop"] = pe_drop_attrs
+        groups["metadata/classification/phase_separation/PE_drop"] = pe_drop_attrs
 
     metadata_helpers.write_metadata_groups(
         hdf5_path=log_path,

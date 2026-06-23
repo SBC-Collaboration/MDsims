@@ -57,7 +57,7 @@ DEFAULT_PHASE_SEP_PE_DROP_N_LAST = 100
 
 # How to combine raw threshold and Z-score threshold for:
 #
-#     metadata/phase_separation/PE_drop.attrs["phase_separated"]
+#     metadata/classification/phase_separation/PE_drop.attrs["phase_separated"]
 #
 # Options:
 #     "raw"     -> use only raw PE_drop threshold
@@ -65,6 +65,13 @@ DEFAULT_PHASE_SEP_PE_DROP_N_LAST = 100
 #     "either"  -> raw OR Z-score
 #     "both"    -> raw AND Z-score
 DEFAULT_PHASE_SEP_PE_DROP_DECISION_RULE = "either"
+
+# Canonical V3 phase-separation metadata location.
+PHASE_SEPARATION_METADATA_PATH = (
+    "metadata/classification/phase_separation"
+)
+LEGACY_PHASE_SEPARATION_METADATA_PATH = "metadata/phase_separation"
+LEGACY_CLASSIFICATION_METADATA_PATH = "metadata/classification"
 
 
 # ============================================================
@@ -195,6 +202,114 @@ def _safe_str(value, default=""):
         pass
 
     return str(value)
+
+
+def _attrs_to_clean_dict(attrs):
+    return {
+        key: _clean_hdf5_attr_value(value)
+        for key, value in attrs.items()
+    }
+
+
+def _write_attrs_to_group(group, attrs, overwrite=True):
+    for key, value in attrs.items():
+        if value is None:
+            continue
+
+        if key in group.attrs and not overwrite:
+            continue
+
+        value = _clean_hdf5_attr_value(value)
+
+        if isinstance(value, Path):
+            value = str(value)
+
+        group.attrs[key] = value
+
+
+def _find_phase_separation_group(metadata_group):
+    if "classification" in metadata_group:
+        classification_group = metadata_group["classification"]
+
+        if "phase_separation" in classification_group:
+            return (
+                classification_group["phase_separation"],
+                PHASE_SEPARATION_METADATA_PATH,
+            )
+
+        has_direct_method_groups = any(
+            isinstance(item, h5py.Group)
+            for item in classification_group.values()
+        )
+
+        if has_direct_method_groups:
+            return (
+                classification_group,
+                LEGACY_CLASSIFICATION_METADATA_PATH,
+            )
+
+    if "phase_separation" in metadata_group:
+        return (
+            metadata_group["phase_separation"],
+            LEGACY_PHASE_SEPARATION_METADATA_PATH,
+        )
+
+    return None, ""
+
+
+def _find_phase_method_attrs(
+    phase_group,
+    phase_group_path,
+    method_name,
+    allow_parent_voxel_attrs=True,
+):
+    if phase_group is None:
+        return None, ""
+
+    if method_name in phase_group:
+        return (
+            phase_group[method_name].attrs,
+            f"{phase_group_path}/{method_name}",
+        )
+
+    if (
+        method_name == "voxel"
+        and allow_parent_voxel_attrs
+        and len(phase_group.attrs) > 0
+    ):
+        return phase_group.attrs, phase_group_path
+
+    return None, ""
+
+
+def read_phase_method_attrs(log_path, method_name):
+    """
+    Read one phase-separation method from the canonical V3 path.
+
+    Falls back to the temporary migrated path and old V2 path so older logs
+    remain readable after the helpers move forward.
+    """
+
+    log_path = Path(log_path)
+
+    with h5py.File(log_path, mode="r") as hdf:
+        if "metadata" not in hdf:
+            return {}, ""
+
+        metadata_group = hdf["metadata"]
+        phase_group, phase_group_path = _find_phase_separation_group(
+            metadata_group
+        )
+        attrs, location = _find_phase_method_attrs(
+            phase_group=phase_group,
+            phase_group_path=phase_group_path,
+            method_name=method_name,
+        )
+
+        if attrs is None:
+            return {}, ""
+
+        return _attrs_to_clean_dict(attrs), location
 
 
 # ============================================================
@@ -837,11 +952,12 @@ def write_phase_method_metadata(
     set_main_phase_separated=None,
     clear_existing=True,
     clear_parent_attrs=False,
+    remove_legacy_method=True,
 ):
     """
     Write one method group under:
 
-        metadata/phase_separation/{method_name}.attrs[...]
+        metadata/classification/phase_separation/{method_name}.attrs[...]
 
     Examples:
         method_name = "voxel"
@@ -857,20 +973,18 @@ def write_phase_method_metadata(
         raise FileNotFoundError(f"Log file does not exist: {log_path}")
 
     with h5py.File(log_path, mode="a") as hdf:
-        metadata_group = hdf.require_group("metadata")
-
-        if set_main_phase_separated is not None:
-            metadata_group.attrs["phase_separated"] = bool(
-                set_main_phase_separated
-            )
-
-        phase_group = metadata_group.require_group(
-            "phase_separation"
+        phase_group = hdf.require_group(
+            PHASE_SEPARATION_METADATA_PATH
         )
 
         if clear_parent_attrs:
             for key in list(phase_group.attrs.keys()):
                 del phase_group.attrs[key]
+
+        if set_main_phase_separated is not None:
+            phase_group.attrs["phase_separated"] = bool(
+                set_main_phase_separated
+            )
 
         method_group = phase_group.require_group(method_name)
 
@@ -878,16 +992,220 @@ def write_phase_method_metadata(
             for key in list(method_group.attrs.keys()):
                 del method_group.attrs[key]
 
-        for key, value in attrs.items():
-            if value is None:
+        _write_attrs_to_group(
+            group=method_group,
+            attrs=attrs,
+            overwrite=True,
+        )
+
+        if remove_legacy_method:
+            legacy_method_paths = [
+                f"{LEGACY_PHASE_SEPARATION_METADATA_PATH}/{method_name}",
+                f"{LEGACY_CLASSIFICATION_METADATA_PATH}/{method_name}",
+            ]
+
+            for legacy_path in legacy_method_paths:
+                if legacy_path in hdf:
+                    del hdf[legacy_path]
+
+
+def _iter_phase_method_sources(metadata_group):
+    sources = []
+
+    if "classification" in metadata_group:
+        classification_group = metadata_group["classification"]
+
+        if "phase_separation" in classification_group:
+            phase_group = classification_group["phase_separation"]
+
+            for method_name, item in phase_group.items():
+                if isinstance(item, h5py.Group):
+                    sources.append(
+                        (
+                            method_name,
+                            f"{PHASE_SEPARATION_METADATA_PATH}/{method_name}",
+                            _attrs_to_clean_dict(item.attrs),
+                        )
+                    )
+
+        for method_name, item in classification_group.items():
+            if method_name == "phase_separation":
                 continue
 
-            value = _clean_hdf5_attr_value(value)
+            if isinstance(item, h5py.Group):
+                sources.append(
+                    (
+                        method_name,
+                        f"{LEGACY_CLASSIFICATION_METADATA_PATH}/{method_name}",
+                        _attrs_to_clean_dict(item.attrs),
+                    )
+                )
 
-            if isinstance(value, Path):
-                value = str(value)
+    if "phase_separation" in metadata_group:
+        legacy_phase_group = metadata_group["phase_separation"]
 
-            method_group.attrs[key] = value
+        for method_name, item in legacy_phase_group.items():
+            if isinstance(item, h5py.Group):
+                sources.append(
+                    (
+                        method_name,
+                        (
+                            f"{LEGACY_PHASE_SEPARATION_METADATA_PATH}"
+                            f"/{method_name}"
+                        ),
+                        _attrs_to_clean_dict(item.attrs),
+                    )
+                )
+
+        if len(legacy_phase_group.attrs) > 0:
+            sources.append(
+                (
+                    "voxel",
+                    LEGACY_PHASE_SEPARATION_METADATA_PATH,
+                    _attrs_to_clean_dict(legacy_phase_group.attrs),
+                )
+            )
+
+    return sources
+
+
+def normalize_phase_separation_metadata_paths(
+    log_path,
+    dry_run=True,
+    remove_legacy=True,
+    overwrite=False,
+):
+    """
+    Move old phase-separation metadata into the canonical V3 location.
+
+    Canonical location:
+        metadata/classification/phase_separation/{method_name}
+
+    Legacy locations removed when remove_legacy=True:
+        metadata/phase_separation
+        metadata/classification/{method_name}
+    """
+
+    log_path = Path(log_path)
+
+    if not log_path.exists():
+        return {
+            "status": "missing_log",
+            "log_path": str(log_path),
+            "methods_found": "",
+            "sources_found": "",
+            "removed_legacy": False,
+        }
+
+    mode = "r" if dry_run else "a"
+
+    with h5py.File(log_path, mode=mode) as hdf:
+        if "metadata" not in hdf:
+            return {
+                "status": "no_metadata",
+                "log_path": str(log_path),
+                "methods_found": "",
+                "sources_found": "",
+                "removed_legacy": False,
+            }
+
+        metadata_group = hdf["metadata"]
+        sources = _iter_phase_method_sources(metadata_group)
+
+        methods_found = sorted({method for method, _, _ in sources})
+        sources_found = [source_path for _, source_path, _ in sources]
+
+        if not dry_run:
+            phase_group = hdf.require_group(
+                PHASE_SEPARATION_METADATA_PATH
+            )
+
+            for method_name, _, attrs in sources:
+                method_group = phase_group.require_group(method_name)
+                _write_attrs_to_group(
+                    group=method_group,
+                    attrs=attrs,
+                    overwrite=overwrite,
+                )
+
+            phase_separated = None
+
+            if "classification" in metadata_group:
+                classification_group = metadata_group["classification"]
+                phase_separated = _safe_bool(
+                    classification_group.attrs.get("phase_separated", None)
+                )
+
+            if phase_separated is None:
+                phase_separated = _safe_bool(
+                    metadata_group.attrs.get("phase_separated", None)
+                )
+
+            if phase_separated is None:
+                voxel_attrs, _ = _find_phase_method_attrs(
+                    phase_group=phase_group,
+                    phase_group_path=PHASE_SEPARATION_METADATA_PATH,
+                    method_name="voxel",
+                )
+
+                if voxel_attrs is not None:
+                    phase_separated = _safe_bool(
+                        voxel_attrs.get("phase_separated", None)
+                    )
+
+            if phase_separated is not None:
+                phase_group.attrs["phase_separated"] = bool(
+                    phase_separated
+                )
+
+            if remove_legacy:
+                if LEGACY_PHASE_SEPARATION_METADATA_PATH in hdf:
+                    del hdf[LEGACY_PHASE_SEPARATION_METADATA_PATH]
+
+                if "metadata/classification" in hdf:
+                    classification_group = hdf["metadata/classification"]
+
+                    for method_name in methods_found:
+                        if method_name in classification_group:
+                            del classification_group[method_name]
+
+                    if "phase_separated" in classification_group.attrs:
+                        del classification_group.attrs["phase_separated"]
+
+        return {
+            "status": "dry_run" if dry_run else "normalized",
+            "log_path": str(log_path),
+            "methods_found": ",".join(methods_found),
+            "sources_found": ",".join(sources_found),
+            "removed_legacy": bool(remove_legacy and not dry_run),
+        }
+
+
+def normalize_all_phase_separation_metadata_paths(
+    root,
+    pattern="**/*_log.hdf5",
+    dry_run=True,
+    remove_legacy=True,
+    overwrite=False,
+    limit=None,
+):
+    root = Path(root)
+    log_paths = sorted(root.glob(pattern))
+
+    if limit is not None:
+        log_paths = log_paths[: int(limit)]
+
+    rows = [
+        normalize_phase_separation_metadata_paths(
+            log_path=log_path,
+            dry_run=dry_run,
+            remove_legacy=remove_legacy,
+            overwrite=overwrite,
+        )
+        for log_path in log_paths
+    ]
+
+    return pd.DataFrame(rows)
 
 
 # ============================================================
@@ -906,13 +1224,9 @@ def write_voxel_phase_separation_metadata(
     """
     Fill out the voxel phase-separation metadata for one completed simulation.
 
-    Writes the main boolean here:
+    Writes voxel-method details here:
 
-        metadata.attrs["phase_separated"]
-
-    and writes voxel-method details here:
-
-        metadata/phase_separation/voxel.attrs["phase_separated"]
+        metadata/classification/phase_separation/voxel.attrs[...]
 
     This does not rerun the simulation.
     """
@@ -944,10 +1258,6 @@ def write_voxel_phase_separation_metadata(
         if "metadata" in hdf:
             metadata_attrs = hdf["metadata"].attrs
 
-            old_phase_separated = _safe_bool(
-                metadata_attrs.get("phase_separated", None)
-            )
-
             n_fcc_cells = _safe_int(
                 metadata_attrs.get("n_fcc_cells", np.nan)
             )
@@ -959,6 +1269,27 @@ def write_voxel_phase_separation_metadata(
             kT = _safe_float(
                 metadata_attrs.get("kT", np.nan)
             )
+
+        phase_group, _ = _find_phase_separation_group(
+            hdf["metadata"]
+        ) if "metadata" in hdf else (None, "")
+
+        if phase_group is not None:
+            old_phase_separated = _safe_bool(
+                phase_group.attrs.get("phase_separated", None)
+            )
+
+            if old_phase_separated is None:
+                voxel_attrs, _ = _find_phase_method_attrs(
+                    phase_group=phase_group,
+                    phase_group_path="",
+                    method_name="voxel",
+                )
+
+                if voxel_attrs is not None:
+                    old_phase_separated = _safe_bool(
+                        voxel_attrs.get("phase_separated", None)
+                    )
 
     with gsd.hoomd.open(
         name=str(state_path),
@@ -1058,11 +1389,7 @@ def write_PE_drop_phase_separation_metadata(
 
     Writes only to:
 
-        metadata/phase_separation/PE_drop.attrs[...]
-
-    This deliberately does NOT overwrite:
-
-        metadata.attrs["phase_separated"]
+        metadata/classification/phase_separation/PE_drop.attrs[...]
 
     Old PE_drop metadata attrs are deleted before writing the new smaller set.
     """
@@ -1098,16 +1425,19 @@ def write_PE_drop_phase_separation_metadata(
                 metadata_attrs.get("kT", np.nan)
             )
 
-            if "phase_separation" in hdf["metadata"]:
-                phase_group = hdf["metadata"]["phase_separation"]
+            phase_group, _ = _find_phase_separation_group(
+                hdf["metadata"]
+            )
+            PE_attrs, _ = _find_phase_method_attrs(
+                phase_group=phase_group,
+                phase_group_path="",
+                method_name="PE_drop",
+            )
 
-                if "PE_drop" in phase_group:
-                    old_PE_drop_phase_separated = _safe_bool(
-                        phase_group["PE_drop"].attrs.get(
-                            "phase_separated",
-                            None,
-                        )
-                    )
+            if PE_attrs is not None:
+                old_PE_drop_phase_separated = _safe_bool(
+                    PE_attrs.get("phase_separated", None)
+                )
 
     result = compute_PE_drop_phase_separation_from_log(
         log_path=log_path,
@@ -1494,15 +1824,18 @@ def read_phase_separation_metadata_for_csv(
     """
     Read phase-separation metadata from one HDF5 log.
 
-    Supports:
+    Preferred V3 path:
+        metadata/classification/phase_separation/voxel.attrs[...]
+        metadata/classification/phase_separation/PE_drop.attrs[...]
+
+    Backward-compatible paths:
         metadata/phase_separation/voxel.attrs[...]
         metadata/phase_separation/PE_drop.attrs[...]
+        metadata/classification/voxel.attrs[...]
+        metadata/classification/PE_drop.attrs[...]
 
     Main output value:
         phase_separated
-
-    For now, phase_separated still means metadata.attrs["phase_separated"],
-    which is normally controlled by the voxel method.
     """
 
     log_path = Path(log_path)
@@ -1552,80 +1885,97 @@ def read_phase_separation_metadata_for_csv(
 
         metadata_group = hdf["metadata"]
 
-        main_phase_separated = _safe_bool(
+        old_main_phase_separated = _safe_bool(
             metadata_group.attrs.get(
                 "phase_separated",
                 None,
             )
         )
 
+        phase_group, phase_group_path = _find_phase_separation_group(
+            metadata_group
+        )
+
+        main_phase_separated = None
+
+        if phase_group is not None:
+            main_phase_separated = _safe_bool(
+                phase_group.attrs.get("phase_separated", None)
+            )
+
+        if main_phase_separated is None:
+            main_phase_separated = old_main_phase_separated
+
         if main_phase_separated is not None:
             output["phase_separated"] = main_phase_separated
 
-        if "phase_separation" not in metadata_group:
+        if phase_group is None:
             return output
-
-        phase_group = metadata_group["phase_separation"]
 
         # ========================================================
         # Voxel metadata
         # ========================================================
 
-        if "voxel" in phase_group:
-            voxel_attrs = phase_group["voxel"].attrs
-            output["phase_sep_location"] = (
-                "metadata/phase_separation/voxel"
+        voxel_attrs, voxel_location = _find_phase_method_attrs(
+            phase_group=phase_group,
+            phase_group_path=phase_group_path,
+            method_name="voxel",
+        )
+
+        if voxel_attrs is not None:
+            output["phase_sep_location"] = voxel_location
+
+            voxel_phase_separated = _safe_bool(
+                voxel_attrs.get(
+                    "phase_separated",
+                    None,
+                )
             )
 
-        else:
-            # Backward compatibility with old parent attrs.
-            voxel_attrs = phase_group.attrs
-            output["phase_sep_location"] = (
-                "metadata/phase_separation"
+            output["phase_sep_voxel_phase_separated"] = voxel_phase_separated
+
+            if (
+                main_phase_separated is None
+                and voxel_phase_separated is not None
+            ):
+                output["phase_separated"] = voxel_phase_separated
+
+            output["phase_sep_method"] = _safe_str(
+                voxel_attrs.get("method", "")
             )
 
-        voxel_phase_separated = _safe_bool(
-            voxel_attrs.get(
-                "phase_separated",
-                None,
+            output["phase_sep_nbins"] = _safe_int(
+                voxel_attrs.get("nbins", np.nan)
             )
-        )
 
-        output["phase_sep_voxel_phase_separated"] = voxel_phase_separated
+            output["phase_sep_density_threshold"] = _safe_float(
+                voxel_attrs.get("density_threshold", np.nan)
+            )
 
-        if main_phase_separated is None and voxel_phase_separated is not None:
-            output["phase_separated"] = voxel_phase_separated
+            output["phase_sep_voxel_fraction_threshold"] = _safe_float(
+                voxel_attrs.get("voxel_fraction_threshold", np.nan)
+            )
 
-        output["phase_sep_method"] = _safe_str(
-            voxel_attrs.get("method", "")
-        )
+            output["phase_sep_low_density_fraction"] = _safe_float(
+                voxel_attrs.get("low_density_fraction", np.nan)
+            )
 
-        output["phase_sep_nbins"] = _safe_int(
-            voxel_attrs.get("nbins", np.nan)
-        )
-
-        output["phase_sep_density_threshold"] = _safe_float(
-            voxel_attrs.get("density_threshold", np.nan)
-        )
-
-        output["phase_sep_voxel_fraction_threshold"] = _safe_float(
-            voxel_attrs.get("voxel_fraction_threshold", np.nan)
-        )
-
-        output["phase_sep_low_density_fraction"] = _safe_float(
-            voxel_attrs.get("low_density_fraction", np.nan)
-        )
-
-        output["phase_sep_updated_from_saved_gsd"] = _safe_bool(
-            voxel_attrs.get("updated_from_saved_gsd", None)
-        )
+            output["phase_sep_updated_from_saved_gsd"] = _safe_bool(
+                voxel_attrs.get("updated_from_saved_gsd", None)
+            )
 
         # ========================================================
         # PE-drop metadata
         # ========================================================
 
-        if "PE_drop" in phase_group:
-            PE_attrs = phase_group["PE_drop"].attrs
+        PE_attrs, _ = _find_phase_method_attrs(
+            phase_group=phase_group,
+            phase_group_path=phase_group_path,
+            method_name="PE_drop",
+            allow_parent_voxel_attrs=False,
+        )
+
+        if PE_attrs is not None:
 
             output["phase_sep_PE_drop_phase_separated"] = _safe_bool(
                 PE_attrs.get("phase_separated", None)

@@ -695,14 +695,18 @@ def read_hdf5_log(
         # New method groups:
         #
         #     metadata/phase_separation/voxel.attrs
-        #     metadata/phase_separation/fit.attrs
+        #     metadata/classification/phase_separation/voxel.attrs
         #
-        # Load directly as:
+        # Load method attrs directly into the method dictionary.
         #
-        #     log["metadata"]["phase_separation"]["voxel"]
-        #     log["metadata"]["phase_separation"]["fit"]
+        #     log["metadata"]["classification"]["phase_separation"]["voxel"]
         # --------------------------------------------------------
-        if group.name.startswith("/metadata/phase_separation/"):
+        if (
+            group.name.startswith("/metadata/phase_separation/")
+            or group.name.startswith(
+                "/metadata/classification/phase_separation/"
+            )
+        ):
             output.update(attrs)
             return
 
