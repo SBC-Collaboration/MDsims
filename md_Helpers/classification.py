@@ -608,7 +608,9 @@ def _read_metadata_attrs_from_hdf5(
     log_path,
 ):
     """
-    Read metadata.attrs from one HDF5 log.
+    Read useful metadata from one HDF5 log.
+
+    V3 reads grouped metadata first, with old flat /metadata.attrs as fallback.
     """
 
     log_path = Path(log_path)
@@ -621,6 +623,19 @@ def _read_metadata_attrs_from_hdf5(
 
         for key, value in hdf["metadata"].attrs.items():
             attrs[key] = _clean_hdf5_attr_value(value)
+
+        for group_path in [
+            "metadata/state",
+            "metadata/run",
+            "metadata/lj",
+            "metadata/paths",
+            "metadata/source",
+        ]:
+            if group_path not in hdf:
+                continue
+
+            for key, value in hdf[group_path].attrs.items():
+                attrs[key] = _clean_hdf5_attr_value(value)
 
     return attrs
 
@@ -642,7 +657,10 @@ def _read_PE_arrays_from_hdf5(
     )
 
     if "N" not in metadata:
-        raise KeyError(f"metadata.attrs['N'] is missing in log: {log_path}")
+        raise KeyError(
+            "metadata/state.attrs['N'] is missing in log: "
+            f"{log_path}"
+        )
 
     N = int(metadata["N"])
 
@@ -902,9 +920,10 @@ def _get_state_path_for_phase_log(
     Find the matching GSD state path for a phase log.
 
     Preferred:
-    - use metadata.attrs["state_path"]
+    - use metadata/paths.attrs["state_path"]
 
     Fallback:
+    - old metadata.attrs["state_path"]
     - randomization_log.hdf5 -> randomization.gsd
     """
 
@@ -914,18 +933,26 @@ def _get_state_path_for_phase_log(
 
     if log_path.exists():
         with h5py.File(log_path, mode="r") as hdf:
-            if "metadata" in hdf:
+            raw_state_path = None
+
+            if "metadata/paths" in hdf:
+                raw_state_path = hdf["metadata/paths"].attrs.get(
+                    "state_path",
+                    None,
+                )
+
+            if raw_state_path is None and "metadata" in hdf:
                 raw_state_path = hdf["metadata"].attrs.get(
                     "state_path",
                     None,
                 )
 
-                raw_state_path = _clean_hdf5_attr_value(
-                    raw_state_path
-                )
+            raw_state_path = _clean_hdf5_attr_value(
+                raw_state_path
+            )
 
-                if raw_state_path not in [None, ""]:
-                    state_path = Path(raw_state_path)
+            if raw_state_path not in [None, ""]:
+                state_path = Path(raw_state_path)
 
     if state_path is not None and state_path.exists():
         return state_path
@@ -1254,22 +1281,21 @@ def write_voxel_phase_separation_metadata(
     target_rho = np.nan
     kT = np.nan
 
+    log_metadata = _read_metadata_attrs_from_hdf5(log_path)
+
+    n_fcc_cells = _safe_int(
+        log_metadata.get("n_fcc_cells", np.nan)
+    )
+
+    target_rho = _safe_float(
+        log_metadata.get("target_rho", np.nan)
+    )
+
+    kT = _safe_float(
+        log_metadata.get("kT", np.nan)
+    )
+
     with h5py.File(log_path, mode="r") as hdf:
-        if "metadata" in hdf:
-            metadata_attrs = hdf["metadata"].attrs
-
-            n_fcc_cells = _safe_int(
-                metadata_attrs.get("n_fcc_cells", np.nan)
-            )
-
-            target_rho = _safe_float(
-                metadata_attrs.get("target_rho", np.nan)
-            )
-
-            kT = _safe_float(
-                metadata_attrs.get("kT", np.nan)
-            )
-
         phase_group, _ = _find_phase_separation_group(
             hdf["metadata"]
         ) if "metadata" in hdf else (None, "")
@@ -1405,26 +1431,26 @@ def write_PE_drop_phase_separation_metadata(
     target_rho = np.nan
     kT = np.nan
 
+    log_metadata = _read_metadata_attrs_from_hdf5(log_path)
+
+    old_main_phase_separated = _safe_bool(
+        log_metadata.get("phase_separated", None)
+    )
+
+    n_fcc_cells = _safe_int(
+        log_metadata.get("n_fcc_cells", np.nan)
+    )
+
+    target_rho = _safe_float(
+        log_metadata.get("target_rho", np.nan)
+    )
+
+    kT = _safe_float(
+        log_metadata.get("kT", np.nan)
+    )
+
     with h5py.File(log_path, mode="r") as hdf:
         if "metadata" in hdf:
-            metadata_attrs = hdf["metadata"].attrs
-
-            old_main_phase_separated = _safe_bool(
-                metadata_attrs.get("phase_separated", None)
-            )
-
-            n_fcc_cells = _safe_int(
-                metadata_attrs.get("n_fcc_cells", np.nan)
-            )
-
-            target_rho = _safe_float(
-                metadata_attrs.get("target_rho", np.nan)
-            )
-
-            kT = _safe_float(
-                metadata_attrs.get("kT", np.nan)
-            )
-
             phase_group, _ = _find_phase_separation_group(
                 hdf["metadata"]
             )

@@ -92,6 +92,301 @@ def write_metadata_groups(hdf5_path, groups, mode="a", overwrite=True):
     return hdf5_path
 
 
+def clear_attrs(hdf5_path, group_path="metadata"):
+    hdf5_path = Path(hdf5_path)
+
+    with _open_hdf5(hdf5_path, mode="a") as hdf:
+        if group_path not in hdf:
+            return False
+
+        group = hdf[group_path]
+
+        for key in list(group.attrs.keys()):
+            del group.attrs[key]
+
+    return True
+
+
+def delete_attrs(hdf5_path, group_path, keys):
+    hdf5_path = Path(hdf5_path)
+
+    with _open_hdf5(hdf5_path, mode="a") as hdf:
+        if group_path not in hdf:
+            return []
+
+        group = hdf[group_path]
+        deleted = []
+
+        for key in keys:
+            if key in group.attrs:
+                del group.attrs[key]
+                deleted.append(key)
+
+    return deleted
+
+
+def split_simulation_metadata(
+    flat_metadata,
+    state_kind="thermalized",
+    run_kind="thermalization",
+    data_version="v3",
+):
+    flat_metadata = dict(flat_metadata or {})
+
+    state_keys = [
+        "lattice_type",
+        "density_mode",
+        "n_fcc_cells",
+        "N",
+        "target_rho",
+        "actual_rho",
+        "kT",
+        "BoxLength",
+        "volume",
+        "fcc_cell_size",
+    ]
+
+    run_keys = [
+        "phase_name",
+        "nsteps",
+        "seed",
+        "dt",
+        "log_period",
+        "final_timestep",
+    ]
+
+    lj_keys = [
+        "epsilon_LJ",
+        "sigma_LJ",
+        "r_cut_LJ",
+        "r_on_LJ",
+        "buffer_LJ",
+        "lj_mode",
+    ]
+
+    path_keys = [
+        "state_path",
+        "log_path",
+        "metadata_path",
+    ]
+
+    source_keys = [
+        "starting_state_path",
+        "source_state_path",
+        "source_log_path",
+        "old_state_path",
+        "old_log_path",
+        "source_data_version",
+        "migrated_from_data_version",
+        "migration_note",
+    ]
+
+    state = {
+        "state_kind": flat_metadata.get("state_kind", state_kind),
+        "data_version": flat_metadata.get("data_version", data_version),
+    }
+
+    for key in state_keys:
+        if key in flat_metadata:
+            state[key] = flat_metadata[key]
+
+    if "migrated_from_data_version" in flat_metadata:
+        state["migrated_from_data_version"] = flat_metadata[
+            "migrated_from_data_version"
+        ]
+
+    run = {
+        "run_kind": flat_metadata.get("run_kind", run_kind),
+    }
+
+    for key in run_keys:
+        if key in flat_metadata:
+            run[key] = flat_metadata[key]
+
+    lj = {
+        key: flat_metadata[key]
+        for key in lj_keys
+        if key in flat_metadata
+    }
+
+    paths = {
+        key: flat_metadata[key]
+        for key in path_keys
+        if key in flat_metadata
+    }
+
+    source = {
+        key: flat_metadata[key]
+        for key in source_keys
+        if key in flat_metadata
+    }
+
+    classification = {}
+
+    if "phase_separated" in flat_metadata:
+        classification["phase_separated"] = flat_metadata["phase_separated"]
+
+    groups = {
+        "metadata/state": state,
+        "metadata/run": run,
+    }
+
+    optional_groups = {
+        "metadata/lj": lj,
+        "metadata/paths": paths,
+        "metadata/source": source,
+        "metadata/classification/phase_separation": classification,
+    }
+
+    for group_path, attrs in optional_groups.items():
+        if attrs:
+            groups[group_path] = attrs
+
+    return groups
+
+
+def cleanup_v3_metadata_file(
+    hdf5_path,
+    dry_run=True,
+    clear_root_attrs=True,
+    remove_group_overlap=True,
+):
+    hdf5_path = Path(hdf5_path)
+
+    if not hdf5_path.exists():
+        return {
+            "status": "missing_file",
+            "hdf5_path": str(hdf5_path),
+            "root_attrs_before": 0,
+            "root_attrs_removed": 0,
+            "group_attrs_removed": "",
+        }
+
+    mode = "r" if dry_run else "a"
+
+    with _open_hdf5(hdf5_path, mode=mode) as hdf:
+        if "metadata" not in hdf:
+            return {
+                "status": "no_metadata",
+                "hdf5_path": str(hdf5_path),
+                "root_attrs_before": 0,
+                "root_attrs_removed": 0,
+                "group_attrs_removed": "",
+            }
+
+        metadata_group = hdf["metadata"]
+        root_attrs_before = len(metadata_group.attrs)
+        removed = {}
+
+        if not dry_run:
+            root_attrs = {
+                key: clean_read_value(value)
+                for key, value in metadata_group.attrs.items()
+            }
+
+            if root_attrs:
+                groups = split_simulation_metadata(root_attrs)
+
+                for group_path, attrs in groups.items():
+                    group = hdf.require_group(group_path)
+                    write_attrs(group, attrs, overwrite=False)
+
+            if remove_group_overlap:
+                overlap_keys = {
+                    "metadata/state": [
+                        "state_path",
+                        "log_path",
+                        "starting_state_path",
+                    ],
+                    "metadata/run": [
+                        "state_path",
+                        "log_path",
+                        "starting_state_path",
+                        "kT",
+                    ],
+                    "metadata/paths": [
+                        "old_state_path",
+                        "old_log_path",
+                        "source_state_path",
+                        "source_log_path",
+                        "starting_state_path",
+                    ],
+                }
+
+                source_group = hdf.require_group("metadata/source")
+
+                for group_path, keys in overlap_keys.items():
+                    if group_path not in hdf:
+                        continue
+
+                    group = hdf[group_path]
+
+                    for key in list(keys):
+                        if key not in group.attrs:
+                            continue
+
+                        value = clean_read_value(group.attrs[key])
+
+                        if (
+                            group_path in {
+                                "metadata/run",
+                                "metadata/paths",
+                            }
+                            and key.endswith("_path")
+                            and key not in source_group.attrs
+                        ):
+                            source_group.attrs[key] = value
+
+                        del group.attrs[key]
+                        removed.setdefault(group_path, []).append(key)
+
+            if clear_root_attrs:
+                for key in list(metadata_group.attrs.keys()):
+                    del metadata_group.attrs[key]
+
+        return {
+            "status": "dry_run" if dry_run else "cleaned",
+            "hdf5_path": str(hdf5_path),
+            "root_attrs_before": int(root_attrs_before),
+            "root_attrs_removed": int(
+                root_attrs_before if clear_root_attrs and not dry_run else 0
+            ),
+            "group_attrs_removed": ";".join(
+                f"{group}:{','.join(keys)}"
+                for group, keys in sorted(removed.items())
+            ),
+        }
+
+
+def cleanup_all_v3_metadata_files(
+    root,
+    pattern="**/*_log.hdf5",
+    dry_run=True,
+    clear_root_attrs=True,
+    remove_group_overlap=True,
+    limit=None,
+):
+    import pandas as pd
+
+    root = Path(root)
+    hdf5_paths = sorted(root.glob(pattern))
+
+    if limit is not None:
+        hdf5_paths = hdf5_paths[: int(limit)]
+
+    rows = [
+        cleanup_v3_metadata_file(
+            hdf5_path=hdf5_path,
+            dry_run=dry_run,
+            clear_root_attrs=clear_root_attrs,
+            remove_group_overlap=remove_group_overlap,
+        )
+        for hdf5_path in hdf5_paths
+    ]
+
+    return pd.DataFrame(rows)
+
+
 def write_datasets(hdf5_path, datasets, mode="a", overwrite=True):
     hdf5_path = Path(hdf5_path)
     hdf5_path.parent.mkdir(parents=True, exist_ok=True)

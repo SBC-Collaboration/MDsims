@@ -194,7 +194,6 @@ def _split_thermalized_metadata(old_attrs, info, old_state_path, old_log_path, n
         "BoxLength": old_attrs.get("BoxLength", np.nan),
         "volume": old_attrs.get("volume", np.nan),
         "fcc_cell_size": old_attrs.get("fcc_cell_size", np.nan),
-        "state_path": str(new_paths["state_path"]),
     }
 
     run = {
@@ -203,12 +202,8 @@ def _split_thermalized_metadata(old_attrs, info, old_state_path, old_log_path, n
         "nsteps": old_attrs.get("nsteps", info["nsteps"]),
         "seed": old_attrs.get("seed", info["seed"]),
         "dt": old_attrs.get("dt", np.nan),
-        "kT": kT,
         "log_period": old_attrs.get("log_period", np.nan),
         "final_timestep": old_attrs.get("final_timestep", np.nan),
-        "starting_state_path": old_attrs.get("starting_state_path", ""),
-        "state_path": str(new_paths["state_path"]),
-        "log_path": str(new_paths["log_path"]),
     }
 
     lj = {
@@ -224,16 +219,15 @@ def _split_thermalized_metadata(old_attrs, info, old_state_path, old_log_path, n
         "source_data_version": "v2",
         "old_state_path": str(old_state_path),
         "old_log_path": str(old_log_path),
+        "starting_state_path": old_attrs.get("starting_state_path", ""),
         "migration_note": (
-            "Original flat metadata attrs were preserved at /metadata.attrs."
+            "Original flat metadata attrs were converted into V3 groups."
         ),
     }
 
     paths = {
         "state_path": str(new_paths["state_path"]),
         "log_path": str(new_paths["log_path"]),
-        "old_state_path": str(old_state_path),
-        "old_log_path": str(old_log_path),
     }
 
     classification = {
@@ -291,6 +285,11 @@ def write_v3_thermalized_metadata(
         groups=groups,
         mode="a",
         overwrite=True,
+    )
+
+    metadata_helpers.clear_attrs(
+        hdf5_path=log_path,
+        group_path="metadata",
     )
 
     return groups

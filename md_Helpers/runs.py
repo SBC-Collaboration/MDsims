@@ -163,7 +163,15 @@ def write_hdf5_metadata(
     group_name="metadata",
 ):
     """
-    Write metadata attributes into an existing HDF5 log file.
+    Write V3 structured metadata into an existing HDF5 log file.
+
+    Bare /metadata is kept as a container only. Attributes are written under:
+        metadata/state
+        metadata/run
+        metadata/lj
+        metadata/source
+        metadata/paths
+        metadata/classification/phase_separation
     """
 
     # ============================================================
@@ -174,20 +182,33 @@ def write_hdf5_metadata(
     if not log_path.exists():
         raise FileNotFoundError(f"Log file does not exist: {log_path}")
 
-    # ============================================================
-    # Write metadata
-    # ============================================================
-    with h5py.File(log_path, mode="a") as hdf:
-        metadata_group = hdf.require_group(group_name)
+    if group_name != "metadata":
+        metadata_helpers.write_metadata_groups(
+            hdf5_path=log_path,
+            groups={group_name: metadata},
+            mode="a",
+            overwrite=True,
+        )
 
-        for key, value in metadata.items():
-            if value is None:
-                continue
+    else:
+        groups = metadata_helpers.split_simulation_metadata(
+            metadata,
+            state_kind=metadata.get("state_kind", "thermalized"),
+            run_kind=metadata.get("run_kind", "thermalization"),
+            data_version=metadata.get("data_version", "v3"),
+        )
 
-            if isinstance(value, Path):
-                value = str(value)
+        metadata_helpers.write_metadata_groups(
+            hdf5_path=log_path,
+            groups=groups,
+            mode="a",
+            overwrite=True,
+        )
 
-            metadata_group.attrs[key] = value
+        metadata_helpers.clear_attrs(
+            hdf5_path=log_path,
+            group_path="metadata",
+        )
 
     print("Wrote HDF5 metadata")
     print("Log file:", log_path)

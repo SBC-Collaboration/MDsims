@@ -62,9 +62,9 @@ Thermalized_States_v3/.../randomization.gsd
 Thermalized_States_v3/.../randomization_log.hdf5
 ```
 
-For migrated thermalized logs, the original flat `metadata.attrs` are left in
-place. V3 also writes grouped metadata so migrated logs and future V3 logs can
-be read the same way:
+V3 keeps bare `metadata` as a container only. Metadata attributes live in
+purpose-specific child groups so migrated logs and future V3 logs can be read
+the same way:
 
 ```text
 metadata/state
@@ -79,5 +79,4 @@ metadata/classification/phase_separation/PE_drop
 ```
 
 The migration is copy-only. Original V2 files stay unchanged; the copied V3
-HDF5 logs preserve the original flat `metadata.attrs` and add the grouped V3
-metadata beside it.
+HDF5 logs convert the old flat metadata attributes into grouped V3 metadata.
