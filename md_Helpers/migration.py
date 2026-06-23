@@ -544,7 +544,7 @@ def migrate_thermalized_states(
                 row["action"] = "missing_source"
 
             elif dry_run:
-                row["action"] = "would_copy_or_link"
+                row["action"] = "would_copy"
                 if file_role == "log_hdf5" and write_v3_metadata:
                     row["metadata_action"] = "would_write_v3_metadata_groups"
 
@@ -617,7 +617,7 @@ def migrate_lattice_states(
             row["action"] = "missing_source"
 
         elif dry_run:
-            row["action"] = "would_copy_or_link"
+            row["action"] = "would_copy"
             if write_v3_metadata:
                 row["metadata_action"] = "would_write_lattice_metadata"
 
@@ -695,7 +695,7 @@ def migrate_cavitation_states(
         }
 
         if dry_run:
-            row["action"] = "would_copy_or_link"
+            row["action"] = "would_copy"
             rows.append(row)
             continue
 
