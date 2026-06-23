@@ -3,11 +3,35 @@
 from pathlib import Path
 
 import hoomd
+import pandas as pd
 import h5py
 import gsd.hoomd
 import numpy as np
 
+from . import Phase_Separation as ps
 from .Project_Paths import THERMALIZED_STATES_V2_ROOT
+
+# ============================================================
+# Default phase-separation settings
+# ============================================================
+
+DEFAULT_PHASE_SEP_NBINS = ps.DEFAULT_PHASE_SEP_NBINS
+DEFAULT_PHASE_SEP_DENSITY_THRESHOLD = ps.DEFAULT_PHASE_SEP_DENSITY_THRESHOLD
+DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD = ps.DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD
+
+
+
+
+# ============================================================
+# Backward-compatible phase-separation aliases
+# ============================================================
+
+check_phase_separated = ps.check_phase_separated
+compute_phase_separation_from_frame = ps.compute_phase_separation_from_frame
+write_phase_separation_metadata = ps.write_phase_separation_metadata
+update_all_v2_phase_separation_metadata = ps.update_all_v2_phase_separation_metadata
+
+
 
 
 # ============================================================
@@ -172,12 +196,21 @@ def write_hdf5_metadata(
 # Save final simulation state
 # ============================================================
 
+# ============================================================
+# Save final simulation state
+# ============================================================
+
 def save_final_state(
     simulation,
     gsd_path,
 ):
     """
     Save the current simulation state as a single-frame GSD file.
+
+    This now saves:
+    - positions
+    - type IDs
+    - velocities
     """
 
     # ============================================================
@@ -202,8 +235,10 @@ def save_final_state(
 
     frame.particles.N = snapshot.particles.N
     frame.particles.types = list(snapshot.particles.types)
+
     frame.particles.position = snapshot.particles.position
     frame.particles.typeid = snapshot.particles.typeid
+    frame.particles.velocity = snapshot.particles.velocity
 
     # ============================================================
     # Prepare path
@@ -319,7 +354,7 @@ def build_simulation_metadata(
         "final_timestep": simulation.timestep,
 
         "starting_state_path": starting_state_path,
-        "phase_separated": phase_separated,
+        "phase_separated": None,
     }
 
     # ============================================================
@@ -517,13 +552,6 @@ def run_logged_phase(
     )
 
     # ============================================================
-    # Check phase separation
-    # ============================================================
-    phase_separated = check_phase_separated(
-        simulation=simulation,
-    )
-
-    # ============================================================
     # Build metadata
     # ============================================================
     metadata = build_simulation_metadata(
@@ -545,7 +573,7 @@ def run_logged_phase(
         log_period=log_period,
         nsteps=nsteps,
         starting_state_path=starting_state_path,
-        phase_separated=phase_separated,
+        phase_separated=None,
     )
 
     metadata["log_path"] = str(paths["log_path"])
@@ -564,6 +592,17 @@ def run_logged_phase(
         gsd_path=paths["state_path"],
     )
 
+    ps.write_voxel_phase_separation_metadata(
+        log_path=paths["log_path"],
+        state_path=paths["state_path"],
+        nbins=DEFAULT_PHASE_SEP_NBINS,
+        density_threshold=DEFAULT_PHASE_SEP_DENSITY_THRESHOLD,
+        voxel_fraction_threshold=DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD,
+        updated_from_saved_gsd=False,
+        dry_run=False,
+    )
+
+
     return paths
 
 
@@ -576,6 +615,15 @@ def read_hdf5_log(
 ):
     """
     Read an HDF5 log file into a nested dictionary.
+
+    Special convention:
+    - normal group attributes are loaded under "attrs"
+    - phase-separation method groups are loaded directly by method name
+
+    Example:
+        log["metadata"]["attrs"]
+        log["metadata"]["phase_separation"]["voxel"]
+        log["metadata"]["phase_separation"]["fit"]
     """
 
     log_path = Path(log_path)
@@ -585,7 +633,33 @@ def read_hdf5_log(
 
     data = {}
 
+    def clean_attr_value(value):
+        if isinstance(value, bytes):
+            return value.decode()
+
+        if hasattr(value, "shape") and value.shape == ():
+            return value.item()
+
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except Exception:
+                pass
+
+        return value
+
+    def attrs_to_dict(group):
+        attrs = {}
+
+        for key, value in group.attrs.items():
+            attrs[key] = clean_attr_value(value)
+
+        return attrs
+
     def read_group(group, output):
+        # --------------------------------------------------------
+        # Read child datasets and groups first
+        # --------------------------------------------------------
         for key, item in group.items():
             if isinstance(item, h5py.Dataset):
                 output[key] = item[()]
@@ -593,16 +667,47 @@ def read_hdf5_log(
                 output[key] = {}
                 read_group(item, output[key])
 
-        if len(group.attrs) > 0:
-            attrs = {}
+        # --------------------------------------------------------
+        # Read attributes
+        # --------------------------------------------------------
+        if len(group.attrs) == 0:
+            return
 
-            for key, value in group.attrs.items():
-                if hasattr(value, "shape") and value.shape == ():
-                    attrs[key] = value.item()
-                else:
-                    attrs[key] = value
+        attrs = attrs_to_dict(group)
 
-            output["attrs"] = attrs
+        # --------------------------------------------------------
+        # Backward compatibility:
+        #
+        # Old files had:
+        #     metadata/phase_separation.attrs["density_threshold"]
+        #
+        # New loaded form should be:
+        #     log["metadata"]["phase_separation"]["voxel"]
+        # --------------------------------------------------------
+        if group.name == "/metadata/phase_separation":
+            if "voxel" not in output:
+                output["voxel"] = attrs
+            return
+
+        # --------------------------------------------------------
+        # New method groups:
+        #
+        #     metadata/phase_separation/voxel.attrs
+        #     metadata/phase_separation/fit.attrs
+        #
+        # Load directly as:
+        #
+        #     log["metadata"]["phase_separation"]["voxel"]
+        #     log["metadata"]["phase_separation"]["fit"]
+        # --------------------------------------------------------
+        if group.name.startswith("/metadata/phase_separation/"):
+            output.update(attrs)
+            return
+
+        # --------------------------------------------------------
+        # Normal HDF5 behavior everywhere else
+        # --------------------------------------------------------
+        output["attrs"] = attrs
 
     with h5py.File(log_path, mode="r") as hdf:
         read_group(hdf, data)
@@ -610,68 +715,185 @@ def read_hdf5_log(
     return data
 
 
+
+
+
+
 # ============================================================
-# Check for phase separation using voxel density
+# Delete one V2 saved state and log
 # ============================================================
 
-def check_phase_separated(
-    simulation,
-    nbins=20,
-    density_threshold=0.2,
-    voxel_fraction_threshold=0.05,
+def delete_v2_state_files(
+    n_fcc_cells,
+    target_rho,
+    kT,
+    nsteps,
+    seed=1,
+    phase_name="randomization",
+    base_folder=THERMALIZED_STATES_V2_ROOT,
+    dry_run=True,
+    confirm_delete=False,
+    delete_empty_folder=True,
+    verbose=True,
 ):
     """
-    Check whether a simulation appears phase separated using voxel densities.
+    Delete the saved GSD state file and HDF5 log file for one chosen V2 state.
 
-    Default rule:
-    - Divide the box into nbins x nbins x nbins voxels.
-    - Compute density in each voxel.
-    - If more than 5% of voxels have density below 0.2,
-      return True.
-    - Otherwise return False.
+    This deletes:
+
+        randomization.gsd
+        randomization_log.hdf5
+
+    for the state identified by:
+
+        n_fcc_cells
+        target_rho
+        kT
+        nsteps
+        seed
+        phase_name
+
+    Parameters
+    ----------
+    dry_run : bool
+        If True, only show what would be deleted.
+
+    confirm_delete : bool
+        Must be True if dry_run=False.
+        This is just a safety catch against accidental deletion.
+
+    delete_empty_folder : bool
+        If True, remove the state folder afterward if it is empty.
+
+    Returns
+    -------
+    report_df : pandas.DataFrame
+        Summary of what was deleted or what would be deleted.
     """
 
     # ============================================================
-    # Extract positions
+    # Safety check
     # ============================================================
-    snapshot = simulation.state.get_snapshot()
-    positions = snapshot.particles.position
+
+    if not dry_run and not confirm_delete:
+        raise ValueError(
+            "This is a destructive operation. "
+            "Set confirm_delete=True if you really want to delete files."
+        )
 
     # ============================================================
-    # Box information
+    # Build expected paths
     # ============================================================
-    Lx = snapshot.configuration.box[0]
-    Ly = snapshot.configuration.box[1]
-    Lz = snapshot.configuration.box[2]
 
-    bounds = [
-        [-Lx / 2, Lx / 2],
-        [-Ly / 2, Ly / 2],
-        [-Lz / 2, Lz / 2],
+    paths = get_phase_paths(
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
+        kT=kT,
+        nsteps=nsteps,
+        seed=seed,
+        phase_name=phase_name,
+        base_folder=base_folder,
+    )
+
+    state_path = Path(paths["state_path"])
+    log_path = Path(paths["log_path"])
+    folder = Path(paths["folder"])
+
+    files_to_delete = [
+        ("state_path", state_path),
+        ("log_path", log_path),
     ]
 
-    voxel_volume = (Lx / nbins) * (Ly / nbins) * (Lz / nbins)
+    rows = []
 
     # ============================================================
-    # Count particles in each voxel
+    # Delete files, or show what would be deleted
     # ============================================================
-    voxel_counts, _ = np.histogramdd(
-        positions,
-        bins=nbins,
-        range=bounds,
-    )
 
-    voxel_densities = voxel_counts.ravel() / voxel_volume
+    for file_label, file_path in files_to_delete:
+        exists_before = file_path.exists()
+
+        if dry_run:
+            if exists_before:
+                action = "would_delete"
+            else:
+                action = "missing"
+
+        else:
+            if exists_before:
+                file_path.unlink()
+                action = "deleted"
+            else:
+                action = "missing"
+
+        rows.append({
+            "file_label": file_label,
+            "path": str(file_path),
+            "exists_before": bool(exists_before),
+            "action": action,
+        })
 
     # ============================================================
-    # Check low-density voxel fraction
+    # Optionally remove empty folder
     # ============================================================
-    low_density_fraction = np.mean(
-        voxel_densities < density_threshold
-    )
 
-    phase_separated = (
-        low_density_fraction > voxel_fraction_threshold
-    )
+    folder_exists_before = folder.exists()
+    folder_action = "not_checked"
 
-    return bool(phase_separated)
+    if delete_empty_folder:
+        if dry_run:
+            if folder_exists_before:
+                try:
+                    folder_is_empty = not any(folder.iterdir())
+                except Exception:
+                    folder_is_empty = False
+
+                if folder_is_empty:
+                    folder_action = "would_remove_empty_folder"
+                else:
+                    folder_action = "folder_not_empty"
+            else:
+                folder_action = "folder_missing"
+
+        else:
+            if folder_exists_before:
+                try:
+                    if not any(folder.iterdir()):
+                        folder.rmdir()
+                        folder_action = "removed_empty_folder"
+                    else:
+                        folder_action = "folder_not_empty"
+                except Exception as error:
+                    folder_action = f"failed_to_remove_folder: {repr(error)}"
+            else:
+                folder_action = "folder_missing"
+
+        rows.append({
+            "file_label": "folder",
+            "path": str(folder),
+            "exists_before": bool(folder_exists_before),
+            "action": folder_action,
+        })
+
+    report_df = pd.DataFrame(rows)
+
+    # ============================================================
+    # Print summary
+    # ============================================================
+
+    if verbose:
+        print("Delete V2 state files")
+        print("=" * 70)
+        print("n_fcc_cells =", n_fcc_cells)
+        print("target_rho  =", target_rho)
+        print("kT          =", kT)
+        print("nsteps      =", nsteps)
+        print("seed        =", seed)
+        print("phase_name  =", phase_name)
+        print("dry_run     =", dry_run)
+        print("=" * 70)
+
+        for _, row in report_df.iterrows():
+            print(row["action"], "|", row["path"])
+
+    return report_df

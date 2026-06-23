@@ -55,8 +55,9 @@ def _as_snapshot(obj):
     # ============================================================
     if obj is None:
         raise TypeError(
-            "Cannot render None. If this came from result['simulation'], "
-            "the state was probably loaded from disk. Use result['frame'] instead."
+            "Cannot convert None to snapshot. If this came from "
+            "result['simulation'], the state was probably loaded from disk. "
+            "Use result or result['frame'] instead."
         )
 
     # ============================================================
@@ -78,7 +79,7 @@ def _as_snapshot(obj):
         return obj
 
     raise TypeError(
-        "vh.render expects a result dictionary, HOOMD simulation, "
+        "Expected a result dictionary, HOOMD simulation, "
         "HOOMD state, HOOMD snapshot, or GSD frame."
     )
 
@@ -92,7 +93,7 @@ def _get_positions_and_box(obj):
     Extract particle positions and box lengths from any supported object.
     """
 
-    snapshot = _get_snapshot(obj)
+    snapshot = _as_snapshot(obj)
 
     positions = np.asarray(
         snapshot.particles.position,
@@ -111,7 +112,18 @@ def _get_positions_and_box(obj):
     return positions, Lx, Ly, Lz, snapshot
 
 
+# ============================================================
+# Render system
+# ============================================================
+
 def render(obj):
+    """
+    Render a result dictionary, HOOMD simulation, HOOMD state,
+    HOOMD snapshot, or GSD frame.
+
+    Visual settings are intentionally kept the same as the original V1 render.
+    """
+
     snapshot = _as_snapshot(obj)
 
     if (
@@ -141,12 +153,22 @@ def render(obj):
     geometry.position[:] = snapshot.particles.position[:]
     geometry.outline_width = 0.04
 
-    fresnel.geometry.Box(scene, [L, L, L, 0, 0, 0], box_radius=0.02)
+    fresnel.geometry.Box(
+        scene,
+        [L, L, L, 0, 0, 0],
+        box_radius=0.02,
+    )
 
     scene.lights = [
-        fresnel.light.Light(direction=(0, 0, 1), color=(0.8, 0.8, 0.8), theta=math.pi),
         fresnel.light.Light(
-            direction=(1, 1, 1), color=(1.1, 1.1, 1.1), theta=math.pi / 3
+            direction=(0, 0, 1),
+            color=(0.8, 0.8, 0.8),
+            theta=math.pi,
+        ),
+        fresnel.light.Light(
+            direction=(1, 1, 1),
+            color=(1.1, 1.1, 1.1),
+            theta=math.pi / 3,
         ),
     ]
 
@@ -179,7 +201,14 @@ def compute_voxel_densities(
     nbins=10,
 ):
     """
-    Compute voxel densities for a simulation, snapshot, or frame.
+    Compute voxel densities.
+
+    Input can be:
+    - result dictionary from sh.get_or_make_thermalized_state(...)
+    - HOOMD simulation
+    - HOOMD state
+    - HOOMD snapshot
+    - GSD frame
 
     Returns
     -------
@@ -217,6 +246,9 @@ def compute_voxel_densities(
 
     voxel_counts = voxel_counts.ravel()
 
+    # ============================================================
+    # Convert counts to voxel densities
+    # ============================================================
     voxel_densities = voxel_counts / voxel_volume
 
     return voxel_densities, voxel_counts, voxel_volume
@@ -229,6 +261,7 @@ def compute_voxel_densities(
 def plot_voxel_histogram(
     obj,
     nbins=10,
+    fit=True,
 ):
     """
     Plot voxel density histogram.
@@ -238,10 +271,16 @@ def plot_voxel_histogram(
         voxel_density = particles_in_voxel / voxel_volume
 
     Input can be:
+    - result dictionary from sh.get_or_make_thermalized_state(...)
     - HOOMD simulation
     - HOOMD state
     - HOOMD snapshot
     - GSD frame
+
+    Parameters
+    ----------
+    fit : bool
+        If True, overlay a Gaussian fit to the voxel-density distribution.
 
     Returns
     -------
@@ -280,6 +319,34 @@ def plot_voxel_histogram(
     hist2 = (hist_y, hist_x_edges)
 
     # ============================================================
+    # Gaussian fit to voxel densities
+    # ============================================================
+    density_mean = float(np.mean(voxel_densities))
+    density_std = float(np.std(voxel_densities, ddof=1))
+
+    x_fit = np.linspace(
+        hist_x_edges[0],
+        hist_x_edges[-1],
+        500,
+    )
+
+    bin_width = hist_x_edges[1] - hist_x_edges[0]
+    n_voxels = len(voxel_densities)
+
+    if density_std > 0:
+        gaussian_pdf = (
+            1.0
+            / (density_std * np.sqrt(2.0 * np.pi))
+            * np.exp(
+                -0.5 * ((x_fit - density_mean) / density_std)**2
+            )
+        )
+
+        gaussian_counts = gaussian_pdf * n_voxels * bin_width
+    else:
+        gaussian_counts = np.zeros_like(x_fit)
+
+    # ============================================================
     # Plot
     # ============================================================
     plt.figure(figsize=(6, 4))
@@ -288,15 +355,57 @@ def plot_voxel_histogram(
         hist2[0],
         edges=hist2[1],
         edgecolor="black",
+        label="Voxel densities",
+    )
+
+    if fit and density_std > 0:
+        plt.plot(
+            x_fit,
+            gaussian_counts,
+            linestyle="--",
+            linewidth=2,
+            label=(
+                f"Gaussian fit\n"
+                f"mean = {density_mean:.4f}, "
+                f"std = {density_std:.4f}"
+            ),
+        )
+
+    plt.axvline(
+        density_mean,
+        linestyle=":",
+        linewidth=2,
+        label=f"mean density = {density_mean:.4f}",
     )
 
     plt.xlabel("Voxel density")
     plt.ylabel("Number of voxels")
     plt.title(f"Voxel density distribution (nbins={nbins})")
 
+    plt.legend()
     plt.show()
 
-    return hist2
+    print("Voxel density summary")
+    print("=" * 60)
+    print(f"nbins:              {nbins}")
+    print(f"number of voxels:   {n_voxels}")
+    print(f"voxel volume:       {voxel_volume}")
+    print(f"mean density:       {density_mean}")
+    print(f"std density:        {density_std}")
+    print(f"min density:        {voxel_densities.min()}")
+    print(f"max density:        {voxel_densities.max()}")
+    print("=" * 60)
+
+    return {
+    "hist": hist2,
+    "hist_y": hist2[0],
+    "hist_x_edges": hist2[1],
+    "gaussian_mean": density_mean,
+    "gaussian_std": density_std,
+    "voxel_densities": voxel_densities,
+    "voxel_counts": voxel_counts,
+    "voxel_volume": voxel_volume,
+    }
 
 
 # ============================================================
@@ -312,6 +421,7 @@ def plot_xy_particles(
     Make a rasterized scatterplot of all particles in the x-y plane.
 
     Input can be:
+    - result dictionary from sh.get_or_make_thermalized_state(...)
     - HOOMD simulation
     - HOOMD state
     - HOOMD snapshot
@@ -365,6 +475,7 @@ def plot_xy_slice(
     Plot an x-y slice through the middle of the box.
 
     Input can be:
+    - result dictionary from sh.get_or_make_thermalized_state(...)
     - HOOMD simulation
     - HOOMD state
     - HOOMD snapshot
@@ -481,28 +592,54 @@ def plot_log_quantity(
     """
     Plot a ThermodynamicQuantities quantity against timestep.
 
-    Examples
-    --------
-    vh.plot_log_quantity(log, "pressure")
+    Special behavior:
+    - "kinetic_energy" plots KE/N
+    - "potential_energy" plots PE/N
 
-    vh.plot_log_quantity(log, "kinetic_temperature")
+    The calling keys stay the same:
 
-    vh.plot_log_quantity(log, "potential_energy")
-
-    vh.plot_log_quantity(log, "kinetic_energy")
+        vh.plot_log_quantity(log, "pressure")
+        vh.plot_log_quantity(log, "kinetic_temperature")
+        vh.plot_log_quantity(log, "potential_energy")
+        vh.plot_log_quantity(log, "kinetic_energy")
     """
 
     # ============================================================
-    # Extract data
+    # Extract timestep and thermodynamic data
     # ============================================================
     timestep = log["hoomd-data"]["Simulation"]["timestep"]
 
-    values = (
+    thermo = (
         log["hoomd-data"]["md"]
            ["compute"]
            ["ThermodynamicQuantities"]
-           [quantity]
     )
+
+    values = np.asarray(
+        thermo[quantity],
+        dtype=float,
+    )
+
+    # ============================================================
+    # Convert total energies to per-particle energies
+    # ============================================================
+    if quantity in ["kinetic_energy", "potential_energy"]:
+        metadata = log["metadata"]["attrs"]
+        N = int(metadata["N"])
+
+        values = values / N
+
+        if quantity == "kinetic_energy":
+            y_label = "KE/N"
+            title = "KE/N vs Timestep"
+
+        elif quantity == "potential_energy":
+            y_label = "PE/N"
+            title = "PE/N vs Timestep"
+
+    else:
+        y_label = quantity.replace("_", " ").title()
+        title = f"{y_label} vs Timestep"
 
     # ============================================================
     # Plot
@@ -512,8 +649,8 @@ def plot_log_quantity(
     plt.plot(timestep, values)
 
     plt.xlabel("Timestep")
-    plt.ylabel(quantity.replace("_", " ").title())
-    plt.title(quantity.replace("_", " ").title())
+    plt.ylabel(y_label)
+    plt.title(title)
 
     plt.grid(alpha=0.3)
 

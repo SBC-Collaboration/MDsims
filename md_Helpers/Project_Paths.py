@@ -18,3 +18,8 @@ THERMALIZED_STATES_ROOT = PROJECT_ROOT / "Thermalized_States"
 # Version 2 Set Number of Particles
 SIMPLE_LATTICES_V2_ROOT = PROJECT_ROOT / "Simple_Lattices_v2"
 THERMALIZED_STATES_V2_ROOT = PROJECT_ROOT / "Thermalized_States_v2"
+
+
+#Cavitation project folders
+CAVITATION_STATES_ROOT = PROJECT_ROOT / "Cavitation_States"
+CAVITATION_EVOLVED_ROOT = PROJECT_ROOT / "Cavitation_Evolved"
