@@ -311,6 +311,19 @@ def cleanup_v3_metadata_file(
                         "source_log_path",
                         "starting_state_path",
                     ],
+                    "metadata/source": [
+                        "state_path",
+                        "log_path",
+                        "metadata_path",
+                    ],
+                }
+
+                ancestry_path_keys = {
+                    "old_state_path",
+                    "old_log_path",
+                    "source_state_path",
+                    "source_log_path",
+                    "starting_state_path",
                 }
 
                 source_group = hdf.require_group("metadata/source")
@@ -333,6 +346,7 @@ def cleanup_v3_metadata_file(
                                 "metadata/paths",
                             }
                             and key.endswith("_path")
+                            and key in ancestry_path_keys
                             and key not in source_group.attrs
                         ):
                             source_group.attrs[key] = value
