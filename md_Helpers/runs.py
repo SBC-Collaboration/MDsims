@@ -1210,17 +1210,6 @@ def run_logged_trajectory_phase(
     if final_state_path is not None:
         final_state_path = Path(final_state_path)
 
-    if include_initial_frame:
-        write_current_state_to_trajectory(
-            simulation=simulation,
-            trajectory_path=trajectory_path,
-            mode="w",
-        )
-        trajectory_mode = "ab"
-
-    else:
-        trajectory_mode = "wb"
-
     logger_handle = start_hdf5_logger(
         simulation=simulation,
         log_path=log_path,
@@ -1231,10 +1220,13 @@ def run_logged_trajectory_phase(
         simulation=simulation,
         trajectory_path=trajectory_path,
         trajectory_period=trajectory_period,
-        mode=trajectory_mode,
+        mode="wb",
     )
 
-    simulation.run(0)
+    simulation.run(
+        0,
+        write_at_start=include_initial_frame,
+    )
 
     initial_log_row = None
 
@@ -1250,11 +1242,6 @@ def run_logged_trajectory_phase(
         simulation=simulation,
         writer_handle=trajectory_handle,
     )
-
-    if include_initial_frame:
-        remove_duplicate_initial_trajectory_frame(
-            trajectory_path=trajectory_path,
-        )
 
     stop_hdf5_logger(
         simulation=simulation,
