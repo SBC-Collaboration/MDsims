@@ -223,17 +223,11 @@ def write_hdf5_metadata(
 # Save final simulation state
 # ============================================================
 
-def save_final_state(
+def simulation_state_to_gsd_frame(
     simulation,
-    gsd_path,
 ):
     """
-    Save the current simulation state as a single-frame GSD file.
-
-    This now saves:
-    - positions
-    - type IDs
-    - velocities
+    Convert the current HOOMD simulation state into a GSD frame.
     """
 
     # ============================================================
@@ -263,6 +257,24 @@ def save_final_state(
     frame.particles.typeid = snapshot.particles.typeid
     frame.particles.velocity = snapshot.particles.velocity
 
+    return frame
+
+
+def save_final_state(
+    simulation,
+    gsd_path,
+):
+    """
+    Save the current simulation state as a single-frame GSD file.
+
+    This now saves:
+    - positions
+    - type IDs
+    - velocities
+    """
+
+    frame = simulation_state_to_gsd_frame(simulation)
+
     # ============================================================
     # Prepare path
     # ============================================================
@@ -280,6 +292,32 @@ def save_final_state(
 
     print("Saved final state")
     print("GSD file:", gsd_path)
+
+
+def write_current_state_to_trajectory(
+    simulation,
+    trajectory_path,
+    mode="w",
+):
+    """
+    Write the current simulation state into a trajectory GSD file.
+
+    Use mode="w" to create a new trajectory with the current state as frame 0,
+    or mode="a" to append the current state to an existing trajectory.
+    """
+
+    frame = simulation_state_to_gsd_frame(simulation)
+
+    trajectory_path = Path(trajectory_path)
+    trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with gsd.hoomd.open(
+        name=str(trajectory_path),
+        mode=mode,
+    ) as trajectory:
+        trajectory.append(frame)
+
+    return trajectory_path
 
 
 # ============================================================
@@ -970,6 +1008,176 @@ def stop_gsd_trajectory_writer(simulation, writer_handle):
         simulation.operations.writers.remove(writer)
 
 
+def remove_duplicate_initial_trajectory_frame(
+    trajectory_path,
+):
+    """
+    Remove a duplicate timestep-0 frame if HOOMD also wrote one.
+    """
+
+    trajectory_path = Path(trajectory_path)
+
+    with gsd.hoomd.open(
+        name=str(trajectory_path),
+        mode="r",
+    ) as trajectory:
+        if len(trajectory) < 2:
+            return False
+
+        first_step = int(trajectory[0].configuration.step)
+        second_step = int(trajectory[1].configuration.step)
+
+        if first_step != second_step:
+            return False
+
+        tmp_path = trajectory_path.with_suffix(
+            trajectory_path.suffix + ".tmp"
+        )
+
+        with gsd.hoomd.open(
+            name=str(tmp_path),
+            mode="w",
+        ) as cleaned:
+            cleaned.append(trajectory[0])
+
+            for frame_index in range(2, len(trajectory)):
+                cleaned.append(trajectory[frame_index])
+
+    tmp_path.replace(trajectory_path)
+
+    return True
+
+
+def _collect_initial_log_row(
+    simulation,
+    logger_handle,
+):
+    """
+    Collect the timestep-0 thermodynamic values for evolved-run logs.
+    """
+
+    thermo = logger_handle["thermo"]
+    tps = getattr(simulation, "tps", 0.0)
+
+    if tps is None:
+        tps = 0.0
+
+    initial_row = {
+        "hoomd-data/Simulation/timestep": int(simulation.timestep),
+        "hoomd-data/Simulation/tps": float(tps),
+        (
+            "hoomd-data/md/compute/ThermodynamicQuantities/"
+            "kinetic_temperature"
+        ): float(thermo.kinetic_temperature),
+        (
+            "hoomd-data/md/compute/ThermodynamicQuantities/"
+            "pressure"
+        ): float(thermo.pressure),
+        (
+            "hoomd-data/md/compute/ThermodynamicQuantities/"
+            "pressure_tensor"
+        ): np.asarray(thermo.pressure_tensor, dtype=float),
+        (
+            "hoomd-data/md/compute/ThermodynamicQuantities/"
+            "potential_energy"
+        ): float(thermo.potential_energy),
+        (
+            "hoomd-data/md/compute/ThermodynamicQuantities/"
+            "kinetic_energy"
+        ): float(thermo.kinetic_energy),
+    }
+
+    return initial_row
+
+
+def _prepend_value_to_dataset(
+    hdf,
+    dataset_path,
+    value,
+):
+    """
+    Prepend one value to a dataset, creating it if it does not exist.
+    """
+
+    parent_path, dataset_name = dataset_path.rsplit("/", 1)
+    parent = hdf.require_group(parent_path)
+
+    value = np.asarray(value)
+
+    if dataset_name not in parent:
+        if value.shape == ():
+            data = value.reshape(1)
+        else:
+            data = value.reshape((1,) + value.shape)
+
+        parent.create_dataset(dataset_name, data=data)
+        return True
+
+    dataset = parent[dataset_name]
+    old_data = dataset[()]
+
+    if old_data.shape[0] > 0:
+        first_value = old_data[0]
+
+        if np.array_equal(first_value, value):
+            return False
+
+    if old_data.ndim == 1:
+        new_value = value.reshape(1)
+    else:
+        new_value = value.reshape((1,) + old_data.shape[1:])
+
+    new_data = np.concatenate(
+        [new_value, old_data],
+        axis=0,
+    )
+
+    del parent[dataset_name]
+    parent.create_dataset(dataset_name, data=new_data)
+
+    return True
+
+
+def prepend_initial_log_row(
+    log_path,
+    initial_row,
+):
+    """
+    Ensure an HDF5 log starts with the collected initial thermodynamic row.
+    """
+
+    log_path = Path(log_path)
+
+    if not log_path.exists():
+        raise FileNotFoundError(f"Log file does not exist: {log_path}")
+
+    changed = []
+
+    with h5py.File(log_path, mode="a") as hdf:
+        timestep_path = "hoomd-data/Simulation/timestep"
+
+        if timestep_path in hdf:
+            timestep_data = hdf[timestep_path][()]
+
+            if (
+                len(timestep_data) > 0
+                and int(timestep_data[0]) == int(initial_row[timestep_path])
+            ):
+                return changed
+
+        for dataset_path, value in initial_row.items():
+            did_change = _prepend_value_to_dataset(
+                hdf=hdf,
+                dataset_path=dataset_path,
+                value=value,
+            )
+
+            if did_change:
+                changed.append(dataset_path)
+
+    return changed
+
+
 def run_logged_trajectory_phase(
     simulation,
     nsteps,
@@ -981,6 +1189,8 @@ def run_logged_trajectory_phase(
     metadata_groups=None,
     classify_final=True,
     classification_kwargs=None,
+    include_initial_frame=True,
+    include_initial_log=True,
 ):
     """
     Run any evolved phase with one shared pattern:
@@ -1000,6 +1210,17 @@ def run_logged_trajectory_phase(
     if final_state_path is not None:
         final_state_path = Path(final_state_path)
 
+    if include_initial_frame:
+        write_current_state_to_trajectory(
+            simulation=simulation,
+            trajectory_path=trajectory_path,
+            mode="w",
+        )
+        trajectory_mode = "ab"
+
+    else:
+        trajectory_mode = "wb"
+
     logger_handle = start_hdf5_logger(
         simulation=simulation,
         log_path=log_path,
@@ -1010,9 +1231,19 @@ def run_logged_trajectory_phase(
         simulation=simulation,
         trajectory_path=trajectory_path,
         trajectory_period=trajectory_period,
+        mode=trajectory_mode,
     )
 
     simulation.run(0)
+
+    initial_log_row = None
+
+    if include_initial_log:
+        initial_log_row = _collect_initial_log_row(
+            simulation=simulation,
+            logger_handle=logger_handle,
+        )
+
     simulation.run(int(nsteps))
 
     stop_gsd_trajectory_writer(
@@ -1020,10 +1251,21 @@ def run_logged_trajectory_phase(
         writer_handle=trajectory_handle,
     )
 
+    if include_initial_frame:
+        remove_duplicate_initial_trajectory_frame(
+            trajectory_path=trajectory_path,
+        )
+
     stop_hdf5_logger(
         simulation=simulation,
         logger_objects=logger_handle,
     )
+
+    if include_initial_log and initial_log_row is not None:
+        prepend_initial_log_row(
+            log_path=log_path,
+            initial_row=initial_log_row,
+        )
 
     if final_state_path is not None:
         save_final_state(

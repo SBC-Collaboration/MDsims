@@ -863,6 +863,8 @@ def _build_evolution_metadata_groups(
         "kT": float(evolve_kT),
         "log_period": int(log_period),
         "trajectory_period": int(trajectory_period),
+        "includes_initial_frame": True,
+        "includes_initial_log_row": True,
         "final_timestep": int(simulation.timestep) + int(evolve_nsteps),
     }
 
