@@ -468,7 +468,7 @@ def plot_xy_particles(
 
 def plot_xy_slice(
     obj,
-    fraction=0.25,
+    fraction=0.05,
     point_size=1,
     alpha=0.7,
 ):
