@@ -410,6 +410,269 @@ def plot_voxel_histogram(
 
 
 # ============================================================
+# Plot trajectory voxel density histograms
+# ============================================================
+
+def _get_trajectory_path(obj):
+    """
+    Accept a trajectory path or an evolved-run result dictionary.
+    """
+
+    if isinstance(obj, dict):
+        paths = obj.get("paths", {})
+
+        if "trajectory_path" in paths:
+            return os.fspath(paths["trajectory_path"])
+
+        run_result = obj.get("run_result", {})
+
+        if "trajectory_path" in run_result:
+            return os.fspath(run_result["trajectory_path"])
+
+    return os.fspath(obj)
+
+
+def _select_trajectory_frame_indices(
+    total_frames,
+    last_n=5,
+    skip=4,
+    frame_indices=None,
+):
+    """
+    Pick trajectory frames for comparison.
+
+    Default selects the last `last_n` frames, stepping backward by `skip`.
+    Example with last_n=5 and skip=4:
+        [..., final-16, final-12, final-8, final-4, final]
+    """
+
+    if frame_indices is not None:
+        selected = [
+            int(index)
+            for index in frame_indices
+        ]
+
+        return [
+            index if index >= 0 else total_frames + index
+            for index in selected
+        ]
+
+    last_index = total_frames - 1
+
+    selected = [
+        last_index - int(skip) * offset
+        for offset in range(int(last_n))
+    ]
+
+    selected = [
+        index
+        for index in selected
+        if index >= 0
+    ]
+
+    return sorted(selected)
+
+
+def plot_trajectory_voxel_histograms(
+    trajectory,
+    nbins=10,
+    last_n=5,
+    skip=4,
+    frame_indices=None,
+    histogram_bins="shared_counts",
+    n_density_bins=40,
+    normalize=False,
+    alpha=0.8,
+    figsize=(7, 5),
+):
+    """
+    Plot voxel-density histograms from multiple trajectory frames together.
+
+    Parameters
+    ----------
+    trajectory : path-like or dict
+        Path to a GSD trajectory, or an evolved-run result dictionary with
+        paths["trajectory_path"].
+
+    nbins : int
+        Number of voxel divisions per box dimension.
+
+    last_n : int
+        Number of frames to plot when frame_indices is not provided.
+
+    skip : int
+        Spacing between selected frames when walking backward from the final
+        frame. skip=4 means final, final-4, final-8, ...
+
+    frame_indices : list[int], optional
+        Exact frame indices to plot. Negative indices are accepted.
+
+    histogram_bins : {"shared_counts", "linear_density"}
+        shared_counts uses integer particle-count bin edges converted into
+        density using the first frame's voxel volume. This is best when the box
+        volume is fixed, as in current cavitation runs.
+
+        linear_density uses evenly spaced density bins across all selected
+        frames.
+
+    normalize : bool
+        If True, plot fraction of voxels instead of number of voxels.
+
+    Returns
+    -------
+    dict
+        Selected frame indices, summary table, common bin edges, and histogram
+        values.
+    """
+
+    import gsd.hoomd
+
+    trajectory_path = _get_trajectory_path(trajectory)
+
+    frame_data = []
+
+    with gsd.hoomd.open(
+        name=trajectory_path,
+        mode="r",
+    ) as gsd_trajectory:
+        selected_indices = _select_trajectory_frame_indices(
+            total_frames=len(gsd_trajectory),
+            last_n=last_n,
+            skip=skip,
+            frame_indices=frame_indices,
+        )
+
+        if not selected_indices:
+            raise ValueError("No trajectory frames were selected.")
+
+        for frame_index in selected_indices:
+            frame = gsd_trajectory[frame_index]
+
+            voxel_densities, voxel_counts, voxel_volume = (
+                compute_voxel_densities(
+                    frame,
+                    nbins=nbins,
+                )
+            )
+
+            frame_data.append({
+                "frame_index": int(frame_index),
+                "timestep": int(frame.configuration.step),
+                "voxel_densities": voxel_densities,
+                "voxel_counts": voxel_counts,
+                "voxel_volume": float(voxel_volume),
+                "mean_density": float(np.mean(voxel_densities)),
+                "std_density": float(np.std(voxel_densities, ddof=1)),
+                "min_density": float(np.min(voxel_densities)),
+                "max_density": float(np.max(voxel_densities)),
+                "low_zero_voxels": int(np.sum(voxel_counts == 0)),
+            })
+
+    all_densities = np.concatenate([
+        item["voxel_densities"]
+        for item in frame_data
+    ])
+
+    if histogram_bins == "shared_counts":
+        voxel_volume = frame_data[0]["voxel_volume"]
+
+        min_count = min(
+            int(np.floor(np.min(item["voxel_counts"])))
+            for item in frame_data
+        )
+        max_count = max(
+            int(np.ceil(np.max(item["voxel_counts"])))
+            for item in frame_data
+        )
+
+        count_edges = np.arange(
+            min_count - 0.5,
+            max_count + 1.5,
+            1,
+        )
+
+        density_edges = count_edges / voxel_volume
+
+    elif histogram_bins == "linear_density":
+        density_edges = np.linspace(
+            float(np.min(all_densities)),
+            float(np.max(all_densities)),
+            int(n_density_bins) + 1,
+        )
+
+    else:
+        raise ValueError(
+            "histogram_bins must be 'shared_counts' or 'linear_density'."
+        )
+
+    histograms = []
+
+    plt.figure(figsize=figsize)
+
+    for item in frame_data:
+        hist_y, hist_x_edges = np.histogram(
+            item["voxel_densities"],
+            bins=density_edges,
+        )
+
+        if normalize:
+            hist_y = hist_y / np.sum(hist_y)
+            y_label = "Fraction of voxels"
+        else:
+            y_label = "Number of voxels"
+
+        histograms.append({
+            "frame_index": item["frame_index"],
+            "timestep": item["timestep"],
+            "hist_y": hist_y,
+            "hist_x_edges": hist_x_edges,
+        })
+
+        plt.stairs(
+            hist_y,
+            edges=hist_x_edges,
+            linewidth=1.8,
+            alpha=alpha,
+            label=(
+                f"frame {item['frame_index']} "
+                f"(step {item['timestep']})"
+            ),
+        )
+
+    plt.xlabel("Voxel density")
+    plt.ylabel(y_label)
+    plt.title(
+        f"Trajectory voxel-density histograms "
+        f"(voxel grid {nbins}x{nbins}x{nbins})"
+    )
+    plt.grid(alpha=0.25)
+    plt.legend(fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+    summary = [
+        {
+            "frame_index": item["frame_index"],
+            "timestep": item["timestep"],
+            "mean_density": item["mean_density"],
+            "std_density": item["std_density"],
+            "min_density": item["min_density"],
+            "max_density": item["max_density"],
+            "empty_voxels": item["low_zero_voxels"],
+        }
+        for item in frame_data
+    ]
+
+    return {
+        "trajectory_path": trajectory_path,
+        "selected_frame_indices": selected_indices,
+        "summary": summary,
+        "density_edges": density_edges,
+        "histograms": histograms,
+    }
+
+
+# ============================================================
 # Plot all particles in x-y plane
 # ============================================================
 
