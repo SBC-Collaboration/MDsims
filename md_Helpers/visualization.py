@@ -9,6 +9,7 @@ import IPython
 import packaging.version
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import animation
 
 
 device = fresnel.Device()
@@ -537,6 +538,118 @@ def plot_xy_slice(
     plt.gca().set_aspect("equal")
 
     plt.show()
+
+
+# ============================================================
+# Animate x-y trajectory slice
+# ============================================================
+
+def animate_xy_slice_trajectory(
+    trajectory_path,
+    fraction=0.10,
+    stride=1,
+    max_frames=100,
+    point_size=1,
+    alpha=0.7,
+    interval=120,
+    center_z=0.0,
+):
+    """
+    Animate a thin x-y slice from a many-frame GSD trajectory.
+
+    This is useful for cavitation because a slice shows the bubble interior;
+    a full 3D render mostly shows particles on the outside of the box.
+    """
+
+    import gsd.hoomd
+
+    if fraction <= 0 or fraction > 1:
+        raise ValueError("fraction must satisfy 0 < fraction <= 1")
+
+    trajectory_path = os.fspath(trajectory_path)
+
+    frames = []
+
+    with gsd.hoomd.open(
+        name=trajectory_path,
+        mode="r",
+    ) as trajectory:
+        total_frames = len(trajectory)
+
+        frame_indices = range(0, total_frames, int(stride))
+
+        if max_frames is not None:
+            frame_indices = list(frame_indices)[:int(max_frames)]
+
+        for frame_index in frame_indices:
+            frame = trajectory[frame_index]
+
+            positions = np.asarray(
+                frame.particles.position,
+                dtype=np.float64,
+            )
+
+            box = np.asarray(
+                frame.configuration.box,
+                dtype=np.float64,
+            )
+
+            Lx = float(box[0])
+            Ly = float(box[1])
+            Lz = float(box[2])
+
+            half_thickness = 0.5 * float(fraction) * Lz
+            z = positions[:, 2]
+            mask = np.abs(z - center_z) <= half_thickness
+
+            frames.append({
+                "frame_index": int(frame_index),
+                "step": int(frame.configuration.step),
+                "xy": positions[mask][:, :2],
+                "Lx": Lx,
+                "Ly": Ly,
+            })
+
+    if not frames:
+        raise ValueError(f"No frames found in trajectory: {trajectory_path}")
+
+    Lx = frames[0]["Lx"]
+    Ly = frames[0]["Ly"]
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    scatter = ax.scatter(
+        [],
+        [],
+        s=point_size,
+        alpha=alpha,
+        rasterized=True,
+    )
+
+    ax.set_xlim(-Lx / 2, Lx / 2)
+    ax.set_ylim(-Ly / 2, Ly / 2)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal")
+
+    def update(frame_data):
+        scatter.set_offsets(frame_data["xy"])
+        ax.set_title(
+            f"x-y slice | frame {frame_data['frame_index']} | "
+            f"step {frame_data['step']}"
+        )
+        return (scatter,)
+
+    anim = animation.FuncAnimation(
+        fig,
+        update,
+        frames=frames,
+        interval=interval,
+        blit=True,
+    )
+
+    plt.close(fig)
+
+    return IPython.display.HTML(anim.to_jshtml())
 
 
 # ============================================================

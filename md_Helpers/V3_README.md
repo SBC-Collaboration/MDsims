@@ -47,6 +47,27 @@ Those starting states should instead store creation metadata such as removed
 particle count, selected particle count, altered velocities, injected energy,
 and parent-state paths.
 
+## Cavitation Files
+
+Cavitation is split into two saved objects.
+
+```text
+Cavitation_States_v3/.../
+    cavitation_initial.gsd
+    cavitation_creation.hdf5
+
+Cavitation_Evolved_v3/.../
+    cavitation_trajectory.gsd
+    cavitation_final.gsd
+    cavitation_log.hdf5
+```
+
+`cavitation_creation.hdf5` stores the artificial bubble construction: bubble
+center, radius, removed-particle count, density before and after, and parent
+thermalized-state paths. `cavitation_log.hdf5` stores the actual dynamics:
+thermodynamic time series, run metadata, trajectory/final-state paths, and
+final-state classification.
+
 ## Metadata Layout
 
 V3 keeps bare `metadata` as a container only. Metadata attributes live in

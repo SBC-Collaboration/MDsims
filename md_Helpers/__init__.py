@@ -7,7 +7,7 @@ Primary modules:
 - simulation: HOOMD simulation setup and thermalization
 - runs: logging, final-state saving, and trajectory runs
 - classification: phase-separation and PE-drop classifiers
-- cavitation: cavitated starting-state creation
+- cavitation: cavitated starting-state creation and evolution
 - database: sweep summaries and master CSV builders
 - metadata: structured HDF5 metadata helpers
 - visualization: rendering and plotting

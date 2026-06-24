@@ -2,205 +2,21 @@
 
 from pathlib import Path
 
-import numpy as np
 import gsd.hoomd
+import numpy as np
 
-from .paths import CAVITATION_STATES_ROOT
-from . import simulation as sh
-from . import runs as lh
-
-
-
-
-# ============================================================
-# Formatting helpers
-# ============================================================
-
-def _format_float(
-    value,
-    decimals=3,
-):
-    """
-    Format floats consistently for folder names.
-
-    Example:
-        0.8  -> "0.800"
-        0.10 -> "0.100"
-    """
-
-    return f"{float(value):.{decimals}f}"
+from . import metadata as metadata_helpers
+from . import runs as run_helpers
+from . import simulation as simulation_helpers
+from .paths import (
+    CAVITATION_STATES_V3_ROOT,
+    cavitation_evolved_paths,
+    cavitation_state_paths,
+)
 
 
 # ============================================================
-# Build cavitation state path
-# ============================================================
-
-def get_cavitation_state_path(
-    n_fcc_cells,
-    target_rho,
-    kT,
-    source_nsteps,
-    radius_fraction,
-    source_seed=1,
-    source_phase_name="randomization",
-    random_location=False,
-    bubble_seed=1,
-    bubble_center=None,
-    base_folder=CAVITATION_STATES_ROOT,
-):
-    """
-    Build the standard path for an initial cavitated GSD state.
-
-    Bubble-radius convention:
-        bubble_radius = radius_fraction * (BoxLength / 2)
-
-    This only builds the path. It does not check whether the file exists.
-    """
-
-    n_cells_str = f"{int(n_fcc_cells)}"
-    rho_str = _format_float(target_rho)
-    kT_str = _format_float(kT)
-    source_nsteps_str = f"{int(source_nsteps)}"
-    source_seed_str = f"{int(source_seed)}"
-    radius_str = _format_float(radius_fraction)
-
-    if random_location:
-        if bubble_center is not None:
-            raise ValueError(
-                "Use either random_location=True or bubble_center, not both."
-            )
-
-        center_folder = f"random_center_bubble_seed_{int(bubble_seed)}"
-
-    else:
-        if bubble_center is None:
-            center_folder = "center_box"
-
-        else:
-            bubble_center = np.asarray(
-                bubble_center,
-                dtype=np.float64,
-            )
-
-            if bubble_center.shape != (3,):
-                raise ValueError("bubble_center must have shape (3,)")
-
-            center_folder = (
-                f"center_x_{_format_float(bubble_center[0])}"
-                f"_y_{_format_float(bubble_center[1])}"
-                f"_z_{_format_float(bubble_center[2])}"
-            )
-
-    folder = (
-        Path(base_folder)
-        / "FCC"
-        / f"n_cells_{n_cells_str}"
-        / f"source_rho_{rho_str}"
-        / f"kT_{kT_str}"
-        / f"source_nsteps_{source_nsteps_str}"
-        / f"source_seed_{source_seed_str}"
-        / f"source_phase_{source_phase_name}"
-        / f"radius_fraction_of_half_box_{radius_str}"
-        / center_folder
-    )
-
-    state_path = folder / "cavitation.gsd"
-
-    return state_path
-
-
-# ============================================================
-# Load source randomized state
-# ============================================================
-
-def get_source_randomization_result(
-    n_fcc_cells,
-    target_rho,
-    kT,
-    source_nsteps,
-    source_seed=1,
-    source_phase_name="randomization",
-    source_log_period=1_000,
-    overwrite_source=False,
-    require_existing_source=True,
-):
-    """
-    Get the source post-thermalized/randomized state.
-
-    By default, this requires the source state to already exist.
-
-    This prevents cavitation from accidentally launching a long
-    thermalization/randomization run when the requested source does not exist.
-    """
-
-    # ============================================================
-    # Build expected source paths
-    # ============================================================
-    source_paths = lh.get_phase_paths(
-        n_fcc_cells=n_fcc_cells,
-        target_rho=target_rho,
-        kT=kT,
-        nsteps=source_nsteps,
-        seed=source_seed,
-        phase_name=source_phase_name,
-    )
-
-    source_state_path = Path(source_paths["state_path"])
-    source_log_path = Path(source_paths["log_path"])
-
-    # ============================================================
-    # Require source to already exist
-    # ============================================================
-    if require_existing_source:
-        missing_paths = []
-
-        if not source_state_path.exists():
-            missing_paths.append(source_state_path)
-
-        if not source_log_path.exists():
-            missing_paths.append(source_log_path)
-
-        if len(missing_paths) > 0:
-            print("No source thermalized state found for the specified values.")
-            print("=" * 70)
-            print("n_fcc_cells       =", n_fcc_cells)
-            print("target_rho        =", target_rho)
-            print("kT                =", kT)
-            print("source_nsteps     =", source_nsteps)
-            print("source_seed       =", source_seed)
-            print("source_phase_name =", source_phase_name)
-            print()
-            print("Expected source state:")
-            print(source_state_path)
-            print()
-            print("Expected source log:")
-            print(source_log_path)
-            print("=" * 70)
-
-            raise FileNotFoundError(
-                "No source thermalized state exists for the specified values. "
-                "Run/create the source randomization state first."
-            )
-
-    # ============================================================
-    # Load source using the normal database helper
-    # ============================================================
-    result = sh.get_or_make_thermalized_state(
-        n_fcc_cells=n_fcc_cells,
-        target_rho=target_rho,
-        kT=kT,
-        nsteps=source_nsteps,
-        phase_name=source_phase_name,
-        log_period=source_log_period,
-        seed=source_seed,
-        overwrite=overwrite_source,
-    )
-
-    return result
-
-
-# ============================================================
-# Load frame from GSD
+# Small GSD helpers
 # ============================================================
 
 def load_frame_from_gsd(
@@ -208,7 +24,7 @@ def load_frame_from_gsd(
     frame_index=-1,
 ):
     """
-    Load a GSD frame from disk.
+    Load one GSD frame from disk.
     """
 
     state_path = Path(state_path)
@@ -219,15 +35,11 @@ def load_frame_from_gsd(
     with gsd.hoomd.open(
         name=str(state_path),
         mode="r",
-    ) as traj:
-        frame = traj[frame_index]
+    ) as trajectory:
+        frame = trajectory[frame_index]
 
     return frame
 
-
-# ============================================================
-# Save frame to GSD
-# ============================================================
 
 def save_frame_to_gsd(
     frame,
@@ -235,15 +47,13 @@ def save_frame_to_gsd(
     overwrite=False,
 ):
     """
-    Save a single GSD frame.
+    Save one GSD frame.
     """
 
     state_path = Path(state_path)
 
     if state_path.exists() and not overwrite:
-        raise FileExistsError(
-            f"Cavitation state already exists: {state_path}"
-        )
+        raise FileExistsError(f"GSD file already exists: {state_path}")
 
     state_path.parent.mkdir(
         parents=True,
@@ -253,14 +63,14 @@ def save_frame_to_gsd(
     with gsd.hoomd.open(
         name=str(state_path),
         mode="w",
-    ) as traj:
-        traj.append(frame)
+    ) as trajectory:
+        trajectory.append(frame)
 
     return state_path
 
 
 # ============================================================
-# Choose bubble center
+# Bubble construction
 # ============================================================
 
 def choose_bubble_center(
@@ -272,11 +82,8 @@ def choose_bubble_center(
     """
     Choose the bubble center.
 
-    Defaults:
-    - centered at the box center, which is (0, 0, 0)
-    - random_location=True chooses a uniform random point in the box
-
-    Periodic wrapping is handled later by the minimum-image distance.
+    Defaults to the center of the periodic box, (0, 0, 0). If
+    random_location=True, choose a uniform random point inside the box.
     """
 
     box = np.asarray(
@@ -284,12 +91,8 @@ def choose_bubble_center(
         dtype=np.float64,
     )
 
-    Lx = float(box[0])
-    Ly = float(box[1])
-    Lz = float(box[2])
-
     box_lengths = np.array(
-        [Lx, Ly, Lz],
+        [box[0], box[1], box[2]],
         dtype=np.float64,
     )
 
@@ -299,37 +102,29 @@ def choose_bubble_center(
                 "Use either random_location=True or bubble_center, not both."
             )
 
-        rng = np.random.default_rng(
-            int(bubble_seed)
-        )
+        rng = np.random.default_rng(int(bubble_seed))
 
-        center = rng.uniform(
+        return rng.uniform(
             low=-0.5 * box_lengths,
             high=0.5 * box_lengths,
         )
 
-    else:
-        if bubble_center is None:
-            center = np.array(
-                [0.0, 0.0, 0.0],
-                dtype=np.float64,
-            )
+    if bubble_center is None:
+        return np.array(
+            [0.0, 0.0, 0.0],
+            dtype=np.float64,
+        )
 
-        else:
-            center = np.asarray(
-                bubble_center,
-                dtype=np.float64,
-            )
+    bubble_center = np.asarray(
+        bubble_center,
+        dtype=np.float64,
+    )
 
-            if center.shape != (3,):
-                raise ValueError("bubble_center must have shape (3,)")
+    if bubble_center.shape != (3,):
+        raise ValueError("bubble_center must have shape (3,)")
 
-    return center
+    return bubble_center
 
-
-# ============================================================
-# Minimum-image distances
-# ============================================================
 
 def compute_periodic_distances_from_center(
     positions,
@@ -337,9 +132,7 @@ def compute_periodic_distances_from_center(
     box_lengths,
 ):
     """
-    Compute distances from bubble_center using periodic minimum image.
-
-    This lets the bubble wrap correctly across periodic boundaries.
+    Compute distances from bubble_center using periodic minimum images.
     """
 
     positions = np.asarray(
@@ -358,23 +151,16 @@ def compute_periodic_distances_from_center(
     )
 
     displacements = positions - bubble_center
-
     displacements = (
         displacements
         - box_lengths * np.round(displacements / box_lengths)
     )
 
-    distances = np.linalg.norm(
+    return np.linalg.norm(
         displacements,
         axis=1,
     )
 
-    return distances
-
-
-# ============================================================
-# Copy masked particle fields
-# ============================================================
 
 def _copy_masked_particle_fields(
     source_frame,
@@ -382,12 +168,7 @@ def _copy_masked_particle_fields(
     keep_mask,
 ):
     """
-    Copy particle fields from source_frame to new_frame using keep_mask.
-
-    This preserves any per-particle arrays that exist in the source GSD,
-    including velocities if they were saved.
-
-    Current project states usually have position and typeid saved.
+    Copy per-particle fields from source_frame to new_frame.
     """
 
     source_particles = source_frame.particles
@@ -450,10 +231,6 @@ def _copy_masked_particle_fields(
     return copied_fields
 
 
-# ============================================================
-# Make cavitated frame from existing frame
-# ============================================================
-
 def make_cavitated_frame_from_frame(
     frame,
     radius_fraction,
@@ -463,17 +240,13 @@ def make_cavitated_frame_from_frame(
     return_info=False,
 ):
     """
-    Create a cavitated GSD frame by removing particles inside one sphere.
+    Create a cavitated frame by removing particles inside one sphere.
 
     Bubble-radius convention:
         bubble_radius = radius_fraction * (BoxLength / 2)
 
-    The box is not resized.
-    Therefore:
-        rho_after = N_after / BoxLength**3
-
-    Particles are removed if:
-        periodic_distance_to_center <= bubble_radius
+    The box is not resized, so the post-cavitation density is
+    N_after / BoxLength**3.
     """
 
     radius_fraction = float(radius_fraction)
@@ -481,24 +254,17 @@ def make_cavitated_frame_from_frame(
     if radius_fraction <= 0:
         raise ValueError("radius_fraction must be positive")
 
-    # ============================================================
-    # Source box and particle data
-    # ============================================================
     source_box = np.asarray(
         frame.configuration.box,
         dtype=np.float64,
     )
 
-    Lx = float(source_box[0])
-    Ly = float(source_box[1])
-    Lz = float(source_box[2])
-
     box_lengths = np.array(
-        [Lx, Ly, Lz],
+        [source_box[0], source_box[1], source_box[2]],
         dtype=np.float64,
     )
 
-    BoxLength = Lx
+    BoxLength = float(source_box[0])
 
     positions = np.asarray(
         frame.particles.position,
@@ -506,12 +272,9 @@ def make_cavitated_frame_from_frame(
     )
 
     N_before = int(frame.particles.N)
-    volume = Lx * Ly * Lz
+    volume = float(np.prod(box_lengths))
     rho_before = N_before / volume
 
-    # ============================================================
-    # Bubble geometry
-    # ============================================================
     center = choose_bubble_center(
         frame=frame,
         random_location=random_location,
@@ -530,8 +293,11 @@ def make_cavitated_frame_from_frame(
     remove_mask = distances <= bubble_radius
     keep_mask = ~remove_mask
 
-    N_removed = int(np.sum(remove_mask))
-    N_after = int(np.sum(keep_mask))
+    removed_indices = np.flatnonzero(remove_mask).astype(np.int64)
+    kept_indices = np.flatnonzero(keep_mask).astype(np.int64)
+
+    N_removed = int(removed_indices.size)
+    N_after = int(kept_indices.size)
     rho_after = N_after / volume
 
     if N_after <= 0:
@@ -540,14 +306,9 @@ def make_cavitated_frame_from_frame(
             "Use a smaller radius_fraction."
         )
 
-    # ============================================================
-    # Build new GSD frame
-    # ============================================================
     new_frame = gsd.hoomd.Frame()
-
     new_frame.configuration.step = int(frame.configuration.step)
     new_frame.configuration.box = list(source_box)
-
     new_frame.particles.N = N_after
 
     try:
@@ -567,22 +328,23 @@ def make_cavitated_frame_from_frame(
         "radius_definition": "bubble_radius = radius_fraction * (BoxLength / 2)",
         "bubble_radius": float(bubble_radius),
         "bubble_center": center.copy(),
+        "bubble_center_x": float(center[0]),
+        "bubble_center_y": float(center[1]),
+        "bubble_center_z": float(center[2]),
         "random_location": bool(random_location),
         "bubble_seed": int(bubble_seed),
-
         "BoxLength": float(BoxLength),
         "volume": float(volume),
-
         "N_before": int(N_before),
         "N_after": int(N_after),
         "particles_removed": int(N_removed),
         "particle_fraction_removed": float(N_removed / N_before),
-
         "rho_before": float(rho_before),
         "rho_after": float(rho_after),
-
         "periodic_distance": True,
         "copied_particle_fields": copied_fields,
+        "removed_particle_indices": removed_indices,
+        "removed_particle_positions": positions[remove_mask].copy(),
     }
 
     if return_info:
@@ -592,10 +354,281 @@ def make_cavitated_frame_from_frame(
 
 
 # ============================================================
-# Make or load cavitated state
+# Source state loading
 # ============================================================
 
-def make_or_load_cavitated_state(
+def get_source_randomization_result(
+    n_fcc_cells,
+    target_rho,
+    kT,
+    source_nsteps,
+    source_seed=1,
+    source_phase_name="randomization",
+    source_log_period=1_000,
+    overwrite_source=False,
+    require_existing_source=True,
+):
+    """
+    Get the thermalized source state used to create the bubble.
+    """
+
+    source_paths = run_helpers.get_phase_paths(
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
+        kT=kT,
+        nsteps=source_nsteps,
+        seed=source_seed,
+        phase_name=source_phase_name,
+    )
+
+    source_state_path = Path(source_paths["state_path"])
+    source_log_path = Path(source_paths["log_path"])
+
+    if require_existing_source:
+        missing_paths = []
+
+        if not source_state_path.exists():
+            missing_paths.append(source_state_path)
+
+        if not source_log_path.exists():
+            missing_paths.append(source_log_path)
+
+        if missing_paths:
+            print("No source thermalized state found for the specified values.")
+            print("=" * 70)
+            print("n_fcc_cells       =", n_fcc_cells)
+            print("target_rho        =", target_rho)
+            print("kT                =", kT)
+            print("source_nsteps     =", source_nsteps)
+            print("source_seed       =", source_seed)
+            print("source_phase_name =", source_phase_name)
+            print()
+            print("Missing paths:")
+
+            for missing_path in missing_paths:
+                print(missing_path)
+
+            print("=" * 70)
+
+            raise FileNotFoundError(
+                "No source thermalized state exists for the specified values. "
+                "Run/create the source randomization state first."
+            )
+
+    return simulation_helpers.get_or_make_thermalized_state(
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
+        kT=kT,
+        nsteps=source_nsteps,
+        phase_name=source_phase_name,
+        log_period=source_log_period,
+        seed=source_seed,
+        overwrite=overwrite_source,
+    )
+
+
+# ============================================================
+# V3 path and metadata helpers
+# ============================================================
+
+def get_cavitation_state_path(
+    n_fcc_cells,
+    target_rho,
+    kT,
+    source_nsteps,
+    radius_fraction,
+    source_seed=1,
+    source_phase_name="randomization",
+    random_location=False,
+    bubble_seed=1,
+    bubble_center=None,
+    base_folder=CAVITATION_STATES_V3_ROOT,
+):
+    """
+    Backward-compatible path helper for the V3 cavitation initial state.
+    """
+
+    paths = cavitation_state_paths(
+        n_fcc_cells=n_fcc_cells,
+        source_rho=target_rho,
+        kT=kT,
+        source_nsteps=source_nsteps,
+        source_seed=source_seed,
+        radius_fraction=radius_fraction,
+        source_phase_name=source_phase_name,
+        center=bubble_center,
+        random_location=random_location,
+        bubble_seed=bubble_seed,
+        base_folder=base_folder,
+    )
+
+    return paths["state_path"]
+
+
+def _frame_state_metadata(
+    frame,
+    n_fcc_cells,
+    source_rho,
+    kT,
+    state_kind,
+    density_mode="fixed_volume_particle_removed",
+):
+    box = np.asarray(
+        frame.configuration.box,
+        dtype=np.float64,
+    )
+
+    volume = float(box[0] * box[1] * box[2])
+    N = int(frame.particles.N)
+
+    return {
+        "state_kind": state_kind,
+        "data_version": "v3",
+        "lattice_type": "fcc",
+        "density_mode": density_mode,
+        "n_fcc_cells": int(n_fcc_cells),
+        "N": N,
+        "source_rho": float(source_rho),
+        "actual_rho": float(N / volume),
+        "kT": float(kT),
+        "BoxLength": float(box[0]),
+        "volume": volume,
+        "fcc_cell_size": float(box[0]) / int(n_fcc_cells),
+    }
+
+
+def _build_source_metadata(
+    source_result,
+    source_rho,
+    source_kT,
+    source_nsteps,
+    source_seed,
+    source_phase_name,
+):
+    source_paths = source_result["paths"]
+    source_state_path = Path(source_paths["state_path"])
+    source_log_path = Path(source_paths["log_path"])
+
+    source = {
+        "source_state_kind": "thermalized",
+        "source_data_version": "v3",
+        "source_state_path": str(source_state_path),
+        "source_log_path": str(source_log_path),
+        "source_rho": float(source_rho),
+        "source_kT": float(source_kT),
+        "source_nsteps": int(source_nsteps),
+        "source_seed": int(source_seed),
+        "source_phase_name": source_phase_name,
+    }
+
+    if source_log_path.exists():
+        source_state_attrs = metadata_helpers.read_attrs(
+            source_log_path,
+            "metadata/state",
+        )
+        source_run_attrs = metadata_helpers.read_attrs(
+            source_log_path,
+            "metadata/run",
+        )
+
+        for key in [
+            "N",
+            "actual_rho",
+            "target_rho",
+            "BoxLength",
+            "volume",
+        ]:
+            if key in source_state_attrs:
+                source[f"source_{key}"] = source_state_attrs[key]
+
+        if "final_timestep" in source_run_attrs:
+            source["source_final_timestep"] = source_run_attrs[
+                "final_timestep"
+            ]
+
+    return source
+
+
+def _build_creation_metadata(
+    info,
+):
+    skip_keys = {
+        "removed_particle_indices",
+        "removed_particle_positions",
+    }
+
+    return {
+        key: value
+        for key, value in info.items()
+        if key not in skip_keys
+    }
+
+
+def _write_cavitation_creation_metadata(
+    metadata_path,
+    frame,
+    paths,
+    info,
+    source_metadata,
+    n_fcc_cells,
+    source_rho,
+    kT,
+    overwrite=False,
+):
+    state = _frame_state_metadata(
+        frame=frame,
+        n_fcc_cells=n_fcc_cells,
+        source_rho=source_rho,
+        kT=kT,
+        state_kind="cavitation_initial",
+    )
+
+    state["target_rho"] = float(info["rho_after"])
+
+    metadata_groups = {
+        "metadata/state": state,
+        "metadata/creation": _build_creation_metadata(info),
+        "metadata/source": source_metadata,
+        "metadata/paths": {
+            "state_path": str(paths["state_path"]),
+            "creation_metadata_path": str(paths["creation_metadata_path"]),
+        },
+    }
+
+    datasets = {
+        "metadata/creation/removed_particle_indices": info.get(
+            "removed_particle_indices"
+        ),
+        "metadata/creation/removed_particle_positions": info.get(
+            "removed_particle_positions"
+        ),
+    }
+
+    metadata_helpers.write_metadata_groups(
+        hdf5_path=metadata_path,
+        groups=metadata_groups,
+        mode="w" if overwrite else "a",
+        overwrite=True,
+    )
+
+    metadata_helpers.write_datasets(
+        hdf5_path=metadata_path,
+        datasets=datasets,
+        mode="a",
+        overwrite=True,
+    )
+
+    metadata_helpers.clear_attrs(
+        hdf5_path=metadata_path,
+        group_path="metadata",
+    )
+
+
+# ============================================================
+# Cavitation initial state
+# ============================================================
+
+def get_or_create_cavitation_state(
     n_fcc_cells,
     target_rho,
     kT,
@@ -610,26 +643,16 @@ def make_or_load_cavitated_state(
     overwrite=False,
     overwrite_source=False,
     require_existing_source=True,
-    base_folder=CAVITATION_STATES_ROOT,
-    return_info=False,
+    base_folder=CAVITATION_STATES_V3_ROOT,
 ):
     """
-    Main cavitation database helper.
+    Load or create a V3 cavitation starting state.
 
-    Workflow:
-    1. Use sh.get_or_make_thermalized_state(...) to get the source
-       randomized state.
-    2. Build the expected Cavitation_States path.
-    3. If cavitation.gsd exists and overwrite=False, load it.
-    4. Otherwise, remove particles inside the bubble and save cavitation.gsd.
-    5. Return the cavitated GSD frame.
-
-    This does not run any dynamics and does not write logs.
+    Saves:
+        cavitation_initial.gsd
+        cavitation_creation.hdf5
     """
 
-    # ============================================================
-    # Get source randomized state using existing workflow
-    # ============================================================
     source_result = get_source_randomization_result(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
@@ -643,61 +666,69 @@ def make_or_load_cavitated_state(
     )
 
     source_frame = source_result["frame"]
-    source_paths = source_result["paths"]
 
-    source_state_path = Path(source_paths["state_path"])
-    source_log_path = Path(source_paths["log_path"])
-
-    # ============================================================
-    # Build cavitation path
-    # ============================================================
-    cavitation_state_path = get_cavitation_state_path(
+    paths = cavitation_state_paths(
         n_fcc_cells=n_fcc_cells,
-        target_rho=target_rho,
+        source_rho=target_rho,
         kT=kT,
         source_nsteps=source_nsteps,
-        radius_fraction=radius_fraction,
         source_seed=source_seed,
+        radius_fraction=radius_fraction,
         source_phase_name=source_phase_name,
+        center=bubble_center,
         random_location=random_location,
         bubble_seed=bubble_seed,
-        bubble_center=bubble_center,
         base_folder=base_folder,
     )
 
-    # ============================================================
-    # Load existing cavitation state if present
-    # ============================================================
-    if cavitation_state_path.exists() and not overwrite:
-        print("Loaded existing cavitation state:")
-        print(cavitation_state_path)
+    state_path = Path(paths["state_path"])
+    metadata_path = Path(paths["creation_metadata_path"])
 
-        cavitated_frame = load_frame_from_gsd(
-            cavitation_state_path,
-        )
+    source_metadata = _build_source_metadata(
+        source_result=source_result,
+        source_rho=target_rho,
+        source_kT=kT,
+        source_nsteps=source_nsteps,
+        source_seed=source_seed,
+        source_phase_name=source_phase_name,
+    )
+
+    if state_path.exists() and not overwrite:
+        print("Loaded existing cavitation initial state:")
+        print(state_path)
+
+        frame = load_frame_from_gsd(state_path)
+
+        if metadata_path.exists():
+            creation_metadata = metadata_helpers.read_attrs(
+                metadata_path,
+                "metadata/creation",
+            )
+        else:
+            creation_metadata = {}
 
         info = {
             "created_new": False,
-            "cavitation_state_path": str(cavitation_state_path),
-            "source_state_path": str(source_state_path),
-            "source_log_path": str(source_log_path),
-            "N_after": int(cavitated_frame.particles.N),
-            "BoxLength": float(cavitated_frame.configuration.box[0]),
+            "state_path": str(state_path),
+            "creation_metadata_path": str(metadata_path),
+            "N_after": int(frame.particles.N),
             "rho_after": (
-                int(cavitated_frame.particles.N)
-                / float(cavitated_frame.configuration.box[0])**3
+                int(frame.particles.N)
+                / float(frame.configuration.box[0])**3
             ),
         }
 
-        if return_info:
-            return cavitated_frame, info
+        info.update(creation_metadata)
 
-        return cavitated_frame
+        return {
+            "frame": frame,
+            "paths": paths,
+            "source_result": source_result,
+            "creation_info": info,
+            "created_new": False,
+        }
 
-    # ============================================================
-    # Create new cavitation frame
-    # ============================================================
-    cavitated_frame, info = make_cavitated_frame_from_frame(
+    frame, info = make_cavitated_frame_from_frame(
         frame=source_frame,
         radius_fraction=radius_fraction,
         random_location=random_location,
@@ -707,40 +738,363 @@ def make_or_load_cavitated_state(
     )
 
     save_frame_to_gsd(
-        frame=cavitated_frame,
-        state_path=cavitation_state_path,
+        frame=frame,
+        state_path=state_path,
         overwrite=overwrite,
     )
 
+    _write_cavitation_creation_metadata(
+        metadata_path=metadata_path,
+        frame=frame,
+        paths=paths,
+        info=info,
+        source_metadata=source_metadata,
+        n_fcc_cells=n_fcc_cells,
+        source_rho=target_rho,
+        kT=kT,
+        overwrite=True,
+    )
+
     info["created_new"] = True
-    info["phase_name"] = "cavitation"
+    info["state_path"] = str(state_path)
+    info["creation_metadata_path"] = str(metadata_path)
 
-    info["n_fcc_cells"] = int(n_fcc_cells)
-    info["source_target_rho"] = float(target_rho)
-    info["source_kT"] = float(kT)
-    info["source_nsteps"] = int(source_nsteps)
-    info["source_seed"] = int(source_seed)
-    info["source_phase_name"] = source_phase_name
-
-    info["source_state_path"] = str(source_state_path)
-    info["source_log_path"] = str(source_log_path)
-    info["cavitation_state_path"] = str(cavitation_state_path)
-
-    print("Created new cavitation state")
+    print("Created new cavitation initial state")
     print("=" * 70)
-    print("source_state_path:", source_state_path)
-    print("cavitation_state_path:", cavitation_state_path)
+    print("state_path:", state_path)
+    print("creation_metadata_path:", metadata_path)
     print("radius_fraction:", info["radius_fraction"])
     print("bubble_radius:", info["bubble_radius"])
     print("bubble_center:", info["bubble_center"])
+    print("particles_removed:", info["particles_removed"])
     print("N_before:", info["N_before"])
     print("N_after:", info["N_after"])
-    print("particles_removed:", info["particles_removed"])
     print("rho_before:", info["rho_before"])
     print("rho_after:", info["rho_after"])
     print("=" * 70)
 
-    if return_info:
-        return cavitated_frame, info
+    return {
+        "frame": frame,
+        "paths": paths,
+        "source_result": source_result,
+        "creation_info": info,
+        "created_new": True,
+    }
 
-    return cavitated_frame
+
+def make_or_load_cavitated_state(
+    *args,
+    return_info=False,
+    **kwargs,
+):
+    """
+    Backward-compatible wrapper around get_or_create_cavitation_state.
+    """
+
+    result = get_or_create_cavitation_state(
+        *args,
+        **kwargs,
+    )
+
+    if return_info:
+        return result["frame"], result["creation_info"]
+
+    return result["frame"]
+
+
+# ============================================================
+# Cavitation evolution
+# ============================================================
+
+def _build_evolution_metadata_groups(
+    simulation,
+    initial_result,
+    evolved_paths,
+    n_fcc_cells,
+    source_rho,
+    source_kT,
+    source_nsteps,
+    source_seed,
+    source_phase_name,
+    evolve_kT,
+    evolve_nsteps,
+    evolve_seed,
+    dt,
+    log_period,
+    trajectory_period,
+    lj_kwargs,
+):
+    snapshot = simulation.state.get_snapshot()
+
+    box = np.asarray(
+        snapshot.configuration.box,
+        dtype=np.float64,
+    )
+
+    volume = float(box[0] * box[1] * box[2])
+    N = int(snapshot.particles.N)
+
+    creation_paths = initial_result["paths"]
+    creation_info = initial_result["creation_info"]
+    source_result = initial_result["source_result"]
+
+    state = {
+        "state_kind": "cavitation_evolved",
+        "data_version": "v3",
+        "lattice_type": "fcc",
+        "density_mode": "fixed_volume_particle_removed",
+        "n_fcc_cells": int(n_fcc_cells),
+        "N": N,
+        "source_rho": float(source_rho),
+        "target_rho": float(N / volume),
+        "actual_rho": float(N / volume),
+        "kT": float(evolve_kT),
+        "BoxLength": float(box[0]),
+        "volume": volume,
+        "fcc_cell_size": float(box[0]) / int(n_fcc_cells),
+    }
+
+    run = {
+        "run_kind": "cavitation_evolution",
+        "phase_name": "cavitation",
+        "nsteps": int(evolve_nsteps),
+        "seed": int(evolve_seed),
+        "dt": float(dt),
+        "kT": float(evolve_kT),
+        "log_period": int(log_period),
+        "trajectory_period": int(trajectory_period),
+        "final_timestep": int(simulation.timestep) + int(evolve_nsteps),
+    }
+
+    source = {
+        "source_state_kind": "cavitation_initial",
+        "source_state_path": str(creation_paths["state_path"]),
+        "source_creation_metadata_path": str(
+            creation_paths["creation_metadata_path"]
+        ),
+        "source_data_version": "v3",
+        "parent_state_kind": "thermalized",
+        "parent_state_path": str(source_result["paths"]["state_path"]),
+        "parent_log_path": str(source_result["paths"]["log_path"]),
+        "source_rho": float(source_rho),
+        "source_kT": float(source_kT),
+        "source_nsteps": int(source_nsteps),
+        "source_seed": int(source_seed),
+        "source_phase_name": source_phase_name,
+    }
+
+    creation = {
+        key: value
+        for key, value in creation_info.items()
+        if key not in {
+            "removed_particle_indices",
+            "removed_particle_positions",
+            "created_new",
+            "state_path",
+            "creation_metadata_path",
+        }
+    }
+
+    paths = {
+        "log_path": str(evolved_paths["log_path"]),
+        "trajectory_path": str(evolved_paths["trajectory_path"]),
+        "final_state_path": str(evolved_paths["final_state_path"]),
+    }
+
+    groups = {
+        "metadata/state": state,
+        "metadata/run": run,
+        "metadata/source": source,
+        "metadata/creation": creation,
+        "metadata/paths": paths,
+    }
+
+    lj_metadata = {
+        key: value
+        for key, value in lj_kwargs.items()
+        if value is not None
+    }
+
+    if lj_metadata:
+        groups["metadata/lj"] = lj_metadata
+
+    return groups
+
+
+def get_or_create_cavitation_evolution(
+    n_fcc_cells,
+    target_rho,
+    kT,
+    source_nsteps,
+    radius_fraction,
+    evolve_nsteps,
+    evolve_kT=None,
+    evolve_seed=1,
+    source_seed=1,
+    source_phase_name="randomization",
+    source_log_period=1_000,
+    random_location=False,
+    bubble_seed=1,
+    bubble_center=None,
+    dt=0.005,
+    log_period=1_000,
+    trajectory_period=1_000,
+    epsilon_LJ=1.0,
+    sigma_LJ=1.0,
+    r_cut_LJ=2.5,
+    buffer_LJ=0.4,
+    lj_mode="xplor",
+    r_on_LJ=2.0,
+    overwrite=False,
+    overwrite_initial=False,
+    overwrite_source=False,
+    require_existing_source=True,
+    classify_final=True,
+    classification_kwargs=None,
+):
+    """
+    Load or run a V3 cavitation evolution.
+
+    Saves:
+        cavitation_trajectory.gsd
+        cavitation_final.gsd
+        cavitation_log.hdf5
+    """
+
+    if evolve_kT is None:
+        evolve_kT = kT
+
+    initial_result = get_or_create_cavitation_state(
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
+        kT=kT,
+        source_nsteps=source_nsteps,
+        radius_fraction=radius_fraction,
+        source_seed=source_seed,
+        source_phase_name=source_phase_name,
+        source_log_period=source_log_period,
+        random_location=random_location,
+        bubble_seed=bubble_seed,
+        bubble_center=bubble_center,
+        overwrite=overwrite_initial,
+        overwrite_source=overwrite_source,
+        require_existing_source=require_existing_source,
+    )
+
+    evolved_paths = cavitation_evolved_paths(
+        n_fcc_cells=n_fcc_cells,
+        source_rho=target_rho,
+        kT=kT,
+        source_nsteps=source_nsteps,
+        source_seed=source_seed,
+        radius_fraction=radius_fraction,
+        evolve_kT=evolve_kT,
+        evolve_nsteps=evolve_nsteps,
+        evolve_seed=evolve_seed,
+        source_phase_name=source_phase_name,
+        center=bubble_center,
+        random_location=random_location,
+        bubble_seed=bubble_seed,
+    )
+
+    trajectory_path = Path(evolved_paths["trajectory_path"])
+    final_state_path = Path(evolved_paths["final_state_path"])
+    log_path = Path(evolved_paths["log_path"])
+
+    if (
+        trajectory_path.exists()
+        and final_state_path.exists()
+        and log_path.exists()
+        and not overwrite
+    ):
+        print("Loaded existing cavitation evolution:")
+        print(final_state_path)
+
+        return {
+            "frame": load_frame_from_gsd(final_state_path),
+            "paths": evolved_paths,
+            "initial_result": initial_result,
+            "created_new": False,
+        }
+
+    initial_frame = initial_result["frame"]
+    creation_info = initial_result["creation_info"]
+
+    simulation = simulation_helpers.make_simulation(
+        frame=initial_frame,
+        target_rho=creation_info.get("rho_after"),
+        n_fcc_cells=n_fcc_cells,
+        seed=evolve_seed,
+        dt=dt,
+        kT=evolve_kT,
+        epsilon_LJ=epsilon_LJ,
+        sigma_LJ=sigma_LJ,
+        r_cut_LJ=r_cut_LJ,
+        buffer_LJ=buffer_LJ,
+        lj_mode=lj_mode,
+        r_on_LJ=r_on_LJ,
+        starting_state_path=str(initial_result["paths"]["state_path"]),
+    )
+
+    lj_kwargs = {
+        "epsilon_LJ": epsilon_LJ,
+        "sigma_LJ": sigma_LJ,
+        "r_cut_LJ": r_cut_LJ,
+        "r_on_LJ": r_on_LJ,
+        "buffer_LJ": buffer_LJ,
+        "lj_mode": lj_mode,
+    }
+
+    metadata_groups = _build_evolution_metadata_groups(
+        simulation=simulation,
+        initial_result=initial_result,
+        evolved_paths=evolved_paths,
+        n_fcc_cells=n_fcc_cells,
+        source_rho=target_rho,
+        source_kT=kT,
+        source_nsteps=source_nsteps,
+        source_seed=source_seed,
+        source_phase_name=source_phase_name,
+        evolve_kT=evolve_kT,
+        evolve_nsteps=evolve_nsteps,
+        evolve_seed=evolve_seed,
+        dt=dt,
+        log_period=log_period,
+        trajectory_period=trajectory_period,
+        lj_kwargs=lj_kwargs,
+    )
+
+    run_result = run_helpers.run_logged_trajectory_phase(
+        simulation=simulation,
+        nsteps=evolve_nsteps,
+        log_path=log_path,
+        trajectory_path=trajectory_path,
+        final_state_path=final_state_path,
+        log_period=log_period,
+        trajectory_period=trajectory_period,
+        metadata_groups=metadata_groups,
+        classify_final=classify_final,
+        classification_kwargs=classification_kwargs,
+    )
+
+    final_frame = load_frame_from_gsd(final_state_path)
+
+    print("Created new cavitation evolution")
+    print("=" * 70)
+    print("trajectory_path:", trajectory_path)
+    print("final_state_path:", final_state_path)
+    print("log_path:", log_path)
+    print("trajectory_period:", trajectory_period)
+    print("evolve_nsteps:", evolve_nsteps)
+    print("=" * 70)
+
+    return {
+        "frame": final_frame,
+        "paths": evolved_paths,
+        "initial_result": initial_result,
+        "run_result": run_result,
+        "created_new": True,
+    }
+
+
+get_or_create_cavitation = get_or_create_cavitation_evolution
