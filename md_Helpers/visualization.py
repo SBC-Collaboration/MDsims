@@ -541,6 +541,106 @@ def plot_xy_slice(
 
 
 # ============================================================
+# Plot cavitation x-y slice
+# ============================================================
+
+def plot_cavitation_xy_slice(
+    obj,
+    fraction=0.05,
+    point_size=1,
+    alpha=0.7,
+    show_bubble=True,
+):
+    """
+    Plot a thin x-y slice through a cavitation bubble.
+
+    Input should usually be the result dictionary returned by
+    cavitation.get_or_create_cavitation_state(...) or
+    cavitation.get_or_create_cavitation(...).
+    """
+
+    if fraction <= 0 or fraction > 1:
+        raise ValueError("fraction must satisfy 0 < fraction <= 1")
+
+    info = {}
+
+    if isinstance(obj, dict):
+        info = dict(obj.get("creation_info", {}))
+
+        if not info and "initial_result" in obj:
+            info = dict(
+                obj.get("initial_result", {}).get("creation_info", {})
+            )
+
+    bubble_center = info.get("bubble_center", None)
+
+    if bubble_center is not None:
+        bubble_center = np.asarray(
+            bubble_center,
+            dtype=np.float64,
+        )
+
+    center_x = float(info.get(
+        "bubble_center_x",
+        0.0 if bubble_center is None else bubble_center[0],
+    ))
+    center_y = float(info.get(
+        "bubble_center_y",
+        0.0 if bubble_center is None else bubble_center[1],
+    ))
+    center_z = float(info.get(
+        "bubble_center_z",
+        0.0 if bubble_center is None else bubble_center[2],
+    ))
+
+    bubble_radius = info.get("bubble_radius", None)
+
+    positions, Lx, Ly, Lz, snapshot = _get_positions_and_box(obj)
+
+    x = positions[:, 0]
+    y = positions[:, 1]
+    z = positions[:, 2]
+
+    half_thickness = 0.5 * fraction * Lz
+    mask = np.abs(z - center_z) <= half_thickness
+
+    plt.figure(figsize=(6, 6))
+
+    plt.scatter(
+        x[mask],
+        y[mask],
+        s=point_size,
+        alpha=alpha,
+        rasterized=True,
+    )
+
+    if show_bubble and bubble_radius is not None:
+        circle = plt.Circle(
+            (center_x, center_y),
+            float(bubble_radius),
+            fill=False,
+            linewidth=2,
+            color="red",
+            linestyle="--",
+        )
+        plt.gca().add_patch(circle)
+
+    plt.xlim(-Lx / 2, Lx / 2)
+    plt.ylim(-Ly / 2, Ly / 2)
+
+    plt.xlabel("x")
+    plt.ylabel("y")
+
+    plt.title(
+        f"Cavitation x-y slice at z={center_z:.3f} "
+        f"({100 * fraction:.1f}% box thickness)"
+    )
+
+    plt.gca().set_aspect("equal")
+    plt.show()
+
+
+# ============================================================
 # Animate x-y trajectory slice
 # ============================================================
 
