@@ -624,7 +624,18 @@ def plot_log_quantity(
     # Convert total energies to per-particle energies
     # ============================================================
     if quantity in ["kinetic_energy", "potential_energy"]:
-        metadata = log["metadata"]["attrs"]
+        metadata = (
+            log.get("metadata", {})
+               .get("state", {})
+               .get("attrs", {})
+        )
+
+        if "N" not in metadata:
+            metadata = (
+                log.get("metadata", {})
+                   .get("attrs", {})
+            )
+
         N = int(metadata["N"])
 
         values = values / N
