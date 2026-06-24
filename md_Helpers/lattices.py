@@ -4,7 +4,7 @@ import numpy as np
 import gsd.hoomd
 from pathlib import Path
 
-from .paths import SIMPLE_LATTICES_V2_ROOT
+from .paths import SIMPLE_LATTICES_V3_ROOT
 
 
 # ============================================================
@@ -18,7 +18,7 @@ def get_fcc_lattice_info(
     """
     Compute the derived FCC lattice quantities.
 
-    New V2 convention:
+    V3 convention:
     - n_fcc_cells is the number of conventional FCC unit cells per side
     - each FCC cell contains 4 particles
     - N is fixed by n_fcc_cells
@@ -96,7 +96,7 @@ def FillFccLattice(
     Build an FCC lattice using the same parity/checkerboard style
     as the original source code.
 
-    V2 convention:
+    V3 convention:
     - n_fcc_cells is the number of conventional FCC cells per side
     - N = 4 * n_fcc_cells**3
     - BoxLength is chosen from target_rho
@@ -202,14 +202,14 @@ def FillFccLattice(
 def get_lattice_path(
     n_fcc_cells,
     target_rho,
-    base_folder=SIMPLE_LATTICES_V2_ROOT,
+    base_folder=SIMPLE_LATTICES_V3_ROOT,
 ):
     """
-    Build the V2 lattice path.
+    Build the V3 lattice path.
 
     Folder structure:
 
-        Simple_Lattices_V2/
+        Simple_Lattices_v3/
             FCC/
                 n_cells_30/
                     rho_0.500/
@@ -238,12 +238,12 @@ def make_lattice_frame(
     particle_type="A",
     end_print=True,
     overwrite=False,
-    base_folder=SIMPLE_LATTICES_V2_ROOT,
+    base_folder=SIMPLE_LATTICES_V3_ROOT,
 ):
     """
-    Create or load an FCC lattice frame using the V2 convention.
+    Create or load an FCC lattice frame using the V3 convention.
 
-    New V2 convention:
+    V3 convention:
     - User chooses n_fcc_cells
     - User chooses target_rho
     - N is fixed by n_fcc_cells

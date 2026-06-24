@@ -11,7 +11,6 @@ Primary modules:
 - database: sweep summaries and master CSV builders
 - metadata: structured HDF5 metadata helpers
 - visualization: rendering and plotting
-- migration: temporary V2-to-V3 data migration helpers
 """
 
 __all__ = [
@@ -24,5 +23,4 @@ __all__ = [
     "database",
     "metadata",
     "visualization",
-    "migration",
 ]

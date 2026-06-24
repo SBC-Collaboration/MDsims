@@ -11,7 +11,7 @@ import numpy as np
 from . import classification as ps
 from . import metadata as metadata_helpers
 from .classification import classify_final_state
-from .paths import THERMALIZED_STATES_V2_ROOT
+from .paths import THERMALIZED_STATES_V2_ROOT, THERMALIZED_STATES_V3_ROOT
 
 # ============================================================
 # Default phase-separation settings
@@ -310,7 +310,7 @@ def build_simulation_metadata(
     """
     Build a metadata dictionary for the current simulation state.
 
-    V2 convention:
+    V3 convention:
     - n_fcc_cells is the chosen system size
     - N = 4 * n_fcc_cells**3
     - target_rho is the requested density
@@ -403,14 +403,14 @@ def get_phase_paths(
     nsteps,
     seed,
     phase_name,
-    base_folder=THERMALIZED_STATES_V2_ROOT,
+    base_folder=THERMALIZED_STATES_V3_ROOT,
 ):
     """
-    Build standard V2 paths for a logged simulation phase.
+    Build standard V3 paths for a logged simulation phase.
 
     Folder structure:
 
-        Thermalized_States_v2/
+        Thermalized_States_v3/
             FCC/
                 n_cells_30/
                     rho_0.500/
@@ -488,12 +488,12 @@ def run_logged_phase(
     buffer_LJ=None,
     lj_mode=None,
     starting_state_path="unknown",
-    base_folder=THERMALIZED_STATES_V2_ROOT,
+    base_folder=THERMALIZED_STATES_V3_ROOT,
 ):
     """
     Run a simulation phase with HDF5 logging and save the final state.
 
-    V2 path convention:
+    V3 path convention:
     - input system size is n_fcc_cells
     - input density is target_rho
     - BoxLength is not part of the path because it is derived

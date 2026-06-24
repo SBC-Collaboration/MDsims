@@ -54,7 +54,7 @@ def make_simulation(
     """
     Create a HOOMD simulation from a GSD frame.
 
-    V2 density convention:
+    V3 density convention:
     - n_fcc_cells fixes the particle count
     - N = 4 * n_fcc_cells**3
     - target_rho fixes the box size
@@ -300,7 +300,7 @@ def get_or_make_thermalized_state(
     overwrite_lattice=False,
 ):
     """
-    Main reusable V2 database function.
+    Main reusable V3 database function.
 
     Workflow:
     1. Build expected thermalized-state paths.
@@ -312,7 +312,7 @@ def get_or_make_thermalized_state(
     6. Run logged randomization.
     7. Save final randomized state and metadata.
 
-    V2 convention:
+    V3 convention:
     - n_fcc_cells is the chosen system size
     - N = 4 * n_fcc_cells**3
     - target_rho is the requested density

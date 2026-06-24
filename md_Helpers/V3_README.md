@@ -47,24 +47,10 @@ Those starting states should instead store creation metadata such as removed
 particle count, selected particle count, altered velocities, injected energy,
 and parent-state paths.
 
-## Migration
-
-Use `V3_Migrate_Saved_Files.ipynb` from the repository root. Start with
-`DRY_RUN = True`, review the migration plan, then rerun with `DRY_RUN = False`.
-
-The migration upgrades metadata for lattices and thermalized states:
-
-```text
-Simple_Lattices_v3/.../lattice.gsd
-Simple_Lattices_v3/.../lattice_metadata.hdf5
-
-Thermalized_States_v3/.../randomization.gsd
-Thermalized_States_v3/.../randomization_log.hdf5
-```
+## Metadata Layout
 
 V3 keeps bare `metadata` as a container only. Metadata attributes live in
-purpose-specific child groups so migrated logs and future V3 logs can be read
-the same way:
+purpose-specific child groups:
 
 ```text
 metadata/state
@@ -72,11 +58,12 @@ metadata/run
 metadata/lj
 metadata/source
 metadata/paths
-metadata/classification
 metadata/classification/phase_separation
 metadata/classification/phase_separation/voxel
 metadata/classification/phase_separation/PE_drop
 ```
 
-The migration is copy-only. Original V2 files stay unchanged; the copied V3
-HDF5 logs convert the old flat metadata attributes into grouped V3 metadata.
+`metadata/paths` stores current file locations. `metadata/source` stores
+ancestry such as parent state paths and source data versions. Parent groups
+such as `metadata` and `metadata/classification` are containers only and should
+not store attributes directly.
