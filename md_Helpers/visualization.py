@@ -753,6 +753,65 @@ def animate_xy_slice_trajectory(
 
 
 # ============================================================
+# Plot cavitation measurements
+# ============================================================
+
+def plot_cavitation_measurements(
+    measurements,
+    figsize=(10, 8),
+):
+    """
+    Plot the main diagnostics from cavitation.measure_cavitation_trajectory().
+    """
+
+    if "timestep" not in measurements:
+        raise ValueError("measurements must contain a 'timestep' column")
+
+    panels = [
+        ("bubble_radius_estimate", "Bubble Radius Estimate"),
+        ("void_fraction_estimate", "Void Fraction Estimate"),
+        ("pressure", "Pressure"),
+        ("PE_per_particle", "PE/N"),
+    ]
+
+    available_panels = [
+        panel
+        for panel in panels
+        if panel[0] in measurements
+    ]
+
+    if not available_panels:
+        raise ValueError(
+            "No recognized cavitation measurement columns were found."
+        )
+
+    n_panels = len(available_panels)
+
+    fig, axes = plt.subplots(
+        n_panels,
+        1,
+        figsize=figsize,
+        sharex=True,
+    )
+
+    if n_panels == 1:
+        axes = [axes]
+
+    for axis, (column, label) in zip(axes, available_panels):
+        axis.plot(
+            measurements["timestep"],
+            measurements[column],
+        )
+        axis.set_ylabel(label)
+        axis.grid(alpha=0.3)
+
+    axes[-1].set_xlabel("Timestep")
+
+    plt.tight_layout()
+    plt.show()
+
+
+# ============================================================
 # Plot pressure log
 # ============================================================
 
