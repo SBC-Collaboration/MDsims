@@ -5,7 +5,7 @@ import numpy as np
 
 def _open_hdf5(path, mode):
     import h5py
-
+    
     return h5py.File(path, mode=mode)
 
 
