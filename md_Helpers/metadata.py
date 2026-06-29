@@ -91,7 +91,6 @@ def write_metadata_groups(hdf5_path, groups, mode="a", overwrite=True):
 
     return hdf5_path
 
-
 def clear_attrs(hdf5_path, group_path="metadata"):
     hdf5_path = Path(hdf5_path)
 
@@ -156,11 +155,7 @@ def split_simulation_metadata(
         "starting_state_path",
         "source_state_path",
         "source_log_path",
-        "old_state_path",
-        "old_log_path",
         "source_data_version",
-        "migrated_from_data_version",
-        "migration_note",
     ]
 
     state = {
@@ -171,11 +166,6 @@ def split_simulation_metadata(
     for key in state_keys:
         if key in flat_metadata:
             state[key] = flat_metadata[key]
-
-    if "migrated_from_data_version" in flat_metadata:
-        state["migrated_from_data_version"] = flat_metadata[
-            "migrated_from_data_version"
-        ]
 
     run = {
         "run_kind": flat_metadata.get("run_kind", run_kind),
@@ -250,72 +240,3 @@ def write_datasets(hdf5_path, datasets, mode="a", overwrite=True):
             )
 
     return hdf5_path
-
-
-def write_creation_metadata(
-    hdf5_path,
-    source,
-    creation,
-    datasets=None,
-    overwrite=False,
-):
-    hdf5_path = Path(hdf5_path)
-
-    if hdf5_path.exists() and not overwrite:
-        raise FileExistsError(f"Creation metadata already exists: {hdf5_path}")
-
-    mode = "w" if overwrite or not hdf5_path.exists() else "a"
-
-    write_metadata_groups(
-        hdf5_path=hdf5_path,
-        mode=mode,
-        groups={
-            "metadata/source": source,
-            "metadata/creation": creation,
-        },
-        overwrite=True,
-    )
-
-    if datasets:
-        write_datasets(
-            hdf5_path=hdf5_path,
-            datasets=datasets,
-            mode="a",
-            overwrite=True,
-        )
-
-    return hdf5_path
-
-
-def append_run_metadata(
-    log_path,
-    state,
-    source=None,
-    run=None,
-    creation=None,
-    classification=None,
-    observables=None,
-    overwrite=True,
-):
-    groups = {
-        "metadata/state": state or {},
-    }
-
-    optional_groups = {
-        "metadata/source": source,
-        "metadata/run": run,
-        "metadata/creation": creation,
-        "metadata/classification": classification,
-        "metadata/observables": observables,
-    }
-
-    for group_path, attrs in optional_groups.items():
-        if attrs:
-            groups[group_path] = attrs
-
-    return write_metadata_groups(
-        hdf5_path=log_path,
-        groups=groups,
-        mode="a",
-        overwrite=overwrite,
-    )

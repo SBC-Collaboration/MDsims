@@ -8,7 +8,7 @@ one of three roles.
 ```text
 generated starting state -> one-frame GSD + creation metadata HDF5
 evolved run              -> trajectory GSD + log HDF5 + optional final GSD
-summary/search table     -> CSV or Parquet
+summary/search table     -> Parquet
 ```
 
 ## Folder Roots
@@ -88,3 +88,27 @@ metadata/classification/phase_separation/PE_drop
 ancestry such as parent state paths and source data versions. Parent groups
 such as `metadata` and `metadata/classification` are containers only and should
 not store attributes directly.
+
+## Helper Ownership
+
+```text
+paths.py                 V3 folder and file paths
+spatial.py               periodic geometry and voxel calculations
+lattices.py              FCC lattice creation
+simulation.py            HOOMD setup and thermalization
+runs.py                  HDF5/GSD writers and run execution
+classification.py        current voxel and PE-drop classifiers
+cavitation.py            cavitation creation and evolution
+cavitation_analysis.py   trajectory bubble measurements
+visualization.py         plotting and animation
+index.py                 searchable V3 Parquet index
+metadata.py              structured HDF5 metadata I/O
+```
+
+Build the searchable index with:
+
+```python
+from md_Helpers import index
+
+table = index.build_v3_index()
+```

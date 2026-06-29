@@ -3,15 +3,13 @@
 from pathlib import Path
 
 import hoomd
-import pandas as pd
 import h5py
 import gsd.hoomd
-import numpy as np
 
 from . import classification as ps
 from . import metadata as metadata_helpers
 from .classification import classify_final_state
-from .paths import THERMALIZED_STATES_V2_ROOT, THERMALIZED_STATES_V3_ROOT
+from .paths import THERMALIZED_STATES_V3_ROOT, thermalized_run_paths
 
 # ============================================================
 # Default phase-separation settings
@@ -20,18 +18,6 @@ from .paths import THERMALIZED_STATES_V2_ROOT, THERMALIZED_STATES_V3_ROOT
 DEFAULT_PHASE_SEP_NBINS = ps.DEFAULT_PHASE_SEP_NBINS
 DEFAULT_PHASE_SEP_DENSITY_THRESHOLD = ps.DEFAULT_PHASE_SEP_DENSITY_THRESHOLD
 DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD = ps.DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD
-
-
-
-
-# ============================================================
-# Backward-compatible phase-separation aliases
-# ============================================================
-
-check_phase_separated = ps.check_phase_separated
-compute_phase_separation_from_frame = ps.compute_phase_separation_from_frame
-write_phase_separation_metadata = ps.write_phase_separation_metadata
-update_all_v2_phase_separation_metadata = ps.update_all_v2_phase_separation_metadata
 
 
 
@@ -294,32 +280,6 @@ def save_final_state(
     print("GSD file:", gsd_path)
 
 
-def write_current_state_to_trajectory(
-    simulation,
-    trajectory_path,
-    mode="w",
-):
-    """
-    Write the current simulation state into a trajectory GSD file.
-
-    Use mode="w" to create a new trajectory with the current state as frame 0,
-    or mode="a" to append the current state to an existing trajectory.
-    """
-
-    frame = simulation_state_to_gsd_frame(simulation)
-
-    trajectory_path = Path(trajectory_path)
-    trajectory_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with gsd.hoomd.open(
-        name=str(trajectory_path),
-        mode=mode,
-    ) as trajectory:
-        trajectory.append(frame)
-
-    return trajectory_path
-
-
 # ============================================================
 # Build simulation metadata
 # ============================================================
@@ -431,81 +391,6 @@ def build_simulation_metadata(
 
 
 # ============================================================
-# Build phase file paths
-# ============================================================
-
-def get_phase_paths(
-    n_fcc_cells,
-    target_rho,
-    kT,
-    nsteps,
-    seed,
-    phase_name,
-    base_folder=THERMALIZED_STATES_V3_ROOT,
-):
-    """
-    Build standard V3 paths for a logged simulation phase.
-
-    Folder structure:
-
-        Thermalized_States_v3/
-            FCC/
-                n_cells_30/
-                    rho_0.500/
-                        kT_0.400/
-                            nsteps_1000000/
-                                seed_1/
-                                    randomization.gsd
-                                    randomization_log.hdf5
-    """
-
-    # ============================================================
-    # Format folder names
-    # ============================================================
-    n_cells_str = f"{int(n_fcc_cells)}"
-    rho_str = f"{target_rho:.3f}"
-    kT_str = f"{kT:.3f}"
-    nsteps_str = f"{int(nsteps)}"
-
-    if seed is None:
-        seed_str = "unknown"
-    else:
-        seed_str = f"{int(seed)}"
-
-    # ============================================================
-    # Build folder
-    # ============================================================
-    folder = (
-        Path(base_folder)
-        / "FCC"
-        / f"n_cells_{n_cells_str}"
-        / f"rho_{rho_str}"
-        / f"kT_{kT_str}"
-        / f"nsteps_{nsteps_str}"
-        / f"seed_{seed_str}"
-    )
-
-    # ============================================================
-    # Build files
-    # ============================================================
-    log_path = folder / f"{phase_name}_log.hdf5"
-    state_path = folder / f"{phase_name}.gsd"
-
-    return {
-        "folder": folder,
-        "log_path": log_path,
-        "state_path": state_path,
-
-        "phase_name": phase_name,
-        "n_fcc_cells": int(n_fcc_cells),
-        "target_rho": target_rho,
-        "kT": kT,
-        "nsteps": int(nsteps),
-        "seed": seed,
-    }
-
-
-# ============================================================
 # Run logged phase
 # ============================================================
 
@@ -579,7 +464,7 @@ def run_logged_phase(
     # ============================================================
     # Build paths
     # ============================================================
-    paths = get_phase_paths(
+    paths = thermalized_run_paths(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
         kT=kT,
@@ -677,14 +562,7 @@ def read_hdf5_log(
     """
     Read an HDF5 log file into a nested dictionary.
 
-    Special convention:
-    - normal group attributes are loaded under "attrs"
-    - phase-separation method groups are loaded directly by method name
-
-    Example:
-        log["metadata"]["attrs"]
-        log["metadata"]["phase_separation"]["voxel"]
-        log["metadata"]["phase_separation"]["fit"]
+    Group attributes are returned under each group's "attrs" key.
     """
 
     log_path = Path(log_path)
@@ -736,42 +614,6 @@ def read_hdf5_log(
 
         attrs = attrs_to_dict(group)
 
-        # --------------------------------------------------------
-        # Backward compatibility:
-        #
-        # Old files had:
-        #     metadata/phase_separation.attrs["density_threshold"]
-        #
-        # New loaded form should be:
-        #     log["metadata"]["phase_separation"]["voxel"]
-        # --------------------------------------------------------
-        if group.name == "/metadata/phase_separation":
-            if "voxel" not in output:
-                output["voxel"] = attrs
-            return
-
-        # --------------------------------------------------------
-        # New method groups:
-        #
-        #     metadata/phase_separation/voxel.attrs
-        #     metadata/classification/phase_separation/voxel.attrs
-        #
-        # Load method attrs directly into the method dictionary.
-        #
-        #     log["metadata"]["classification"]["phase_separation"]["voxel"]
-        # --------------------------------------------------------
-        if (
-            group.name.startswith("/metadata/phase_separation/")
-            or group.name.startswith(
-                "/metadata/classification/phase_separation/"
-            )
-        ):
-            output.update(attrs)
-            return
-
-        # --------------------------------------------------------
-        # Normal HDF5 behavior everywhere else
-        # --------------------------------------------------------
         output["attrs"] = attrs
 
     with h5py.File(log_path, mode="r") as hdf:
@@ -782,186 +624,6 @@ def read_hdf5_log(
 
 
 
-
-
-# ============================================================
-# Delete one V2 saved state and log
-# ============================================================
-
-def delete_v2_state_files(
-    n_fcc_cells,
-    target_rho,
-    kT,
-    nsteps,
-    seed=1,
-    phase_name="randomization",
-    base_folder=THERMALIZED_STATES_V2_ROOT,
-    dry_run=True,
-    confirm_delete=False,
-    delete_empty_folder=True,
-    verbose=True,
-):
-    """
-    Delete the saved GSD state file and HDF5 log file for one chosen V2 state.
-
-    This deletes:
-
-        randomization.gsd
-        randomization_log.hdf5
-
-    for the state identified by:
-
-        n_fcc_cells
-        target_rho
-        kT
-        nsteps
-        seed
-        phase_name
-
-    Parameters
-    ----------
-    dry_run : bool
-        If True, only show what would be deleted.
-
-    confirm_delete : bool
-        Must be True if dry_run=False.
-        This is just a safety catch against accidental deletion.
-
-    delete_empty_folder : bool
-        If True, remove the state folder afterward if it is empty.
-
-    Returns
-    -------
-    report_df : pandas.DataFrame
-        Summary of what was deleted or what would be deleted.
-    """
-
-    # ============================================================
-    # Safety check
-    # ============================================================
-
-    if not dry_run and not confirm_delete:
-        raise ValueError(
-            "This is a destructive operation. "
-            "Set confirm_delete=True if you really want to delete files."
-        )
-
-    # ============================================================
-    # Build expected paths
-    # ============================================================
-
-    paths = get_phase_paths(
-        n_fcc_cells=n_fcc_cells,
-        target_rho=target_rho,
-        kT=kT,
-        nsteps=nsteps,
-        seed=seed,
-        phase_name=phase_name,
-        base_folder=base_folder,
-    )
-
-    state_path = Path(paths["state_path"])
-    log_path = Path(paths["log_path"])
-    folder = Path(paths["folder"])
-
-    files_to_delete = [
-        ("state_path", state_path),
-        ("log_path", log_path),
-    ]
-
-    rows = []
-
-    # ============================================================
-    # Delete files, or show what would be deleted
-    # ============================================================
-
-    for file_label, file_path in files_to_delete:
-        exists_before = file_path.exists()
-
-        if dry_run:
-            if exists_before:
-                action = "would_delete"
-            else:
-                action = "missing"
-
-        else:
-            if exists_before:
-                file_path.unlink()
-                action = "deleted"
-            else:
-                action = "missing"
-
-        rows.append({
-            "file_label": file_label,
-            "path": str(file_path),
-            "exists_before": bool(exists_before),
-            "action": action,
-        })
-
-    # ============================================================
-    # Optionally remove empty folder
-    # ============================================================
-
-    folder_exists_before = folder.exists()
-    folder_action = "not_checked"
-
-    if delete_empty_folder:
-        if dry_run:
-            if folder_exists_before:
-                try:
-                    folder_is_empty = not any(folder.iterdir())
-                except Exception:
-                    folder_is_empty = False
-
-                if folder_is_empty:
-                    folder_action = "would_remove_empty_folder"
-                else:
-                    folder_action = "folder_not_empty"
-            else:
-                folder_action = "folder_missing"
-
-        else:
-            if folder_exists_before:
-                try:
-                    if not any(folder.iterdir()):
-                        folder.rmdir()
-                        folder_action = "removed_empty_folder"
-                    else:
-                        folder_action = "folder_not_empty"
-                except Exception as error:
-                    folder_action = f"failed_to_remove_folder: {repr(error)}"
-            else:
-                folder_action = "folder_missing"
-
-        rows.append({
-            "file_label": "folder",
-            "path": str(folder),
-            "exists_before": bool(folder_exists_before),
-            "action": folder_action,
-        })
-
-    report_df = pd.DataFrame(rows)
-
-    # ============================================================
-    # Print summary
-    # ============================================================
-
-    if verbose:
-        print("Delete V2 state files")
-        print("=" * 70)
-        print("n_fcc_cells =", n_fcc_cells)
-        print("target_rho  =", target_rho)
-        print("kT          =", kT)
-        print("nsteps      =", nsteps)
-        print("seed        =", seed)
-        print("phase_name  =", phase_name)
-        print("dry_run     =", dry_run)
-        print("=" * 70)
-
-        for _, row in report_df.iterrows():
-            print(row["action"], "|", row["path"])
-
-    return report_df
 
 
 # ============================================================
@@ -1008,176 +670,6 @@ def stop_gsd_trajectory_writer(simulation, writer_handle):
         simulation.operations.writers.remove(writer)
 
 
-def remove_duplicate_initial_trajectory_frame(
-    trajectory_path,
-):
-    """
-    Remove a duplicate timestep-0 frame if HOOMD also wrote one.
-    """
-
-    trajectory_path = Path(trajectory_path)
-
-    with gsd.hoomd.open(
-        name=str(trajectory_path),
-        mode="r",
-    ) as trajectory:
-        if len(trajectory) < 2:
-            return False
-
-        first_step = int(trajectory[0].configuration.step)
-        second_step = int(trajectory[1].configuration.step)
-
-        if first_step != second_step:
-            return False
-
-        tmp_path = trajectory_path.with_suffix(
-            trajectory_path.suffix + ".tmp"
-        )
-
-        with gsd.hoomd.open(
-            name=str(tmp_path),
-            mode="w",
-        ) as cleaned:
-            cleaned.append(trajectory[0])
-
-            for frame_index in range(2, len(trajectory)):
-                cleaned.append(trajectory[frame_index])
-
-    tmp_path.replace(trajectory_path)
-
-    return True
-
-
-def _collect_initial_log_row(
-    simulation,
-    logger_handle,
-):
-    """
-    Collect the timestep-0 thermodynamic values for evolved-run logs.
-    """
-
-    thermo = logger_handle["thermo"]
-    tps = getattr(simulation, "tps", 0.0)
-
-    if tps is None:
-        tps = 0.0
-
-    initial_row = {
-        "hoomd-data/Simulation/timestep": int(simulation.timestep),
-        "hoomd-data/Simulation/tps": float(tps),
-        (
-            "hoomd-data/md/compute/ThermodynamicQuantities/"
-            "kinetic_temperature"
-        ): float(thermo.kinetic_temperature),
-        (
-            "hoomd-data/md/compute/ThermodynamicQuantities/"
-            "pressure"
-        ): float(thermo.pressure),
-        (
-            "hoomd-data/md/compute/ThermodynamicQuantities/"
-            "pressure_tensor"
-        ): np.asarray(thermo.pressure_tensor, dtype=float),
-        (
-            "hoomd-data/md/compute/ThermodynamicQuantities/"
-            "potential_energy"
-        ): float(thermo.potential_energy),
-        (
-            "hoomd-data/md/compute/ThermodynamicQuantities/"
-            "kinetic_energy"
-        ): float(thermo.kinetic_energy),
-    }
-
-    return initial_row
-
-
-def _prepend_value_to_dataset(
-    hdf,
-    dataset_path,
-    value,
-):
-    """
-    Prepend one value to a dataset, creating it if it does not exist.
-    """
-
-    parent_path, dataset_name = dataset_path.rsplit("/", 1)
-    parent = hdf.require_group(parent_path)
-
-    value = np.asarray(value)
-
-    if dataset_name not in parent:
-        if value.shape == ():
-            data = value.reshape(1)
-        else:
-            data = value.reshape((1,) + value.shape)
-
-        parent.create_dataset(dataset_name, data=data)
-        return True
-
-    dataset = parent[dataset_name]
-    old_data = dataset[()]
-
-    if old_data.shape[0] > 0:
-        first_value = old_data[0]
-
-        if np.array_equal(first_value, value):
-            return False
-
-    if old_data.ndim == 1:
-        new_value = value.reshape(1)
-    else:
-        new_value = value.reshape((1,) + old_data.shape[1:])
-
-    new_data = np.concatenate(
-        [new_value, old_data],
-        axis=0,
-    )
-
-    del parent[dataset_name]
-    parent.create_dataset(dataset_name, data=new_data)
-
-    return True
-
-
-def prepend_initial_log_row(
-    log_path,
-    initial_row,
-):
-    """
-    Ensure an HDF5 log starts with the collected initial thermodynamic row.
-    """
-
-    log_path = Path(log_path)
-
-    if not log_path.exists():
-        raise FileNotFoundError(f"Log file does not exist: {log_path}")
-
-    changed = []
-
-    with h5py.File(log_path, mode="a") as hdf:
-        timestep_path = "hoomd-data/Simulation/timestep"
-
-        if timestep_path in hdf:
-            timestep_data = hdf[timestep_path][()]
-
-            if (
-                len(timestep_data) > 0
-                and int(timestep_data[0]) == int(initial_row[timestep_path])
-            ):
-                return changed
-
-        for dataset_path, value in initial_row.items():
-            did_change = _prepend_value_to_dataset(
-                hdf=hdf,
-                dataset_path=dataset_path,
-                value=value,
-            )
-
-            if did_change:
-                changed.append(dataset_path)
-
-    return changed
-
-
 def run_logged_trajectory_phase(
     simulation,
     nsteps,
@@ -1189,8 +681,7 @@ def run_logged_trajectory_phase(
     metadata_groups=None,
     classify_final=True,
     classification_kwargs=None,
-    include_initial_frame=True,
-    include_initial_log=True,
+    include_initial=True,
 ):
     """
     Run any evolved phase with one shared pattern:
@@ -1215,43 +706,26 @@ def run_logged_trajectory_phase(
         log_path=log_path,
         log_period=log_period,
     )
+    trajectory_handle = None
 
-    trajectory_handle = start_gsd_trajectory_writer(
-        simulation=simulation,
-        trajectory_path=trajectory_path,
-        trajectory_period=trajectory_period,
-        mode="wb",
-    )
-
-    simulation.run(
-        0,
-        write_at_start=include_initial_frame,
-    )
-
-    initial_log_row = None
-
-    if include_initial_log:
-        initial_log_row = _collect_initial_log_row(
+    try:
+        trajectory_handle = start_gsd_trajectory_writer(
             simulation=simulation,
-            logger_handle=logger_handle,
+            trajectory_path=trajectory_path,
+            trajectory_period=trajectory_period,
+            mode="wb",
         )
-
-    simulation.run(int(nsteps))
-
-    stop_gsd_trajectory_writer(
-        simulation=simulation,
-        writer_handle=trajectory_handle,
-    )
-
-    stop_hdf5_logger(
-        simulation=simulation,
-        logger_objects=logger_handle,
-    )
-
-    if include_initial_log and initial_log_row is not None:
-        prepend_initial_log_row(
-            log_path=log_path,
-            initial_row=initial_log_row,
+        simulation.run(0, write_at_start=include_initial)
+        simulation.run(int(nsteps))
+    finally:
+        if trajectory_handle is not None:
+            stop_gsd_trajectory_writer(
+                simulation=simulation,
+                writer_handle=trajectory_handle,
+            )
+        stop_hdf5_logger(
+            simulation=simulation,
+            logger_objects=logger_handle,
         )
 
     if final_state_path is not None:
@@ -1284,29 +758,3 @@ def run_logged_trajectory_phase(
         "final_state_path": final_state_path,
         "classification_result": classification_result,
     }
-
-
-def save_last_frame_as_gsd(
-    trajectory_path,
-    final_state_path,
-    overwrite=False,
-):
-    """
-    Save the last frame of a trajectory as a one-frame GSD file.
-    """
-
-    trajectory_path = Path(trajectory_path)
-    final_state_path = Path(final_state_path)
-
-    if final_state_path.exists() and not overwrite:
-        return final_state_path
-
-    final_state_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
-        frame = trajectory[-1]
-
-    with gsd.hoomd.open(name=str(final_state_path), mode="w") as final_file:
-        final_file.append(frame)
-
-    return final_state_path

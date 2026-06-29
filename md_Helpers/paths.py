@@ -8,22 +8,6 @@ from pathlib import Path
 PROJECT_ROOT = Path("/exp/e961/data/MDsims-data/pnichols")
 
 
-# Version 1: set box length
-SIMPLE_LATTICES_ROOT = PROJECT_ROOT / "Simple_Lattices"
-THERMALIZED_STATES_ROOT = PROJECT_ROOT / "Thermalized_States"
-
-
-# Version 2: set particle count from n_fcc_cells
-SIMPLE_LATTICES_V2_ROOT = PROJECT_ROOT / "Simple_Lattices_v2"
-THERMALIZED_STATES_V2_ROOT = PROJECT_ROOT / "Thermalized_States_v2"
-
-
-# Current cavitation folders
-CAVITATION_STATES_ROOT = PROJECT_ROOT / "Cavitation_States"
-CAVITATION_EVOLVED_ROOT = PROJECT_ROOT / "Cavitation_Evolved"
-
-
-# Version 3 modular state/run folders
 SIMPLE_LATTICES_V3_ROOT = PROJECT_ROOT / "Simple_Lattices_v3"
 THERMALIZED_STATES_V3_ROOT = PROJECT_ROOT / "Thermalized_States_v3"
 
@@ -85,6 +69,8 @@ def thermalized_run_paths(
     phase_name="randomization",
     base_folder=THERMALIZED_STATES_V3_ROOT,
 ):
+    seed_label = "unknown" if seed is None else str(int(seed))
+
     folder = (
         Path(base_folder)
         / "FCC"
@@ -92,7 +78,7 @@ def thermalized_run_paths(
         / f"rho_{format_float(target_rho)}"
         / f"kT_{format_float(kT)}"
         / f"nsteps_{int(nsteps)}"
-        / f"seed_{int(seed)}"
+        / f"seed_{seed_label}"
     )
 
     return {
@@ -280,5 +266,5 @@ def excitation_evolved_paths(
     }
 
 
-def master_csv_path(name, base_folder=MASTER_CSVS_V3_ROOT):
-    return Path(base_folder) / f"{name}.csv"
+def index_path(name="v3_simulation_index", base_folder=MASTER_CSVS_V3_ROOT):
+    return Path(base_folder) / f"{name}.parquet"

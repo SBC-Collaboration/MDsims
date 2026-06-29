@@ -1,12 +1,11 @@
 # simulation.py
 
-from pathlib import Path
-
 import hoomd
 import gsd.hoomd
 
 from . import runs as lh
 from . import lattices as cl
+from .paths import lattice_paths, thermalized_run_paths
 
 
 # ============================================================
@@ -237,7 +236,7 @@ def thermalize_and_randomize(
         return simulation
 
     # ============================================================
-    # Required V2 metadata
+    # Required lattice metadata
     # ============================================================
     if metadata.get("n_fcc_cells") is None:
         raise ValueError(
@@ -322,7 +321,7 @@ def get_or_make_thermalized_state(
     # ============================================================
     # Build expected thermalized-state paths
     # ============================================================
-    paths = lh.get_phase_paths(
+    paths = thermalized_run_paths(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
         kT=kT,
@@ -364,10 +363,10 @@ def get_or_make_thermalized_state(
         overwrite=overwrite_lattice,
     )
 
-    lattice_path = cl.get_lattice_path(
+    lattice_path = lattice_paths(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
-    )
+    )["state_path"]
 
     # ============================================================
     # Create simulation

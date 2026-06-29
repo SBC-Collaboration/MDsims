@@ -11,6 +11,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 
+from .spatial import (
+    as_snapshot as _as_snapshot,
+    compute_voxel_densities,
+    positions_and_box,
+)
 
 device = fresnel.Device()
 tracer = fresnel.tracer.Path(device=device, w=300, h=300)
@@ -19,98 +24,9 @@ FRESNEL_MIN_VERSION = packaging.version.parse("0.13.0")
 FRESNEL_MAX_VERSION = packaging.version.parse("0.14.0")
 
 
-# ============================================================
-# Convert input to snapshot/frame
-# ============================================================
-
-def _as_snapshot(obj):
-    """
-    Accept:
-    - result dictionary from sh.get_or_make_thermalized_state(...)
-    - HOOMD simulation
-    - HOOMD state
-    - HOOMD snapshot
-    - GSD frame
-
-    Return something with:
-    - configuration.box
-    - particles.position
-    """
-
-    # ============================================================
-    # Result dictionary from get_or_make_thermalized_state
-    # ============================================================
-    if isinstance(obj, dict):
-        if "frame" in obj and obj["frame"] is not None:
-            return _as_snapshot(obj["frame"])
-
-        if "simulation" in obj and obj["simulation"] is not None:
-            return _as_snapshot(obj["simulation"])
-
-        raise TypeError(
-            "Result dictionary does not contain a usable frame or simulation."
-        )
-
-    # ============================================================
-    # None check
-    # ============================================================
-    if obj is None:
-        raise TypeError(
-            "Cannot convert None to snapshot. If this came from "
-            "result['simulation'], the state was probably loaded from disk. "
-            "Use result or result['frame'] instead."
-        )
-
-    # ============================================================
-    # HOOMD simulation
-    # ============================================================
-    if hasattr(obj, "state") and hasattr(obj.state, "get_snapshot"):
-        return obj.state.get_snapshot()
-
-    # ============================================================
-    # HOOMD state
-    # ============================================================
-    if hasattr(obj, "get_snapshot"):
-        return obj.get_snapshot()
-
-    # ============================================================
-    # GSD frame or HOOMD snapshot
-    # ============================================================
-    if hasattr(obj, "configuration") and hasattr(obj, "particles"):
-        return obj
-
-    raise TypeError(
-        "Expected a result dictionary, HOOMD simulation, "
-        "HOOMD state, HOOMD snapshot, or GSD frame."
-    )
-
-
-# ============================================================
-# Extract positions and box lengths
-# ============================================================
-
 def _get_positions_and_box(obj):
-    """
-    Extract particle positions and box lengths from any supported object.
-    """
-
-    snapshot = _as_snapshot(obj)
-
-    positions = np.asarray(
-        snapshot.particles.position,
-        dtype=np.float64,
-    )
-
-    box = np.asarray(
-        snapshot.configuration.box,
-        dtype=np.float64,
-    )
-
-    Lx = float(box[0])
-    Ly = float(box[1])
-    Lz = float(box[2])
-
-    return positions, Lx, Ly, Lz, snapshot
+    positions, box_lengths, snapshot = positions_and_box(obj, wrap=True)
+    return positions, *map(float, box_lengths), snapshot
 
 
 # ============================================================
@@ -191,68 +107,6 @@ def render(obj):
     return IPython.display.Image(
         tracer.sample(scene, samples=samples)._repr_png_()
     )
-
-
-# ============================================================
-# Compute voxel densities
-# ============================================================
-
-def compute_voxel_densities(
-    obj,
-    nbins=10,
-):
-    """
-    Compute voxel densities.
-
-    Input can be:
-    - result dictionary from sh.get_or_make_thermalized_state(...)
-    - HOOMD simulation
-    - HOOMD state
-    - HOOMD snapshot
-    - GSD frame
-
-    Returns
-    -------
-    voxel_densities : np.ndarray
-        Flattened array of voxel densities.
-
-    voxel_counts : np.ndarray
-        Flattened array of particle counts per voxel.
-
-    voxel_volume : float
-        Volume of one voxel.
-    """
-
-    # ============================================================
-    # Extract positions and box
-    # ============================================================
-    positions, Lx, Ly, Lz, snapshot = _get_positions_and_box(obj)
-
-    bounds = [
-        [-Lx / 2, Lx / 2],
-        [-Ly / 2, Ly / 2],
-        [-Lz / 2, Lz / 2],
-    ]
-
-    voxel_volume = (Lx / nbins) * (Ly / nbins) * (Lz / nbins)
-
-    # ============================================================
-    # Count particles in each voxel
-    # ============================================================
-    voxel_counts, _ = np.histogramdd(
-        positions,
-        bins=nbins,
-        range=bounds,
-    )
-
-    voxel_counts = voxel_counts.ravel()
-
-    # ============================================================
-    # Convert counts to voxel densities
-    # ============================================================
-    voxel_densities = voxel_counts / voxel_volume
-
-    return voxel_densities, voxel_counts, voxel_volume
 
 
 # ============================================================
@@ -1024,7 +878,7 @@ def plot_cavitation_measurements(
     figsize=(10, 8),
 ):
     """
-    Plot the main diagnostics from cavitation.measure_cavitation_trajectory().
+    Plot diagnostics from cavitation_analysis.measure_cavitation_trajectory().
     """
 
     if "timestep" not in measurements:

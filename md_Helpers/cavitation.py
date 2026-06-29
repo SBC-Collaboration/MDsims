@@ -4,7 +4,6 @@ from pathlib import Path
 
 import gsd.hoomd
 import numpy as np
-import pandas as pd
 
 from . import metadata as metadata_helpers
 from . import runs as run_helpers
@@ -13,7 +12,9 @@ from .paths import (
     CAVITATION_STATES_V3_ROOT,
     cavitation_evolved_paths,
     cavitation_state_paths,
+    thermalized_run_paths,
 )
+from .spatial import periodic_distances
 
 
 # ============================================================
@@ -125,42 +126,6 @@ def choose_bubble_center(
         raise ValueError("bubble_center must have shape (3,)")
 
     return bubble_center
-
-
-def compute_periodic_distances_from_center(
-    positions,
-    bubble_center,
-    box_lengths,
-):
-    """
-    Compute distances from bubble_center using periodic minimum images.
-    """
-
-    positions = np.asarray(
-        positions,
-        dtype=np.float64,
-    )
-
-    bubble_center = np.asarray(
-        bubble_center,
-        dtype=np.float64,
-    )
-
-    box_lengths = np.asarray(
-        box_lengths,
-        dtype=np.float64,
-    )
-
-    displacements = positions - bubble_center
-    displacements = (
-        displacements
-        - box_lengths * np.round(displacements / box_lengths)
-    )
-
-    return np.linalg.norm(
-        displacements,
-        axis=1,
-    )
 
 
 def _copy_masked_particle_fields(
@@ -285,11 +250,7 @@ def make_cavitated_frame_from_frame(
 
     bubble_radius = radius_fraction * (BoxLength / 2.0)
 
-    distances = compute_periodic_distances_from_center(
-        positions=positions,
-        bubble_center=center,
-        box_lengths=box_lengths,
-    )
+    distances = periodic_distances(positions, center, box_lengths)
 
     remove_mask = distances <= bubble_radius
     keep_mask = ~remove_mask
@@ -373,7 +334,7 @@ def get_source_randomization_result(
     Get the thermalized source state used to create the bubble.
     """
 
-    source_paths = run_helpers.get_phase_paths(
+    source_paths = thermalized_run_paths(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
         kT=kT,
@@ -426,44 +387,6 @@ def get_source_randomization_result(
         seed=source_seed,
         overwrite=overwrite_source,
     )
-
-
-# ============================================================
-# V3 path and metadata helpers
-# ============================================================
-
-def get_cavitation_state_path(
-    n_fcc_cells,
-    target_rho,
-    kT,
-    source_nsteps,
-    radius_fraction,
-    source_seed=1,
-    source_phase_name="randomization",
-    random_location=False,
-    bubble_seed=1,
-    bubble_center=None,
-    base_folder=CAVITATION_STATES_V3_ROOT,
-):
-    """
-    Backward-compatible path helper for the V3 cavitation initial state.
-    """
-
-    paths = cavitation_state_paths(
-        n_fcc_cells=n_fcc_cells,
-        source_rho=target_rho,
-        kT=kT,
-        source_nsteps=source_nsteps,
-        source_seed=source_seed,
-        radius_fraction=radius_fraction,
-        source_phase_name=source_phase_name,
-        center=bubble_center,
-        random_location=random_location,
-        bubble_seed=bubble_seed,
-        base_folder=base_folder,
-    )
-
-    return paths["state_path"]
 
 
 def _frame_state_metadata(
@@ -783,26 +706,6 @@ def get_or_create_cavitation_state(
     }
 
 
-def make_or_load_cavitated_state(
-    *args,
-    return_info=False,
-    **kwargs,
-):
-    """
-    Backward-compatible wrapper around get_or_create_cavitation_state.
-    """
-
-    result = get_or_create_cavitation_state(
-        *args,
-        **kwargs,
-    )
-
-    if return_info:
-        return result["frame"], result["creation_info"]
-
-    return result["frame"]
-
-
 # ============================================================
 # Cavitation evolution
 # ============================================================
@@ -924,7 +827,7 @@ def _build_evolution_metadata_groups(
     return groups
 
 
-def get_or_create_cavitation_evolution(
+def get_or_create_cavitation(
     n_fcc_cells,
     target_rho,
     kT,
@@ -1098,365 +1001,3 @@ def get_or_create_cavitation_evolution(
         "run_result": run_result,
         "created_new": True,
     }
-
-
-get_or_create_cavitation = get_or_create_cavitation_evolution
-
-
-# ============================================================
-# Cavitation trajectory measurements
-# ============================================================
-
-def _get_path_from_result_or_value(
-    obj,
-    key,
-    explicit_value=None,
-):
-    if explicit_value is not None:
-        return Path(explicit_value)
-
-    if isinstance(obj, dict):
-        paths = obj.get("paths", {})
-
-        if key in paths:
-            return Path(paths[key])
-
-        run_result = obj.get("run_result", {})
-
-        if key in run_result:
-            return Path(run_result[key])
-
-    raise ValueError(
-        f"Could not infer {key}. Pass it explicitly."
-    )
-
-
-def _get_creation_info_from_result_or_log(
-    obj=None,
-    log_path=None,
-):
-    if isinstance(obj, dict):
-        if "creation_info" in obj:
-            return dict(obj["creation_info"])
-
-        if "initial_result" in obj:
-            initial_result = obj["initial_result"]
-
-            if isinstance(initial_result, dict):
-                return dict(initial_result.get("creation_info", {}))
-
-    if log_path is not None and Path(log_path).exists():
-        return metadata_helpers.read_attrs(
-            log_path,
-            "metadata/creation",
-        )
-
-    return {}
-
-
-def _bubble_center_from_creation_info(
-    creation_info,
-    bubble_center=None,
-):
-    if bubble_center is not None:
-        return np.asarray(
-            bubble_center,
-            dtype=np.float64,
-        )
-
-    if "bubble_center" in creation_info:
-        center = np.asarray(
-            creation_info["bubble_center"],
-            dtype=np.float64,
-        )
-
-        if center.shape == (3,):
-            return center
-
-    return np.array(
-        [
-            float(creation_info.get("bubble_center_x", 0.0)),
-            float(creation_info.get("bubble_center_y", 0.0)),
-            float(creation_info.get("bubble_center_z", 0.0)),
-        ],
-        dtype=np.float64,
-    )
-
-
-def _estimate_bubble_from_radial_density(
-    distances,
-    box_lengths,
-    bulk_density,
-    n_radial_bins=80,
-    density_threshold_fraction=0.5,
-):
-    max_radius = 0.5 * float(np.min(box_lengths))
-
-    edges = np.linspace(
-        0.0,
-        max_radius,
-        int(n_radial_bins) + 1,
-    )
-
-    counts, edges = np.histogram(
-        distances,
-        bins=edges,
-    )
-
-    shell_volumes = (
-        (4.0 / 3.0)
-        * np.pi
-        * (edges[1:]**3 - edges[:-1]**3)
-    )
-
-    shell_densities = counts / shell_volumes
-    threshold_density = float(density_threshold_fraction) * float(bulk_density)
-    low_density_mask = shell_densities < threshold_density
-
-    if len(low_density_mask) == 0 or not low_density_mask[0]:
-        bubble_radius = 0.0
-
-    elif np.all(low_density_mask):
-        bubble_radius = max_radius
-
-    else:
-        first_recovered_bin = int(np.argmax(~low_density_mask))
-        bubble_radius = float(edges[first_recovered_bin])
-
-    void_volume = (4.0 / 3.0) * np.pi * bubble_radius**3
-
-    return {
-        "bubble_radius_estimate": float(bubble_radius),
-        "void_volume_estimate": float(void_volume),
-        "radial_density_threshold": float(threshold_density),
-        "min_shell_density": float(np.min(shell_densities)),
-        "max_shell_density": float(np.max(shell_densities)),
-        "mean_shell_density": float(np.mean(shell_densities)),
-    }
-
-
-def _read_thermo_log_dataframe(
-    log_path,
-):
-    log_path = Path(log_path)
-
-    if not log_path.exists():
-        return pd.DataFrame()
-
-    log = run_helpers.read_hdf5_log(log_path)
-
-    try:
-        timestep = np.asarray(
-            log["hoomd-data"]["Simulation"]["timestep"],
-            dtype=np.int64,
-        )
-
-        thermo = (
-            log["hoomd-data"]["md"]
-               ["compute"]
-               ["ThermodynamicQuantities"]
-        )
-
-    except KeyError:
-        return pd.DataFrame()
-
-    data = {
-        "timestep": timestep,
-    }
-
-    for quantity in [
-        "kinetic_temperature",
-        "pressure",
-        "potential_energy",
-        "kinetic_energy",
-    ]:
-        if quantity in thermo:
-            data[quantity] = np.asarray(
-                thermo[quantity],
-                dtype=float,
-            )
-
-    return pd.DataFrame(data)
-
-
-def measure_cavitation_trajectory(
-    evolution=None,
-    trajectory_path=None,
-    log_path=None,
-    bubble_center=None,
-    n_radial_bins=80,
-    density_threshold_fraction=0.5,
-    initial_radius=None,
-    save_csv_path=None,
-):
-    """
-    Measure bubble and thermodynamic diagnostics for a cavitation trajectory.
-
-    Parameters
-    ----------
-    evolution : dict, optional
-        Result from get_or_create_cavitation(...).
-
-    trajectory_path : path-like, optional
-        Direct path to cavitation_trajectory.gsd.
-
-    log_path : path-like, optional
-        Direct path to cavitation_log.hdf5.
-
-    density_threshold_fraction : float
-        Bubble radius is estimated as the first radius where radial shell
-        density recovers above this fraction of the frame bulk density.
-
-    initial_radius : float, optional
-        Radius used to compute density inside the original bubble region.
-        Defaults to the creation metadata bubble_radius when available.
-
-    save_csv_path : path-like, optional
-        If provided, write the resulting DataFrame to this CSV path.
-    """
-
-    trajectory_path = _get_path_from_result_or_value(
-        evolution,
-        key="trajectory_path",
-        explicit_value=trajectory_path,
-    )
-
-    try:
-        log_path = _get_path_from_result_or_value(
-            evolution,
-            key="log_path",
-            explicit_value=log_path,
-        )
-    except ValueError:
-        log_path = None
-
-    creation_info = _get_creation_info_from_result_or_log(
-        obj=evolution,
-        log_path=log_path,
-    )
-
-    center = _bubble_center_from_creation_info(
-        creation_info=creation_info,
-        bubble_center=bubble_center,
-    )
-
-    if initial_radius is None:
-        initial_radius = creation_info.get("bubble_radius", None)
-
-    if initial_radius is not None:
-        initial_radius = float(initial_radius)
-
-    rows = []
-
-    with gsd.hoomd.open(
-        name=str(trajectory_path),
-        mode="r",
-    ) as trajectory:
-        for frame_index, frame in enumerate(trajectory):
-            positions = np.asarray(
-                frame.particles.position,
-                dtype=np.float64,
-            )
-
-            box = np.asarray(
-                frame.configuration.box,
-                dtype=np.float64,
-            )
-
-            box_lengths = np.array(
-                [box[0], box[1], box[2]],
-                dtype=np.float64,
-            )
-
-            volume = float(np.prod(box_lengths))
-            N = int(frame.particles.N)
-            bulk_density = float(N / volume)
-
-            distances = compute_periodic_distances_from_center(
-                positions=positions,
-                bubble_center=center,
-                box_lengths=box_lengths,
-            )
-
-            bubble = _estimate_bubble_from_radial_density(
-                distances=distances,
-                box_lengths=box_lengths,
-                bulk_density=bulk_density,
-                n_radial_bins=n_radial_bins,
-                density_threshold_fraction=density_threshold_fraction,
-            )
-
-            row = {
-                "frame_index": int(frame_index),
-                "timestep": int(frame.configuration.step),
-                "N": N,
-                "BoxLength_x": float(box_lengths[0]),
-                "BoxLength_y": float(box_lengths[1]),
-                "BoxLength_z": float(box_lengths[2]),
-                "volume": volume,
-                "bulk_density": bulk_density,
-                "bubble_center_x": float(center[0]),
-                "bubble_center_y": float(center[1]),
-                "bubble_center_z": float(center[2]),
-            }
-
-            row.update(bubble)
-
-            row["void_fraction_estimate"] = (
-                row["void_volume_estimate"] / volume
-            )
-
-            if initial_radius is not None:
-                initial_region_volume = (
-                    (4.0 / 3.0)
-                    * np.pi
-                    * initial_radius**3
-                )
-                particles_inside_initial_radius = int(
-                    np.sum(distances <= initial_radius)
-                )
-
-                row["initial_bubble_radius"] = initial_radius
-                row["particles_inside_initial_radius"] = (
-                    particles_inside_initial_radius
-                )
-                row["density_inside_initial_radius"] = (
-                    particles_inside_initial_radius / initial_region_volume
-                )
-
-            rows.append(row)
-
-    measurements = pd.DataFrame(rows)
-
-    if log_path is not None:
-        thermo = _read_thermo_log_dataframe(log_path)
-
-        if not thermo.empty:
-            measurements = measurements.merge(
-                thermo,
-                on="timestep",
-                how="left",
-            )
-
-            if "potential_energy" in measurements:
-                measurements["PE_per_particle"] = (
-                    measurements["potential_energy"] / measurements["N"]
-                )
-
-            if "kinetic_energy" in measurements:
-                measurements["KE_per_particle"] = (
-                    measurements["kinetic_energy"] / measurements["N"]
-                )
-
-    if save_csv_path is not None:
-        save_csv_path = Path(save_csv_path)
-        save_csv_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-        measurements.to_csv(
-            save_csv_path,
-            index=False,
-        )
-
-    return measurements

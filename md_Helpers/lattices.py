@@ -2,9 +2,8 @@
 
 import numpy as np
 import gsd.hoomd
-from pathlib import Path
 
-from .paths import SIMPLE_LATTICES_V3_ROOT
+from .paths import SIMPLE_LATTICES_V3_ROOT, lattice_paths
 
 
 # ============================================================
@@ -88,7 +87,7 @@ def get_fcc_lattice_info(
 # Fill FCC lattice by number of FCC cells
 # ============================================================
 
-def FillFccLattice(
+def fill_fcc_lattice(
     n_fcc_cells,
     target_rho,
 ):
@@ -196,39 +195,6 @@ def FillFccLattice(
 
 
 # ============================================================
-# Get lattice path
-# ============================================================
-
-def get_lattice_path(
-    n_fcc_cells,
-    target_rho,
-    base_folder=SIMPLE_LATTICES_V3_ROOT,
-):
-    """
-    Build the V3 lattice path.
-
-    Folder structure:
-
-        Simple_Lattices_v3/
-            FCC/
-                n_cells_30/
-                    rho_0.500/
-                        lattice.gsd
-    """
-
-    n_cells_str = f"{int(n_fcc_cells)}"
-    rho_str = f"{target_rho:.3f}"
-
-    return (
-        Path(base_folder)
-        / "FCC"
-        / f"n_cells_{n_cells_str}"
-        / f"rho_{rho_str}"
-        / "lattice.gsd"
-    )
-
-
-# ============================================================
 # Make or load lattice frame
 # ============================================================
 
@@ -278,11 +244,11 @@ def make_lattice_frame(
     # ============================================================
     # Build lattice path
     # ============================================================
-    filepath = get_lattice_path(
+    filepath = lattice_paths(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
         base_folder=base_folder,
-    )
+    )["state_path"]
 
     # ============================================================
     # Load existing file if present
@@ -300,7 +266,7 @@ def make_lattice_frame(
     # ============================================================
     # Create new FCC lattice
     # ============================================================
-    positions, info = FillFccLattice(
+    positions, info = fill_fcc_lattice(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
     )
