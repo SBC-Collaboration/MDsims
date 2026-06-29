@@ -328,10 +328,14 @@ def get_source_randomization_result(
     source_phase_name="randomization",
     source_log_period=1_000,
     overwrite_source=False,
-    require_existing_source=True,
+    create_source_if_missing=True,
 ):
     """
     Get the thermalized source state used to create the bubble.
+
+    When create_source_if_missing=True, missing source files trigger a new
+    thermalization run. When False, print the missing paths and return with
+    status="missing_source" without starting a simulation.
     """
 
     source_paths = thermalized_run_paths(
@@ -346,38 +350,47 @@ def get_source_randomization_result(
     source_state_path = Path(source_paths["state_path"])
     source_log_path = Path(source_paths["log_path"])
 
-    if require_existing_source:
-        missing_paths = []
+    missing_paths = []
 
-        if not source_state_path.exists():
-            missing_paths.append(source_state_path)
+    if not source_state_path.exists():
+        missing_paths.append(source_state_path)
 
-        if not source_log_path.exists():
-            missing_paths.append(source_log_path)
+    if not source_log_path.exists():
+        missing_paths.append(source_log_path)
 
-        if missing_paths:
-            print("No source thermalized state found for the specified values.")
-            print("=" * 70)
-            print("n_fcc_cells       =", n_fcc_cells)
-            print("target_rho        =", target_rho)
-            print("kT                =", kT)
-            print("source_nsteps     =", source_nsteps)
-            print("source_seed       =", source_seed)
-            print("source_phase_name =", source_phase_name)
-            print()
-            print("Missing paths:")
+    if missing_paths:
+        print("No source thermalized state found for the specified values.")
+        print("=" * 70)
+        print("n_fcc_cells       =", n_fcc_cells)
+        print("target_rho        =", target_rho)
+        print("kT                =", kT)
+        print("source_nsteps     =", source_nsteps)
+        print("source_seed       =", source_seed)
+        print("source_phase_name =", source_phase_name)
+        print()
+        print("Missing paths:")
 
-            for missing_path in missing_paths:
-                print(missing_path)
+        for missing_path in missing_paths:
+            print(missing_path)
 
-            print("=" * 70)
+        print("=" * 70)
 
-            raise FileNotFoundError(
-                "No source thermalized state exists for the specified values. "
-                "Run/create the source randomization state first."
+        if not create_source_if_missing:
+            print(
+                "create_source_if_missing=False; "
+                "no thermalization or cavitation was started."
             )
+            return {
+                "frame": None,
+                "simulation": None,
+                "paths": source_paths,
+                "created_new": False,
+                "status": "missing_source",
+            }
 
-    return simulation_helpers.get_or_make_thermalized_state(
+        print("create_source_if_missing=True; starting thermalization now.")
+
+    result = simulation_helpers.get_or_make_thermalized_state(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
         kT=kT,
@@ -387,6 +400,8 @@ def get_source_randomization_result(
         seed=source_seed,
         overwrite=overwrite_source,
     )
+    result["status"] = "created_source" if result["created_new"] else "loaded_source"
+    return result
 
 
 def _frame_state_metadata(
@@ -566,30 +581,19 @@ def get_or_create_cavitation_state(
     bubble_center=None,
     overwrite=False,
     overwrite_source=False,
-    require_existing_source=True,
+    create_source_if_missing=True,
     base_folder=CAVITATION_STATES_V3_ROOT,
 ):
     """
     Load or create a V3 cavitation starting state.
 
+    Missing thermalized source states are created automatically by default.
+    Set create_source_if_missing=False for a no-run existence check.
+
     Saves:
         cavitation_initial.gsd
         cavitation_creation.hdf5
     """
-
-    source_result = get_source_randomization_result(
-        n_fcc_cells=n_fcc_cells,
-        target_rho=target_rho,
-        kT=kT,
-        source_nsteps=source_nsteps,
-        source_seed=source_seed,
-        source_phase_name=source_phase_name,
-        source_log_period=source_log_period,
-        overwrite_source=overwrite_source,
-        require_existing_source=require_existing_source,
-    )
-
-    source_frame = source_result["frame"]
 
     paths = cavitation_state_paths(
         n_fcc_cells=n_fcc_cells,
@@ -605,6 +609,29 @@ def get_or_create_cavitation_state(
         base_folder=base_folder,
     )
 
+    source_result = get_source_randomization_result(
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
+        kT=kT,
+        source_nsteps=source_nsteps,
+        source_seed=source_seed,
+        source_phase_name=source_phase_name,
+        source_log_period=source_log_period,
+        overwrite_source=overwrite_source,
+        create_source_if_missing=create_source_if_missing,
+    )
+
+    if source_result["frame"] is None:
+        return {
+            "frame": None,
+            "paths": paths,
+            "source_result": source_result,
+            "creation_info": {},
+            "created_new": False,
+            "status": "missing_source",
+        }
+
+    source_frame = source_result["frame"]
     state_path = Path(paths["state_path"])
     metadata_path = Path(paths["creation_metadata_path"])
 
@@ -650,6 +677,7 @@ def get_or_create_cavitation_state(
             "source_result": source_result,
             "creation_info": info,
             "created_new": False,
+            "status": "loaded_initial",
         }
 
     frame, info = make_cavitated_frame_from_frame(
@@ -703,6 +731,7 @@ def get_or_create_cavitation_state(
         "source_result": source_result,
         "creation_info": info,
         "created_new": True,
+        "status": "created_initial",
     }
 
 
@@ -854,12 +883,15 @@ def get_or_create_cavitation(
     overwrite=False,
     overwrite_initial=False,
     overwrite_source=False,
-    require_existing_source=True,
+    create_source_if_missing=True,
     classify_final=True,
     classification_kwargs=None,
 ):
     """
     Load or run a V3 cavitation evolution.
+
+    Missing thermalized source states are created automatically by default.
+    Set create_source_if_missing=False for a no-run existence check.
 
     Saves:
         cavitation_trajectory.gsd
@@ -869,23 +901,6 @@ def get_or_create_cavitation(
 
     if evolve_kT is None:
         evolve_kT = kT
-
-    initial_result = get_or_create_cavitation_state(
-        n_fcc_cells=n_fcc_cells,
-        target_rho=target_rho,
-        kT=kT,
-        source_nsteps=source_nsteps,
-        radius_fraction=radius_fraction,
-        source_seed=source_seed,
-        source_phase_name=source_phase_name,
-        source_log_period=source_log_period,
-        random_location=random_location,
-        bubble_seed=bubble_seed,
-        bubble_center=bubble_center,
-        overwrite=overwrite_initial,
-        overwrite_source=overwrite_source,
-        require_existing_source=require_existing_source,
-    )
 
     evolved_paths = cavitation_evolved_paths(
         n_fcc_cells=n_fcc_cells,
@@ -902,6 +917,32 @@ def get_or_create_cavitation(
         random_location=random_location,
         bubble_seed=bubble_seed,
     )
+
+    initial_result = get_or_create_cavitation_state(
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
+        kT=kT,
+        source_nsteps=source_nsteps,
+        radius_fraction=radius_fraction,
+        source_seed=source_seed,
+        source_phase_name=source_phase_name,
+        source_log_period=source_log_period,
+        random_location=random_location,
+        bubble_seed=bubble_seed,
+        bubble_center=bubble_center,
+        overwrite=overwrite_initial,
+        overwrite_source=overwrite_source,
+        create_source_if_missing=create_source_if_missing,
+    )
+
+    if initial_result["frame"] is None:
+        return {
+            "frame": None,
+            "paths": evolved_paths,
+            "initial_result": initial_result,
+            "created_new": False,
+            "status": "missing_source",
+        }
 
     trajectory_path = Path(evolved_paths["trajectory_path"])
     final_state_path = Path(evolved_paths["final_state_path"])
@@ -921,6 +962,7 @@ def get_or_create_cavitation(
             "paths": evolved_paths,
             "initial_result": initial_result,
             "created_new": False,
+            "status": "loaded_evolution",
         }
 
     initial_frame = initial_result["frame"]
@@ -1000,4 +1042,5 @@ def get_or_create_cavitation(
         "initial_result": initial_result,
         "run_result": run_result,
         "created_new": True,
+        "status": "created_evolution",
     }
