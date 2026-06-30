@@ -328,7 +328,6 @@ def plot_voxel_mixture_fit(
 
     plt.tight_layout()
     plt.show()
-    return fig
 
 
 # ============================================================
