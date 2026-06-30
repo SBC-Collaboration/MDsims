@@ -5,6 +5,10 @@ import numpy as np
 
 from md_Helpers import paths, spatial
 from md_Helpers.cavitation_analysis import estimate_bubble_from_radial_density
+from md_Helpers.voxel_fit import (
+    fit_voxel_count_mixture,
+    voxel_mixture_components,
+)
 
 
 def make_frame(positions, box_lengths):
@@ -91,6 +95,37 @@ class CavitationAnalysisTests(unittest.TestCase):
             inner_radius,
             delta=0.2,
         )
+
+
+class VoxelMixtureFitTests(unittest.TestCase):
+    def test_recovers_synthetic_three_component_model(self):
+        count_axis = np.arange(81)
+        gas, liquid, interface = voxel_mixture_components(
+            count_axis,
+            gas_mean=2.0,
+            liquid_mean=50.0,
+            liquid_sigma=5.0,
+            interface_points=15,
+        )
+        probability = 0.08 * gas + 0.75 * liquid + 0.17 * interface
+        probability /= probability.sum()
+
+        samples = np.random.default_rng(5).choice(
+            count_axis,
+            size=4_000,
+            p=probability,
+        )
+        fit = fit_voxel_count_mixture(
+            samples,
+            voxel_volume=1.0,
+            interface_points=15,
+            max_iterations=300,
+        )
+
+        self.assertTrue(fit["success"])
+        self.assertAlmostEqual(fit["gas_mean_count"], 2.0, delta=0.7)
+        self.assertAlmostEqual(fit["liquid_mean_count"], 50.0, delta=1.5)
+        self.assertAlmostEqual(fit["liquid_weight"], 0.75, delta=0.12)
 
 
 if __name__ == "__main__":

@@ -263,6 +263,74 @@ def plot_voxel_histogram(
     }
 
 
+def plot_voxel_mixture_fit(
+    fit,
+    x_axis="density",
+    show_residuals=True,
+    figsize=(8, 7),
+):
+    """Plot an observed voxel histogram and its three-component fit."""
+
+    if x_axis == "density":
+        x = fit["density_axis"]
+        xlabel = "Voxel density"
+    elif x_axis == "count":
+        x = fit["count_axis"]
+        xlabel = "Particles per voxel"
+    else:
+        raise ValueError("x_axis must be 'density' or 'count'")
+
+    if show_residuals:
+        fig, (axis, residual_axis) = plt.subplots(
+            2,
+            1,
+            figsize=figsize,
+            sharex=True,
+            gridspec_kw={"height_ratios": [3, 1]},
+        )
+    else:
+        fig, axis = plt.subplots(figsize=figsize)
+        residual_axis = None
+
+    axis.step(
+        x,
+        fit["observed_counts"],
+        where="mid",
+        color="black",
+        linewidth=1.5,
+        label="Observed",
+    )
+    axis.plot(x, fit["model_counts"], linewidth=2.5, label="Total fit")
+    axis.plot(x, fit["gas_counts"], linestyle="--", label="Gas Poisson")
+    axis.plot(x, fit["liquid_counts"], linestyle="--", label="Liquid Gaussian")
+    axis.plot(
+        x,
+        fit["interface_counts"],
+        linestyle="--",
+        label="Interface integral",
+    )
+    axis.set_ylabel("Number of voxels")
+    axis.set_title(
+        f"Voxel mixture fit at step {fit.get('timestep', 'unknown')}"
+    )
+    axis.grid(alpha=0.25)
+    axis.legend()
+
+    if residual_axis is not None:
+        residuals = fit["observed_counts"] - fit["model_counts"]
+        residual_axis.axhline(0.0, color="black", linewidth=1)
+        residual_axis.step(x, residuals, where="mid")
+        residual_axis.set_ylabel("Data - fit")
+        residual_axis.grid(alpha=0.25)
+        residual_axis.set_xlabel(xlabel)
+    else:
+        axis.set_xlabel(xlabel)
+
+    plt.tight_layout()
+    plt.show()
+    return fig
+
+
 # ============================================================
 # Plot trajectory voxel density histograms
 # ============================================================

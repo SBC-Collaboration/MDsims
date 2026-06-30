@@ -8,6 +8,7 @@ Primary modules:
 - simulation: HOOMD simulation setup and thermalization
 - runs: logging, final-state saving, and trajectory runs
 - classification: phase-separation and PE-drop classifiers
+- voxel_fit: gas, liquid, and interface voxel-mixture fitting
 - cavitation: cavitated starting-state creation and evolution
 - cavitation_analysis: trajectory and bubble measurements
 - index: searchable V3 Parquet index creation
@@ -22,6 +23,7 @@ __all__ = [
     "simulation",
     "runs",
     "classification",
+    "voxel_fit",
     "cavitation",
     "cavitation_analysis",
     "index",

@@ -98,6 +98,7 @@ lattices.py              FCC lattice creation
 simulation.py            HOOMD setup and thermalization
 runs.py                  HDF5/GSD writers and run execution
 classification.py        current voxel and PE-drop classifiers
+voxel_fit.py             gas/liquid/interface voxel histogram fitting
 cavitation.py            cavitation creation and evolution
 cavitation_analysis.py   trajectory bubble measurements
 visualization.py         plotting and animation
