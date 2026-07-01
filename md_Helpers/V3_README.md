@@ -138,11 +138,13 @@ summary = run_cavitation_size_sweep(
 )
 ```
 
-The outcome is `stabilized` when the tail-median radius is at least 50% of the
+The primary `outcome` uses the voxel classification of the final cavitation
+state: `phase_separated=True` is `stabilized`, while `False` is
+`rethermalized`. Radial tracking remains available as a separate diagnostic in
+`radius_outcome`: `persisted` when the tail-median radius is at least 50% of the
 constructed radius, `collapsed` when it is at most 10%, and `intermediate`
-otherwise. These thresholds are configurable. Because the radius is a fixed
-fraction of the box, its absolute value increases with `n_fcc_cells`; use the
-reported `initial_bubble_radius` and `tail_radius_ratio` when comparing sizes.
+otherwise. Because the radius is a fixed fraction of the box, its absolute
+value increases with `n_fcc_cells`.
 
 Before creating a bubble, cavitation checks the voxel phase-separation result
 of the thermalized source. A phase-separated source is not cavitated. Its sweep

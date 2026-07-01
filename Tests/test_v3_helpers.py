@@ -118,7 +118,7 @@ class CavitationAnalysisTests(unittest.TestCase):
             measurements,
             tail_fraction=0.5,
         )
-        self.assertEqual(summary["outcome"], "stabilized")
+        self.assertEqual(summary["radius_outcome"], "persisted")
         self.assertAlmostEqual(summary["tail_median_bubble_radius"], 1.65)
 
     def test_summarizes_tail_as_collapsed(self):
@@ -133,7 +133,7 @@ class CavitationAnalysisTests(unittest.TestCase):
             measurements,
             tail_fraction=0.5,
         )
-        self.assertEqual(summary["outcome"], "collapsed")
+        self.assertEqual(summary["radius_outcome"], "collapsed")
 
 
 class CavitationSweepTests(unittest.TestCase):

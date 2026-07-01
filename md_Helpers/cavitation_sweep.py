@@ -66,14 +66,14 @@ def summarize_bubble_survival(
     )
 
     if tail_radius_ratio >= stabilized_radius_ratio:
-        outcome = "stabilized"
+        radius_outcome = "persisted"
     elif tail_radius_ratio <= collapsed_radius_ratio:
-        outcome = "collapsed"
+        radius_outcome = "collapsed"
     else:
-        outcome = "intermediate"
+        radius_outcome = "intermediate"
 
     return {
-        "outcome": outcome,
+        "radius_outcome": radius_outcome,
         "n_frames": int(len(measurements)),
         "tail_frames": tail_count,
         "initial_bubble_radius": initial_radius,
@@ -273,6 +273,11 @@ def run_cavitation_size_sweep(
                     "log_path": str(result["paths"]["log_path"]),
                     **survival,
                 }
+                row["outcome"] = (
+                    "stabilized"
+                    if bool(row["final_phase_separated"])
+                    else "rethermalized"
+                )
                 rows.append(row)
 
                 if summary_path is not None:
