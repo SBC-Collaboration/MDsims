@@ -5,6 +5,7 @@ from pathlib import Path
 import gsd.hoomd
 import numpy as np
 
+from . import classification as classification_helpers
 from . import metadata as metadata_helpers
 from . import runs as run_helpers
 from . import simulation as simulation_helpers
@@ -404,6 +405,29 @@ def get_source_randomization_result(
     return result
 
 
+def _source_phase_separation(source_result):
+    """Read, or backfill, the source thermalization voxel classifier."""
+
+    source_paths = source_result["paths"]
+    source_log_path = Path(source_paths["log_path"])
+    source_state_path = Path(source_paths["state_path"])
+    result, metadata_path = classification_helpers.read_phase_method_attrs(
+        source_log_path,
+        "voxel",
+    )
+
+    if "phase_separated" not in result:
+        result = classification_helpers.write_voxel_phase_separation_metadata(
+            log_path=source_log_path,
+            state_path=source_state_path,
+            updated_from_saved_gsd=True,
+        )
+
+    result = dict(result)
+    result["metadata_path"] = metadata_path
+    return result
+
+
 def _frame_state_metadata(
     frame,
     n_fcc_cells,
@@ -582,6 +606,7 @@ def get_or_create_cavitation_state(
     overwrite=False,
     overwrite_source=False,
     create_source_if_missing=True,
+    reject_phase_separated_source=True,
     base_folder=CAVITATION_STATES_V3_ROOT,
 ):
     """
@@ -589,6 +614,7 @@ def get_or_create_cavitation_state(
 
     Missing thermalized source states are created automatically by default.
     Set create_source_if_missing=False for a no-run existence check.
+    Phase-separated thermalized sources are rejected by default.
 
     Saves:
         cavitation_initial.gsd
@@ -629,6 +655,30 @@ def get_or_create_cavitation_state(
             "creation_info": {},
             "created_new": False,
             "status": "missing_source",
+        }
+
+    source_phase_separation = _source_phase_separation(source_result)
+    if (
+        reject_phase_separated_source
+        and source_phase_separation["phase_separated"]
+    ):
+        print("Skipping cavitation: thermalized source is phase separated.")
+        print("=" * 70)
+        print("source_state_path:", source_result["paths"]["state_path"])
+        print("source_log_path:", source_result["paths"]["log_path"])
+        print(
+            "source_low_density_fraction:",
+            source_phase_separation.get("low_density_fraction"),
+        )
+        print("=" * 70)
+        return {
+            "frame": None,
+            "paths": paths,
+            "source_result": source_result,
+            "source_phase_separation": source_phase_separation,
+            "creation_info": {},
+            "created_new": False,
+            "status": "source_phase_separated",
         }
 
     source_frame = source_result["frame"]
@@ -675,6 +725,7 @@ def get_or_create_cavitation_state(
             "frame": frame,
             "paths": paths,
             "source_result": source_result,
+            "source_phase_separation": source_phase_separation,
             "creation_info": info,
             "created_new": False,
             "status": "loaded_initial",
@@ -729,6 +780,7 @@ def get_or_create_cavitation_state(
         "frame": frame,
         "paths": paths,
         "source_result": source_result,
+        "source_phase_separation": source_phase_separation,
         "creation_info": info,
         "created_new": True,
         "status": "created_initial",
@@ -884,6 +936,7 @@ def get_or_create_cavitation(
     overwrite_initial=False,
     overwrite_source=False,
     create_source_if_missing=True,
+    reject_phase_separated_source=True,
     classify_final=True,
     classification_kwargs=None,
 ):
@@ -892,6 +945,7 @@ def get_or_create_cavitation(
 
     Missing thermalized source states are created automatically by default.
     Set create_source_if_missing=False for a no-run existence check.
+    Phase-separated thermalized sources are rejected by default.
 
     Saves:
         cavitation_trajectory.gsd
@@ -933,15 +987,17 @@ def get_or_create_cavitation(
         overwrite=overwrite_initial,
         overwrite_source=overwrite_source,
         create_source_if_missing=create_source_if_missing,
+        reject_phase_separated_source=reject_phase_separated_source,
     )
 
     if initial_result["frame"] is None:
+        initial_status = initial_result.get("status", "missing_source")
         return {
             "frame": None,
             "paths": evolved_paths,
             "initial_result": initial_result,
             "created_new": False,
-            "status": "missing_source",
+            "status": initial_status,
         }
 
     trajectory_path = Path(evolved_paths["trajectory_path"])

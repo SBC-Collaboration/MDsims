@@ -1,10 +1,20 @@
 import unittest
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 
 from md_Helpers import paths, spatial
+from md_Helpers import cavitation_sweep as cavitation_sweep_module
 from md_Helpers.cavitation_analysis import estimate_bubble_from_radial_density
+from md_Helpers.cavitation_sweep import (
+    run_cavitation_size_sweep,
+    summarize_bubble_survival,
+)
 from md_Helpers.voxel_fit import (
     fit_voxel_count_mixture,
     voxel_mixture_components,
@@ -95,6 +105,80 @@ class CavitationAnalysisTests(unittest.TestCase):
             inner_radius,
             delta=0.2,
         )
+
+    def test_summarizes_tail_as_stabilized(self):
+        measurements = pd.DataFrame({
+            "bubble_radius_estimate": [2.0, 1.8, 1.7, 1.6],
+            "initial_bubble_radius": [2.0] * 4,
+            "bulk_density": [0.7] * 4,
+            "density_inside_initial_radius": [0.0, 0.1, 0.1, 0.1],
+            "void_fraction_estimate": [0.03, 0.02, 0.02, 0.02],
+        })
+        summary = summarize_bubble_survival(
+            measurements,
+            tail_fraction=0.5,
+        )
+        self.assertEqual(summary["outcome"], "stabilized")
+        self.assertAlmostEqual(summary["tail_median_bubble_radius"], 1.65)
+
+    def test_summarizes_tail_as_collapsed(self):
+        measurements = pd.DataFrame({
+            "bubble_radius_estimate": [2.0, 0.4, 0.1, 0.0],
+            "initial_bubble_radius": [2.0] * 4,
+            "bulk_density": [0.7] * 4,
+            "density_inside_initial_radius": [0.0, 0.4, 0.65, 0.7],
+            "void_fraction_estimate": [0.03, 0.005, 0.0, 0.0],
+        })
+        summary = summarize_bubble_survival(
+            measurements,
+            tail_fraction=0.5,
+        )
+        self.assertEqual(summary["outcome"], "collapsed")
+
+
+class CavitationSweepTests(unittest.TestCase):
+    def test_phase_separated_source_is_recorded_without_measurement(self):
+        fake_result = {
+            "status": "source_phase_separated",
+            "initial_result": {
+                "source_phase_separation": {
+                    "phase_separated": True,
+                    "low_density_fraction": 0.25,
+                },
+                "source_result": {
+                    "paths": {
+                        "state_path": "source.gsd",
+                        "log_path": "source.hdf5",
+                    },
+                },
+            },
+        }
+        fake_cavitation = SimpleNamespace(
+            get_or_create_cavitation=lambda **kwargs: fake_result,
+        )
+
+        with TemporaryDirectory() as tmp, patch.dict(sys.modules, {
+            "md_Helpers.cavitation": fake_cavitation,
+            "md_Helpers.classification": SimpleNamespace(),
+        }), patch.object(
+            cavitation_sweep_module.cavitation_analysis,
+            "measure_cavitation_trajectory",
+            side_effect=AssertionError("failed source must not be measured"),
+        ):
+            summary = run_cavitation_size_sweep(
+                n_fcc_cells_values=[10],
+                conditions=[(0.71, 0.8)],
+                source_nsteps=100,
+                evolve_nsteps=100,
+                summary_path=Path(tmp) / "summary.csv",
+            )
+
+        self.assertEqual(
+            summary.loc[0, "run_status"],
+            "thermalization_failed_phase_separated",
+        )
+        self.assertFalse(bool(summary.loc[0, "thermalization_passed"]))
+        self.assertEqual(summary.loc[0, "outcome"], "not_cavitated")
 
 
 class VoxelMixtureFitTests(unittest.TestCase):
