@@ -200,7 +200,7 @@ def _copy_masked_particle_fields(
 
 def make_cavitated_frame_from_frame(
     frame,
-    radius_fraction,
+    radius,
     random_location=False,
     bubble_seed=1,
     bubble_center=None,
@@ -209,17 +209,16 @@ def make_cavitated_frame_from_frame(
     """
     Create a cavitated frame by removing particles inside one sphere.
 
-    Bubble-radius convention:
-        bubble_radius = radius_fraction * (BoxLength / 2)
+    ``radius`` is the absolute bubble radius in simulation length units.
 
     The box is not resized, so the post-cavitation density is
     N_after / BoxLength**3.
     """
 
-    radius_fraction = float(radius_fraction)
+    radius = float(radius)
 
-    if radius_fraction <= 0:
-        raise ValueError("radius_fraction must be positive")
+    if radius <= 0:
+        raise ValueError("radius must be positive")
 
     source_box = np.asarray(
         frame.configuration.box,
@@ -249,11 +248,16 @@ def make_cavitated_frame_from_frame(
         bubble_center=bubble_center,
     )
 
-    bubble_radius = radius_fraction * (BoxLength / 2.0)
+    max_radius = 0.5 * float(np.min(box_lengths))
+    if radius >= max_radius:
+        raise ValueError(
+            "radius must be smaller than half the shortest box length "
+            f"({max_radius:g})"
+        )
 
     distances = periodic_distances(positions, center, box_lengths)
 
-    remove_mask = distances <= bubble_radius
+    remove_mask = distances <= radius
     keep_mask = ~remove_mask
 
     removed_indices = np.flatnonzero(remove_mask).astype(np.int64)
@@ -266,7 +270,7 @@ def make_cavitated_frame_from_frame(
     if N_after <= 0:
         raise RuntimeError(
             "Cavitation removed all particles. "
-            "Use a smaller radius_fraction."
+            "Use a smaller radius."
         )
 
     new_frame = gsd.hoomd.Frame()
@@ -287,9 +291,9 @@ def make_cavitated_frame_from_frame(
 
     info = {
         "bubble_method": "remove_particles_in_sphere",
-        "radius_fraction": radius_fraction,
-        "radius_definition": "bubble_radius = radius_fraction * (BoxLength / 2)",
-        "bubble_radius": float(bubble_radius),
+        "radius": float(radius),
+        "radius_definition": "absolute radius in simulation length units",
+        "bubble_radius": float(radius),
         "bubble_center": center.copy(),
         "bubble_center_x": float(center[0]),
         "bubble_center_y": float(center[1]),
@@ -596,7 +600,7 @@ def get_or_create_cavitation_state(
     target_rho,
     kT,
     source_nsteps,
-    radius_fraction,
+    radius,
     source_seed=1,
     source_phase_name="randomization",
     source_log_period=1_000,
@@ -611,6 +615,8 @@ def get_or_create_cavitation_state(
 ):
     """
     Load or create a V3 cavitation starting state.
+
+    ``radius`` is the absolute starting radius in simulation length units.
 
     Missing thermalized source states are created automatically by default.
     Set create_source_if_missing=False for a no-run existence check.
@@ -627,7 +633,7 @@ def get_or_create_cavitation_state(
         kT=kT,
         source_nsteps=source_nsteps,
         source_seed=source_seed,
-        radius_fraction=radius_fraction,
+        radius=radius,
         source_phase_name=source_phase_name,
         center=bubble_center,
         random_location=random_location,
@@ -733,7 +739,7 @@ def get_or_create_cavitation_state(
 
     frame, info = make_cavitated_frame_from_frame(
         frame=source_frame,
-        radius_fraction=radius_fraction,
+        radius=radius,
         random_location=random_location,
         bubble_seed=bubble_seed,
         bubble_center=bubble_center,
@@ -766,8 +772,7 @@ def get_or_create_cavitation_state(
     print("=" * 70)
     print("state_path:", state_path)
     print("creation_metadata_path:", metadata_path)
-    print("radius_fraction:", info["radius_fraction"])
-    print("bubble_radius:", info["bubble_radius"])
+    print("radius:", info["radius"])
     print("bubble_center:", info["bubble_center"])
     print("particles_removed:", info["particles_removed"])
     print("N_before:", info["N_before"])
@@ -913,7 +918,7 @@ def get_or_create_cavitation(
     target_rho,
     kT,
     source_nsteps,
-    radius_fraction,
+    radius,
     evolve_nsteps,
     evolve_kT=None,
     evolve_seed=1,
@@ -943,6 +948,8 @@ def get_or_create_cavitation(
     """
     Load or run a V3 cavitation evolution.
 
+    ``radius`` is the absolute starting radius in simulation length units.
+
     Missing thermalized source states are created automatically by default.
     Set create_source_if_missing=False for a no-run existence check.
     Phase-separated thermalized sources are rejected by default.
@@ -962,7 +969,7 @@ def get_or_create_cavitation(
         kT=kT,
         source_nsteps=source_nsteps,
         source_seed=source_seed,
-        radius_fraction=radius_fraction,
+        radius=radius,
         evolve_kT=evolve_kT,
         evolve_nsteps=evolve_nsteps,
         evolve_seed=evolve_seed,
@@ -977,7 +984,7 @@ def get_or_create_cavitation(
         target_rho=target_rho,
         kT=kT,
         source_nsteps=source_nsteps,
-        radius_fraction=radius_fraction,
+        radius=radius,
         source_seed=source_seed,
         source_phase_name=source_phase_name,
         source_log_period=source_log_period,

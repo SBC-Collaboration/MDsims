@@ -8,9 +8,6 @@ import pandas as pd
 from . import cavitation_analysis
 
 
-RADIUS_FRACTION = 0.15
-
-
 def summarize_bubble_survival(
     measurements,
     tail_fraction=0.2,
@@ -115,6 +112,8 @@ def _normalize_conditions(conditions):
             raise ValueError("each condition requires density and temperature")
         density = float(density)
         temperature = float(temperature)
+        if density <= 0:
+            raise ValueError("condition density must be positive")
         normalized.append({
             "density": density,
             "temperature": temperature,
@@ -130,23 +129,24 @@ def run_cavitation_size_sweep(
     conditions,
     source_nsteps,
     evolve_nsteps,
+    radius,
     evolve_seeds=(1,),
     source_seed=1,
     trajectory_period=1_000,
     log_period=1_000,
-    summary_path="cavitation_size_sweep_radius_fraction_0.15.csv",
+    summary_path="cavitation_size_sweep.csv",
     tail_fraction=0.2,
     stabilized_radius_ratio=0.5,
     collapsed_radius_ratio=0.1,
     overwrite=False,
     **cavitation_kwargs,
 ):
-    """Run a fixed-radius-fraction cavitation sweep and save one row per run.
+    """Run a fixed-absolute-radius cavitation sweep and save one row per run.
 
     ``conditions`` is an explicit sequence of ``(density, temperature)``
     pairs, so nearby state points can be compared without accidentally taking
-    their Cartesian product. The construction radius fraction is deliberately
-    fixed at 0.15 for every run.
+    their Cartesian product. ``radius`` is held fixed in simulation length
+    units while the FCC system size changes.
     """
 
     # Keep HOOMD/GSD as run-time dependencies so the summary helper remains
@@ -158,12 +158,15 @@ def run_cavitation_size_sweep(
     if not cells_values or any(value <= 0 for value in cells_values):
         raise ValueError("n_fcc_cells_values must contain positive integers")
     conditions = _normalize_conditions(conditions)
+    radius = float(radius)
+    if radius <= 0:
+        raise ValueError("radius must be positive")
     evolve_seeds = [int(seed) for seed in evolve_seeds]
     if not evolve_seeds:
         raise ValueError("evolve_seeds must not be empty")
 
     forbidden = {
-        "radius_fraction",
+        "radius",
         "evolve_kT",
         "target_rho",
         "kT",
@@ -181,13 +184,24 @@ def run_cavitation_size_sweep(
 
     for condition in conditions:
         for n_fcc_cells in cells_values:
+            source_particle_count = 4 * n_fcc_cells ** 3
+            box_length = (
+                source_particle_count / condition["density"]
+            ) ** (1.0 / 3.0)
+            if radius >= 0.5 * box_length:
+                raise ValueError(
+                    f"radius={radius:g} must be smaller than half the "
+                    f"box length ({0.5 * box_length:g}) for "
+                    f"n_fcc_cells={n_fcc_cells}, "
+                    f"density={condition['density']:g}"
+                )
             for evolve_seed in evolve_seeds:
                 result = cavitation.get_or_create_cavitation(
                     n_fcc_cells=n_fcc_cells,
                     target_rho=condition["density"],
                     kT=condition["temperature"],
                     source_nsteps=int(source_nsteps),
-                    radius_fraction=RADIUS_FRACTION,
+                    radius=radius,
                     evolve_nsteps=int(evolve_nsteps),
                     evolve_kT=condition["temperature"],
                     evolve_seed=evolve_seed,
@@ -201,9 +215,9 @@ def run_cavitation_size_sweep(
                 base_row = {
                     **condition,
                     "n_fcc_cells": n_fcc_cells,
-                    "N_source": 4 * n_fcc_cells ** 3,
+                    "N_source": source_particle_count,
                     "evolve_seed": evolve_seed,
-                    "radius_fraction": RADIUS_FRACTION,
+                    "radius": radius,
                 }
                 if result.get("status") == "source_phase_separated":
                     source_phase = result["initial_result"][

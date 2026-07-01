@@ -48,13 +48,14 @@ class PathTests(unittest.TestCase):
 
     def test_cavitation_paths_are_distinct(self):
         initial = paths.cavitation_state_paths(
-            30, 0.8, 0.8, 1_000_000, 1, 0.1,
+            30, 0.8, 0.8, 1_000_000, 1, 2.0,
         )
         evolved = paths.cavitation_evolved_paths(
-            30, 0.8, 0.8, 1_000_000, 1, 0.1, 0.8, 100_000, 1,
+            30, 0.8, 0.8, 1_000_000, 1, 2.0, 0.8, 100_000, 1,
         )
         self.assertEqual(initial["state_path"].name, "cavitation_initial.gsd")
         self.assertEqual(evolved["final_state_path"].name, "cavitation_final.gsd")
+        self.assertIn("radius_2.000", str(initial["state_path"]))
 
 
 class SpatialTests(unittest.TestCase):
@@ -138,6 +139,7 @@ class CavitationAnalysisTests(unittest.TestCase):
 
 class CavitationSweepTests(unittest.TestCase):
     def test_phase_separated_source_is_recorded_without_measurement(self):
+        call_kwargs = {}
         fake_result = {
             "status": "source_phase_separated",
             "initial_result": {
@@ -153,8 +155,12 @@ class CavitationSweepTests(unittest.TestCase):
                 },
             },
         }
+        def fake_get_or_create_cavitation(**kwargs):
+            call_kwargs.update(kwargs)
+            return fake_result
+
         fake_cavitation = SimpleNamespace(
-            get_or_create_cavitation=lambda **kwargs: fake_result,
+            get_or_create_cavitation=fake_get_or_create_cavitation,
         )
 
         with TemporaryDirectory() as tmp, patch.dict(sys.modules, {
@@ -170,6 +176,7 @@ class CavitationSweepTests(unittest.TestCase):
                 conditions=[(0.71, 0.8)],
                 source_nsteps=100,
                 evolve_nsteps=100,
+                radius=2.0,
                 summary_path=Path(tmp) / "summary.csv",
             )
 
@@ -179,6 +186,7 @@ class CavitationSweepTests(unittest.TestCase):
         )
         self.assertFalse(bool(summary.loc[0, "thermalization_passed"]))
         self.assertEqual(summary.loc[0, "outcome"], "not_cavitated")
+        self.assertEqual(call_kwargs["radius"], 2.0)
 
 
 class VoxelMixtureFitTests(unittest.TestCase):

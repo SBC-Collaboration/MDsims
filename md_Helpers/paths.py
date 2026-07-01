@@ -96,7 +96,7 @@ def cavitation_state_paths(
     kT,
     source_nsteps,
     source_seed,
-    radius_fraction,
+    radius,
     source_phase_name="randomization",
     center=None,
     random_location=False,
@@ -112,7 +112,7 @@ def cavitation_state_paths(
         / f"source_nsteps_{int(source_nsteps)}"
         / f"source_seed_{int(source_seed)}"
         / f"source_phase_{source_phase_name}"
-        / f"radius_fraction_{format_float(radius_fraction)}"
+        / f"radius_{format_float(radius)}"
         / center_label(
             center=center,
             random_location=random_location,
@@ -134,7 +134,7 @@ def cavitation_evolved_paths(
     kT,
     source_nsteps,
     source_seed,
-    radius_fraction,
+    radius,
     evolve_kT,
     evolve_nsteps,
     evolve_seed,
@@ -150,7 +150,7 @@ def cavitation_evolved_paths(
         kT=kT,
         source_nsteps=source_nsteps,
         source_seed=source_seed,
-        radius_fraction=radius_fraction,
+        radius=radius,
         source_phase_name=source_phase_name,
         center=center,
         random_location=random_location,

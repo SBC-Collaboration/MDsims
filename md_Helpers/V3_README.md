@@ -118,9 +118,9 @@ table = index.build_v3_index()
 ## Cavitation Size Sweeps
 
 Use explicit `(density, temperature)` conditions to repeat the same FCC-size
-sweep at nearby state points. The helper fixes `radius_fraction=0.15`, measures
-the trajectory, classifies survival from the final 20% of frames, and writes a
-CSV row after every completed run.
+sweep at nearby state points. The helper holds an absolute starting radius
+fixed in simulation length units, measures the trajectory, classifies survival
+from the final 20% of frames, and writes a CSV row after every completed run.
 
 ```python
 from md_Helpers.cavitation_sweep import run_cavitation_size_sweep
@@ -134,6 +134,7 @@ summary = run_cavitation_size_sweep(
     ],
     source_nsteps=1_000_000,
     evolve_nsteps=100_000,
+    radius=3.0,
     evolve_seeds=[1, 2, 3],
 )
 ```
@@ -143,8 +144,8 @@ state: `phase_separated=True` is `stabilized`, while `False` is
 `rethermalized`. Radial tracking remains available as a separate diagnostic in
 `radius_outcome`: `persisted` when the tail-median radius is at least 50% of the
 constructed radius, `collapsed` when it is at most 10%, and `intermediate`
-otherwise. Because the radius is a fixed fraction of the box, its absolute
-value increases with `n_fcc_cells`.
+otherwise. Because the absolute radius is fixed, changing `n_fcc_cells`
+isolates finite-size effects rather than changing the constructed bubble.
 
 Before creating a bubble, cavitation checks the voxel phase-separation result
 of the thermalized source. A phase-separated source is not cavitated. Its sweep
