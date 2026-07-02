@@ -240,3 +240,149 @@ def fit_last_frame_voxel_histogram(
         "voxel_nbins": int(voxel_nbins),
     })
     return result
+
+
+def bubble_size_from_voxel_fit(
+    fit,
+    box_volume,
+    interface_void_fraction=0.5,
+):
+    """Convert voxel-mixture weights to an equivalent spherical bubble size.
+
+    ``interface_void_fraction`` specifies how much of an interface voxel is
+    assigned to the bubble.  A value of 0.5 matches the uniformly sampled
+    interface fractions used by :func:`voxel_mixture_components`.
+    """
+
+    interface_void_fraction = float(interface_void_fraction)
+    if not 0.0 <= interface_void_fraction <= 1.0:
+        raise ValueError("interface_void_fraction must be between 0 and 1")
+
+    box_volume = float(box_volume)
+    if box_volume <= 0.0:
+        raise ValueError("box_volume must be positive")
+
+    bubble_volume_fraction = (
+        float(fit["gas_weight"])
+        + interface_void_fraction * float(fit["interface_weight"])
+    )
+    bubble_volume = bubble_volume_fraction * box_volume
+    bubble_radius = (
+        3.0 * bubble_volume / (4.0 * np.pi)
+    ) ** (1.0 / 3.0)
+
+    return {
+        "bubble_volume_fraction": float(bubble_volume_fraction),
+        "bubble_volume_estimate": float(bubble_volume),
+        "bubble_radius_estimate": float(bubble_radius),
+        "interface_void_fraction": interface_void_fraction,
+        "box_volume": box_volume,
+    }
+
+
+def fit_trajectory_tail_voxel_histogram(
+    evolution=None,
+    trajectory_path=None,
+    voxel_nbins=12,
+    nframes=None,
+    skip=1,
+    tail_fraction=0.5,
+    interface_void_fraction=0.5,
+    interface_points=40,
+    max_iterations=500,
+):
+    """Pool tail-frame voxel counts and estimate the final bubble size.
+
+    Frames are selected backward from the final trajectory frame, separated
+    by ``skip``, and constrained to the final ``tail_fraction`` of the
+    trajectory.  If ``nframes`` is supplied, only that many of the most recent
+    eligible frames are pooled.  Cavitation trajectories have fixed boxes;
+    this function raises an error if the selected voxel volumes differ.
+    """
+
+    import gsd.hoomd
+
+    voxel_nbins = int(voxel_nbins)
+    skip = int(skip)
+    tail_fraction = float(tail_fraction)
+    if voxel_nbins <= 0:
+        raise ValueError("voxel_nbins must be positive")
+    if skip <= 0:
+        raise ValueError("skip must be positive")
+    if not 0.0 < tail_fraction <= 1.0:
+        raise ValueError("tail_fraction must satisfy 0 < value <= 1")
+    if nframes is not None and int(nframes) <= 0:
+        raise ValueError("nframes must be positive or None")
+
+    path = _trajectory_path(evolution, trajectory_path)
+    frame_counts = []
+    timesteps = []
+    box_volumes = []
+
+    with gsd.hoomd.open(name=str(path), mode="r") as trajectory:
+        total_frames = len(trajectory)
+        if total_frames == 0:
+            raise ValueError(f"No frames found in trajectory: {path}")
+
+        first_tail_frame = int(np.floor((1.0 - tail_fraction) * total_frames))
+        selected_indices = list(range(
+            total_frames - 1,
+            first_tail_frame - 1,
+            -skip,
+        ))
+        if nframes is not None:
+            selected_indices = selected_indices[:int(nframes)]
+        selected_indices.reverse()
+
+        for frame_index in selected_indices:
+            frame = trajectory[frame_index]
+            _, counts, voxel_volume = compute_voxel_densities(
+                frame,
+                nbins=voxel_nbins,
+            )
+            frame_counts.append(np.asarray(counts, dtype=int))
+            timesteps.append(int(frame.configuration.step))
+            box_volumes.append(float(voxel_volume) * voxel_nbins ** 3)
+
+    if not np.allclose(box_volumes, box_volumes[0]):
+        raise ValueError(
+            "Selected frames have different box volumes; pooled integer-count "
+            "histograms require a fixed box."
+        )
+
+    voxel_volume = box_volumes[0] / voxel_nbins ** 3
+    pooled_counts = np.concatenate(frame_counts)
+    pooled_fit = fit_voxel_count_mixture(
+        pooled_counts,
+        voxel_volume=voxel_volume,
+        interface_points=interface_points,
+        max_iterations=max_iterations,
+    )
+
+    average_fit = pooled_fit.copy()
+    for key in [
+        "observed_counts",
+        "model_counts",
+        "gas_counts",
+        "liquid_counts",
+        "interface_counts",
+    ]:
+        average_fit[key] = pooled_fit[key] / len(selected_indices)
+
+    average_fit.update({
+        "trajectory_path": str(path),
+        "frame_indices": selected_indices,
+        "timesteps": timesteps,
+        "nframes": len(selected_indices),
+        "voxel_nbins": voxel_nbins,
+        "tail_fraction": tail_fraction,
+        "skip": skip,
+        "timestep": f"average of {len(selected_indices)} tail frames",
+    })
+    average_fit.update(bubble_size_from_voxel_fit(
+        average_fit,
+        box_volume=box_volumes[0],
+        interface_void_fraction=interface_void_fraction,
+    ))
+
+    return average_fit

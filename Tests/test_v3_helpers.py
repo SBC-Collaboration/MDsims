@@ -16,6 +16,7 @@ from md_Helpers.cavitation_sweep import (
     summarize_bubble_survival,
 )
 from md_Helpers.voxel_fit import (
+    bubble_size_from_voxel_fit,
     fit_voxel_count_mixture,
     voxel_mixture_components,
 )
@@ -190,6 +191,22 @@ class CavitationSweepTests(unittest.TestCase):
 
 
 class VoxelMixtureFitTests(unittest.TestCase):
+    def test_converts_mixture_weights_to_equivalent_radius(self):
+        result = bubble_size_from_voxel_fit(
+            {
+                "gas_weight": 0.02,
+                "interface_weight": 0.06,
+            },
+            box_volume=1_000.0,
+        )
+
+        self.assertAlmostEqual(result["bubble_volume_fraction"], 0.05)
+        self.assertAlmostEqual(result["bubble_volume_estimate"], 50.0)
+        self.assertAlmostEqual(
+            result["bubble_radius_estimate"],
+            (3.0 * 50.0 / (4.0 * np.pi)) ** (1.0 / 3.0),
+        )
+
     def test_recovers_synthetic_three_component_model(self):
         count_axis = np.arange(81)
         gas, liquid, interface = voxel_mixture_components(

@@ -936,6 +936,157 @@ def animate_xy_slice_trajectory(
     return IPython.display.HTML(anim.to_jshtml())
 
 
+def fit_and_animate_final_bubble(
+    trajectory,
+    nbins=12,
+    nframes=5,
+    skip=5,
+    tail_fraction=0.5,
+    interface_void_fraction=0.5,
+    interface_points=40,
+    max_iterations=500,
+    slice_fraction=0.10,
+    bubble_center=None,
+    point_size=1,
+    alpha=0.7,
+    interval=120,
+    show_histogram=True,
+    show_residuals=True,
+):
+    """Fit a pooled tail histogram and overlay its radius for a quick check.
+
+    The selected frames come from the final ``tail_fraction`` of the
+    trajectory, walking backward from the final frame in increments of
+    ``skip``.  The fitted radius uses ``gas_weight + 0.5 * interface_weight``
+    by default.  The circle stays at the constructed bubble center (or the
+    explicitly supplied ``bubble_center``); this is intended as a preliminary
+    visual scale check, not bubble tracking.
+
+    Returns a dictionary containing ``fit`` (the per-frame-average smoothed
+    histogram and size estimate) and ``animation`` (notebook HTML).
+    """
+
+    import gsd.hoomd
+    from .voxel_fit import fit_trajectory_tail_voxel_histogram
+
+    if slice_fraction <= 0.0 or slice_fraction > 1.0:
+        raise ValueError("slice_fraction must satisfy 0 < value <= 1")
+
+    trajectory_path = _get_trajectory_path(trajectory)
+
+    if bubble_center is None:
+        creation_info = {}
+        if isinstance(trajectory, dict):
+            creation_info = dict(trajectory.get("creation_info", {}))
+            if not creation_info:
+                creation_info = dict(
+                    trajectory.get("initial_result", {}).get(
+                        "creation_info",
+                        {},
+                    )
+                )
+        bubble_center = creation_info.get("bubble_center", [
+            creation_info.get("bubble_center_x", 0.0),
+            creation_info.get("bubble_center_y", 0.0),
+            creation_info.get("bubble_center_z", 0.0),
+        ])
+    bubble_center = np.asarray(bubble_center, dtype=float)
+    if bubble_center.shape != (3,):
+        raise ValueError("bubble_center must contain three coordinates")
+
+    fit = fit_trajectory_tail_voxel_histogram(
+        trajectory_path=trajectory_path,
+        voxel_nbins=nbins,
+        nframes=nframes,
+        skip=skip,
+        tail_fraction=tail_fraction,
+        interface_void_fraction=interface_void_fraction,
+        interface_points=interface_points,
+        max_iterations=max_iterations,
+    )
+
+    if show_histogram:
+        plot_voxel_mixture_fit(
+            fit,
+            x_axis="density",
+            show_residuals=show_residuals,
+        )
+
+    frames = []
+    with gsd.hoomd.open(name=trajectory_path, mode="r") as gsd_trajectory:
+        for frame_index in fit["frame_indices"]:
+            frame = gsd_trajectory[int(frame_index)]
+            positions = np.asarray(frame.particles.position, dtype=float)
+            box_lengths = np.asarray(frame.configuration.box[:3], dtype=float)
+            positions = (
+                (positions + 0.5 * box_lengths) % box_lengths
+                - 0.5 * box_lengths
+            )
+            dz = positions[:, 2] - bubble_center[2]
+            dz -= box_lengths[2] * np.round(dz / box_lengths[2])
+            mask = np.abs(dz) <= 0.5 * float(slice_fraction) * box_lengths[2]
+            frames.append({
+                "frame_index": int(frame_index),
+                "step": int(frame.configuration.step),
+                "xy": positions[mask, :2],
+                "box_lengths": box_lengths,
+            })
+
+    first = frames[0]
+    Lx, Ly = first["box_lengths"][:2]
+    radius = float(fit["bubble_radius_estimate"])
+    fig, ax = plt.subplots(figsize=(6, 6))
+    scatter = ax.scatter(
+        [],
+        [],
+        s=point_size,
+        alpha=alpha,
+        rasterized=True,
+    )
+    circle = plt.Circle(
+        bubble_center[:2],
+        radius,
+        fill=False,
+        linewidth=2,
+        color="red",
+        linestyle="--",
+    )
+    ax.add_patch(circle)
+
+    ax.set_xlim(-Lx / 2.0, Lx / 2.0)
+    ax.set_ylim(-Ly / 2.0, Ly / 2.0)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal")
+
+    def update(frame_data):
+        scatter.set_offsets(frame_data["xy"])
+        ax.set_title(
+            f"Final bubble fit: R={radius:.3f} | "
+            f"frame {frame_data['frame_index']} | step {frame_data['step']}"
+        )
+        return scatter, circle
+
+    anim = animation.FuncAnimation(
+        fig,
+        update,
+        frames=frames,
+        interval=interval,
+        blit=True,
+    )
+    html_animation = IPython.display.HTML(anim.to_jshtml())
+    plt.close(fig)
+
+    return {
+        "fit": fit,
+        "animation": html_animation,
+        "frame_indices": fit["frame_indices"],
+        "bubble_radius": radius,
+        "bubble_volume": fit["bubble_volume_estimate"],
+        "bubble_volume_fraction": fit["bubble_volume_fraction"],
+    }
+
+
 # ============================================================
 # Plot cavitation measurements
 # ============================================================
