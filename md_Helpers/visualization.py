@@ -957,9 +957,10 @@ def fit_and_animate_final_bubble(
 
     The histogram fit uses ``nframes`` frames separated by ``skip`` from the
     final ``tail_fraction`` of the trajectory.  The video independently shows
-    every original frame from the halfway point through the final frame.  The
-    fitted radius uses ``gas_weight + 0.5 * interface_weight`` by default.  The
-    circle stays at the constructed bubble center (or the explicitly supplied
+    the final 50 consecutive frames, or the entire trajectory when it contains
+    fewer than 50 frames.  The fitted radius uses
+    ``gas_weight + 0.5 * interface_weight`` by default.  The circle stays at
+    the constructed bubble center (or the explicitly supplied
     ``bubble_center``); this is intended as a preliminary visual scale check,
     not bubble tracking.
 
@@ -1015,7 +1016,7 @@ def fit_and_animate_final_bubble(
 
     frames = []
     with gsd.hoomd.open(name=trajectory_path, mode="r") as gsd_trajectory:
-        first_video_frame = len(gsd_trajectory) // 2
+        first_video_frame = max(0, len(gsd_trajectory) - 50)
         video_frame_indices = list(range(
             first_video_frame,
             len(gsd_trajectory),
