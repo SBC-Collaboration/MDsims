@@ -955,12 +955,13 @@ def fit_and_animate_final_bubble(
 ):
     """Fit a pooled tail histogram and overlay its radius for a quick check.
 
-    The selected frames come from the final ``tail_fraction`` of the
-    trajectory, walking backward from the final frame in increments of
-    ``skip``.  The fitted radius uses ``gas_weight + 0.5 * interface_weight``
-    by default.  The circle stays at the constructed bubble center (or the
-    explicitly supplied ``bubble_center``); this is intended as a preliminary
-    visual scale check, not bubble tracking.
+    The histogram fit uses ``nframes`` frames separated by ``skip`` from the
+    final ``tail_fraction`` of the trajectory.  The video independently shows
+    every original frame from the halfway point through the final frame.  The
+    fitted radius uses ``gas_weight + 0.5 * interface_weight`` by default.  The
+    circle stays at the constructed bubble center (or the explicitly supplied
+    ``bubble_center``); this is intended as a preliminary visual scale check,
+    not bubble tracking.
 
     Returns a dictionary containing ``fit`` (the per-frame-average smoothed
     histogram and size estimate) and ``animation`` (notebook HTML).
@@ -1014,7 +1015,12 @@ def fit_and_animate_final_bubble(
 
     frames = []
     with gsd.hoomd.open(name=trajectory_path, mode="r") as gsd_trajectory:
-        for frame_index in fit["frame_indices"]:
+        first_video_frame = len(gsd_trajectory) // 2
+        video_frame_indices = list(range(
+            first_video_frame,
+            len(gsd_trajectory),
+        ))
+        for frame_index in video_frame_indices:
             frame = gsd_trajectory[int(frame_index)]
             positions = np.asarray(frame.particles.position, dtype=float)
             box_lengths = np.asarray(frame.configuration.box[:3], dtype=float)
@@ -1080,7 +1086,9 @@ def fit_and_animate_final_bubble(
     return {
         "fit": fit,
         "animation": html_animation,
-        "frame_indices": fit["frame_indices"],
+        "fit_frame_indices": fit["frame_indices"],
+        "video_frame_indices": video_frame_indices,
+        "frame_indices": video_frame_indices,
         "bubble_radius": radius,
         "bubble_volume": fit["bubble_volume_estimate"],
         "bubble_volume_fraction": fit["bubble_volume_fraction"],
