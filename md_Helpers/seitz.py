@@ -371,6 +371,8 @@ def cavity_terms_from_frame(
 def cavity_terms_from_files(
     metadata_path,
     state_path=None,
+    radius=None,
+    center=None,
     frame_index=-1,
     chunk_size=256,
 ):
@@ -390,15 +392,20 @@ def cavity_terms_from_files(
     lj = metadata.read_attrs(metadata_path, "metadata/lj")
     paths = metadata.read_attrs(metadata_path, "metadata/paths")
 
-    radius = creation.get("bubble_radius", creation.get("radius"))
+    if radius is None:
+        radius = creation.get("bubble_radius", creation.get("radius"))
+
     if radius is None:
         raise KeyError("metadata/creation is missing bubble_radius")
 
-    center = np.array([
-        creation.get("bubble_center_x", 0.0),
-        creation.get("bubble_center_y", 0.0),
-        creation.get("bubble_center_z", 0.0),
-    ], dtype=np.float64)
+    if center is None:
+        center = np.array([
+            creation.get("bubble_center_x", 0.0),
+            creation.get("bubble_center_y", 0.0),
+            creation.get("bubble_center_z", 0.0),
+        ], dtype=np.float64)
+    else:
+        center = np.asarray(center, dtype=np.float64)
 
     state_kind = state_attrs.get("state_kind")
     if state_kind == "cavitation_initial":
@@ -446,6 +453,8 @@ def seitz_threshold_from_files(
     metadata_path,
     eos_table,
     state_path=None,
+    radius=None,
+    center=None,
     reference_rho=None,
     reference_kT=None,
     frame_index=-1,
@@ -469,6 +478,8 @@ def seitz_threshold_from_files(
     cavity = cavity_terms_from_files(
         metadata_path=metadata_path,
         state_path=state_path,
+        radius=radius,
+        center=center,
         frame_index=frame_index,
     )
     reference = liquid_reference_from_eos(
