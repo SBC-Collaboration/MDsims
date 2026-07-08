@@ -382,18 +382,18 @@ class MasterCsvTests(unittest.TestCase):
 
 
 class EosSweepTests(unittest.TestCase):
-    def test_pressure_region_uses_old_window_defaults(self):
+    def test_pressure_stop_region_uses_old_stop_defaults(self):
         self.assertEqual(
-            eos_sweep.pressure_region(-0.01),
-            "below_window",
+            eos_sweep.pressure_stop_region(-0.04),
+            "below_stop",
         )
         self.assertEqual(
-            eos_sweep.pressure_region(0.10),
-            "inside_window",
+            eos_sweep.pressure_stop_region(0.10),
+            "inside_stops",
         )
         self.assertEqual(
-            eos_sweep.pressure_region(0.20),
-            "above_window",
+            eos_sweep.pressure_stop_region(0.20),
+            "above_stop",
         )
 
     def test_liquid_eos_table_filters_completed_liquid_rows(self):

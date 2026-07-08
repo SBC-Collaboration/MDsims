@@ -6,8 +6,6 @@ import pandas as pd
 from .paths import MASTER_CSVS_V3_ROOT
 
 
-DEFAULT_PRESSURE_MIN = 0.0
-DEFAULT_PRESSURE_MAX = 0.15
 DEFAULT_LOWER_STOP = -0.03
 DEFAULT_UPPER_STOP = 0.18
 
@@ -72,23 +70,23 @@ def clean_bool(value):
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-def pressure_region(
+def pressure_stop_region(
     pressure,
-    pressure_min=DEFAULT_PRESSURE_MIN,
-    pressure_max=DEFAULT_PRESSURE_MAX,
+    lower_stop=DEFAULT_LOWER_STOP,
+    upper_stop=DEFAULT_UPPER_STOP,
 ):
     if pd.isna(pressure):
         return "missing"
 
     pressure = float(pressure)
 
-    if pressure < pressure_min:
-        return "below_window"
+    if pressure < lower_stop:
+        return "below_stop"
 
-    if pressure <= pressure_max:
-        return "inside_window"
+    if pressure <= upper_stop:
+        return "inside_stops"
 
-    return "above_window"
+    return "above_stop"
 
 
 def _density_key(value):
@@ -175,8 +173,6 @@ def _summarize_thermalized_state(
 
 def _annotate_sweep_row(
     row,
-    pressure_min,
-    pressure_max,
     lower_stop,
     upper_stop,
     scan_direction,
@@ -186,16 +182,12 @@ def _annotate_sweep_row(
     pressure_col = _pressure_column(n_last)
     pressure = row.get(pressure_col, np.nan)
 
-    row["pressure_region"] = pressure_region(
+    row["pressure_stop_region"] = pressure_stop_region(
         pressure,
-        pressure_min=pressure_min,
-        pressure_max=pressure_max,
+        lower_stop=lower_stop,
+        upper_stop=upper_stop,
     )
-    row["inside_pressure_window"] = (
-        not pd.isna(pressure)
-        and pressure_min <= float(pressure) <= pressure_max
-    )
-    row["used_for_bracket"] = (
+    row["inside_pressure_stops"] = (
         not pd.isna(pressure)
         and lower_stop <= float(pressure) <= upper_stop
     )
@@ -215,10 +207,10 @@ def _choose_start_density(
     rho_max_hard,
     fallback_rho,
     n_last,
-    pressure_min,
-    pressure_max,
+    lower_stop,
+    upper_stop,
 ):
-    pressure_midpoint = 0.5 * (pressure_min + pressure_max)
+    pressure_midpoint = 0.5 * (lower_stop + upper_stop)
     candidates = []
 
     for row in rows_by_key.values():
@@ -255,8 +247,6 @@ def run_eos_pressure_window_sweep(
     rho_step=0.005,
     rho_min_hard=0.50,
     rho_max_hard=0.85,
-    pressure_min=DEFAULT_PRESSURE_MIN,
-    pressure_max=DEFAULT_PRESSURE_MAX,
     lower_stop=DEFAULT_LOWER_STOP,
     upper_stop=DEFAULT_UPPER_STOP,
     nsteps=1_000_000,
@@ -273,12 +263,12 @@ def run_eos_pressure_window_sweep(
     **simulation_kwargs,
 ):
     """
-    Run or load a V3 liquid EOS sweep around a pressure window.
+    Run or load a V3 liquid EOS sweep between pressure stop bounds.
 
-    The defaults reproduce the old adaptive sweep shape used for the n=30 EOS
-    plots: pressure window 0.0 to 0.15, with stop bounds -0.03 to 0.18.
-    Rerunning this helper updates the summary CSV and reuses existing
-    thermalized states unless ``overwrite=True``.
+    The defaults reproduce the old adaptive sweep extent used for the n=30 EOS
+    plots: scan down until pressure drops below -0.03 and scan up until
+    pressure rises above 0.18. Rerunning this helper updates the summary CSV
+    and reuses existing thermalized states unless ``overwrite=True``.
     """
 
     output_path = default_eos_summary_path(
@@ -300,8 +290,8 @@ def run_eos_pressure_window_sweep(
             rho_max_hard=rho_max_hard,
             fallback_rho=initial_rho,
             n_last=n_last,
-            pressure_min=pressure_min,
-            pressure_max=pressure_max,
+            lower_stop=lower_stop,
+            upper_stop=upper_stop,
         )
         start_rho = round(start_rho / rho_step) * rho_step
         start_rho = min(max(start_rho, rho_min_hard), rho_max_hard)
@@ -359,8 +349,6 @@ def run_eos_pressure_window_sweep(
 
                 row = _annotate_sweep_row(
                     row=row,
-                    pressure_min=pressure_min,
-                    pressure_max=pressure_max,
                     lower_stop=lower_stop,
                     upper_stop=upper_stop,
                     scan_direction=scan_direction,
