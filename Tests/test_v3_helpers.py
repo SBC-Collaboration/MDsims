@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from md_Helpers import paths, spatial
+from md_Helpers import paths, seitz, spatial
 from md_Helpers import cavitation_sweep as cavitation_sweep_module
 from md_Helpers.cavitation_analysis import estimate_bubble_from_radial_density
 from md_Helpers.cavitation_sweep import (
@@ -235,6 +235,38 @@ class VoxelMixtureFitTests(unittest.TestCase):
         self.assertAlmostEqual(fit["gas_mean_count"], 2.0, delta=0.7)
         self.assertAlmostEqual(fit["liquid_mean_count"], 50.0, delta=1.5)
         self.assertAlmostEqual(fit["liquid_weight"], 0.75, delta=0.12)
+
+
+class SeitzTests(unittest.TestCase):
+    def test_seitz_threshold_matches_whiteboard_formula(self):
+        result = seitz.seitz_threshold(
+            volume=10.0,
+            n_cavity=6.0,
+            u_cavity=-12.0,
+            rho0=0.8,
+            u0=-2.0,
+            p0=0.5,
+        )
+
+        n0 = 8.0
+        u0_total = -16.0
+        expected = (-12.0 - u0_total) + ((n0 - 6.0) / n0) * (
+            u0_total + 0.5 * 10.0
+        )
+
+        self.assertAlmostEqual(result, expected)
+
+    def test_interpolates_liquid_reference_by_density(self):
+        result = seitz.interpolate_liquid_reference(
+            target_rho=0.75,
+            rho=[0.8, 0.7],
+            u_per_particle=[-3.0, -2.0],
+            pressure=[0.4, 0.2],
+        )
+
+        self.assertAlmostEqual(result["rho0"], 0.75)
+        self.assertAlmostEqual(result["u0"], -2.5)
+        self.assertAlmostEqual(result["p0"], 0.3)
 
 
 if __name__ == "__main__":
