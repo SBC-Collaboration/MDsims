@@ -12,6 +12,7 @@ Primary modules:
 - cavitation: cavitated starting-state creation and evolution
 - cavitation_analysis: trajectory and bubble measurements
 - cavitation_sweep: fixed-radius cavitation parameter sweeps
+- eos_sweep: adaptive liquid EOS pressure-window sweeps and plots
 - index: searchable V3 Parquet index creation
 - master_csv: rebuildable CSV summaries for completed runs
 - metadata: structured HDF5 metadata helpers
@@ -30,6 +31,7 @@ __all__ = [
     "cavitation",
     "cavitation_analysis",
     "cavitation_sweep",
+    "eos_sweep",
     "index",
     "master_csv",
     "metadata",

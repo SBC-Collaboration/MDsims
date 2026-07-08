@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from md_Helpers import master_csv, paths, seitz, spatial
+from md_Helpers import eos_sweep, master_csv, paths, seitz, spatial
 from md_Helpers import cavitation_sweep as cavitation_sweep_module
 from md_Helpers.cavitation_analysis import estimate_bubble_from_radial_density
 from md_Helpers.cavitation_sweep import (
@@ -379,6 +379,38 @@ class MasterCsvTests(unittest.TestCase):
                 table.loc[0, "PE_per_particle_mean_last2"],
                 -2.5,
             )
+
+
+class EosSweepTests(unittest.TestCase):
+    def test_pressure_region_uses_old_window_defaults(self):
+        self.assertEqual(
+            eos_sweep.pressure_region(-0.01),
+            "below_window",
+        )
+        self.assertEqual(
+            eos_sweep.pressure_region(0.10),
+            "inside_window",
+        )
+        self.assertEqual(
+            eos_sweep.pressure_region(0.20),
+            "above_window",
+        )
+
+    def test_liquid_eos_table_filters_completed_liquid_rows(self):
+        table = pd.DataFrame({
+            "status": ["completed", "failed", "completed"],
+            "phase_separated": [False, False, True],
+            "n_fcc_cells": [28, 28, 28],
+            "kT": [0.8, 0.8, 0.8],
+            "actual_rho": [0.7, 0.71, 0.72],
+            "pressure_mean_last100": [0.1, 0.2, 0.3],
+            "PE_per_particle_mean_last100": [-4.0, -4.1, -4.2],
+        })
+
+        liquid = eos_sweep.liquid_eos_table(table, n_fcc_cells=28)
+
+        self.assertEqual(len(liquid), 1)
+        self.assertAlmostEqual(liquid.loc[0, "actual_rho"], 0.7)
 
 
 if __name__ == "__main__":
