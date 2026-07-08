@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from md_Helpers import paths, seitz, spatial
+from md_Helpers import master_csv, paths, seitz, spatial
 from md_Helpers import cavitation_sweep as cavitation_sweep_module
 from md_Helpers.cavitation_analysis import estimate_bubble_from_radial_density
 from md_Helpers.cavitation_sweep import (
@@ -267,6 +267,118 @@ class SeitzTests(unittest.TestCase):
         self.assertAlmostEqual(result["rho0"], 0.75)
         self.assertAlmostEqual(result["u0"], -2.5)
         self.assertAlmostEqual(result["p0"], 0.3)
+
+    def test_liquid_reference_from_eos_filters_and_interpolates(self):
+        eos = pd.DataFrame({
+            "status": ["completed", "completed", "completed"],
+            "phase_separated": [False, False, True],
+            "kT": [0.8, 0.8, 0.8],
+            "actual_rho": [0.7, 0.8, 0.9],
+            "PE_per_particle_mean_last100": [-2.0, -3.0, -4.0],
+            "pressure_mean_last100": [0.2, 0.4, 0.6],
+        })
+
+        result = seitz.liquid_reference_from_eos(
+            eos,
+            kT=0.8,
+            target_rho=0.75,
+        )
+
+        self.assertAlmostEqual(result["rho0"], 0.75)
+        self.assertAlmostEqual(result["u0"], -2.5)
+        self.assertAlmostEqual(result["p0"], 0.3)
+
+    def test_cavity_terms_from_frame_sums_lj_per_particle_energy(self):
+        frame = make_frame(
+            positions=[
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+            ],
+            box_lengths=[10.0, 10.0, 10.0],
+        )
+
+        result = seitz.cavity_terms_from_frame(
+            frame,
+            radius=0.2,
+            center=[0.0, 0.0, 0.0],
+            r_cut_LJ=2.5,
+            lj_mode="none",
+        )
+
+        self.assertEqual(result["n_cavity"], 1)
+        self.assertAlmostEqual(result["u_cavity"], 0.0)
+
+
+class MasterCsvTests(unittest.TestCase):
+    def test_builds_thermalization_master_csv_from_hdf5_logs(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Thermalized_States_v3"
+            folder = (
+                root / "FCC" / "n_cells_30" / "rho_0.700"
+                / "kT_0.800" / "nsteps_1000" / "seed_1"
+            )
+            folder.mkdir(parents=True)
+            log_path = folder / "randomization_log.hdf5"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["state_kind"] = "thermalized"
+                state.attrs["n_fcc_cells"] = 30
+                state.attrs["N"] = 108000
+                state.attrs["target_rho"] = 0.7
+                state.attrs["actual_rho"] = 0.7
+                state.attrs["kT"] = 0.8
+                state.attrs["BoxLength"] = 10.0
+                state.attrs["volume"] = 1000.0
+
+                run = hdf.require_group("metadata/run")
+                run.attrs["nsteps"] = 1000
+                run.attrs["seed"] = 1
+
+                phase = hdf.require_group(
+                    "metadata/classification/phase_separation"
+                )
+                phase.attrs["phase_separated"] = False
+
+                hdf.create_dataset(
+                    "hoomd-data/Simulation/timestep",
+                    data=np.array([0, 1, 2]),
+                )
+                thermo = hdf.require_group(
+                    "hoomd-data/md/compute/ThermodynamicQuantities"
+                )
+                thermo.create_dataset(
+                    "pressure",
+                    data=np.array([1.0, 2.0, 3.0]),
+                )
+                thermo.create_dataset(
+                    "potential_energy",
+                    data=np.array([-108000.0, -216000.0, -324000.0]),
+                )
+
+            output_path = Path(tmp) / "master.csv"
+            table = master_csv.build_thermalization_master_csv(
+                root=root,
+                output_path=output_path,
+                n_last=2,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(len(table), 1)
+            self.assertAlmostEqual(
+                table.loc[0, "pressure_mean_last2"],
+                2.5,
+            )
+            self.assertAlmostEqual(
+                table.loc[0, "PE_per_particle_mean_last2"],
+                -2.5,
+            )
 
 
 if __name__ == "__main__":

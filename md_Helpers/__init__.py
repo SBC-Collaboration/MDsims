@@ -13,6 +13,7 @@ Primary modules:
 - cavitation_analysis: trajectory and bubble measurements
 - cavitation_sweep: fixed-radius cavitation parameter sweeps
 - index: searchable V3 Parquet index creation
+- master_csv: rebuildable CSV summaries for completed runs
 - metadata: structured HDF5 metadata helpers
 - seitz: Seitz threshold calculation helpers
 - visualization: rendering and plotting
@@ -30,6 +31,7 @@ __all__ = [
     "cavitation_analysis",
     "cavitation_sweep",
     "index",
+    "master_csv",
     "metadata",
     "seitz",
     "visualization",
