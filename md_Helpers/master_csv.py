@@ -271,6 +271,260 @@ def build_results_inventory_csv(
     return table
 
 
+SEITZ_MASTER_COLUMNS = [
+    "n_cells",
+    "N_source",
+    "rho_source",
+    "source_kT",
+    "source_nsteps",
+    "source_seed",
+    "source_radius",
+    "bubble_seed",
+    "evolve_nsteps",
+    "evolve_seed",
+    "final_phase_separated",
+    "radius_outcome",
+    "status",
+    "reason",
+    "N_cav",
+    "u_c",
+    "rho_liquid",
+    "rho_cav",
+    "P_EOS",
+    "u_EOS",
+    "Q",
+    "cavitation_log_path",
+    "trajectory_path",
+]
+
+
+def _seitz_nan_terms():
+    return {
+        "N_cav": np.nan,
+        "u_c": np.nan,
+        "rho_liquid": np.nan,
+        "rho_cav": np.nan,
+        "P_EOS": np.nan,
+        "u_EOS": np.nan,
+        "Q": np.nan,
+    }
+
+
+def _first_nonmissing(*values):
+    for value in values:
+        if value is not None and not pd.isna(value):
+            return value
+    return np.nan
+
+
+def _summarize_cavitation_radius(log_path, trajectory_path):
+    from . import cavitation_analysis
+    from .cavitation_sweep import summarize_bubble_survival
+
+    if not trajectory_path or not Path(trajectory_path).exists():
+        return {}
+
+    measurements = cavitation_analysis.measure_cavitation_trajectory(
+        trajectory_path=trajectory_path,
+        log_path=log_path,
+    )
+    return summarize_bubble_survival(measurements)
+
+
+def summarize_seitz_cavitation_log(
+    log_path,
+    eos_table=None,
+    n_last=100,
+    classification_kwargs=None,
+    seitz_kwargs=None,
+):
+    """
+    Summarize one completed cavitation evolution for the barebones Seitz CSV.
+
+    Seitz terms are only computed when the final voxel classifier reports
+    phase separation. Rethermalized rows keep all Seitz-specific columns as
+    ``NaN``.
+    """
+
+    import h5py
+    from . import classification
+    from . import seitz
+
+    log_path = Path(log_path)
+    classification_kwargs = dict(classification_kwargs or {})
+    seitz_kwargs = dict(seitz_kwargs or {})
+
+    row = {
+        "cavitation_log_path": str(log_path),
+        **_seitz_nan_terms(),
+    }
+
+    try:
+        with h5py.File(log_path, mode="r") as hdf:
+            state = _read_attrs(hdf, "metadata/state")
+            run = _read_attrs(hdf, "metadata/run")
+            source = _read_attrs(hdf, "metadata/source")
+            creation = _read_attrs(hdf, "metadata/creation")
+            paths = _read_attrs(hdf, "metadata/paths")
+
+        n_cells = _first_nonmissing(
+            state.get("n_fcc_cells"),
+            source.get("n_fcc_cells"),
+        )
+        row.update({
+            "n_cells": n_cells,
+            "N_source": _first_nonmissing(
+                source.get("source_N"),
+                4 * int(n_cells) ** 3 if not pd.isna(n_cells) else np.nan,
+            ),
+            "rho_source": _first_nonmissing(
+                source.get("source_rho"),
+                state.get("source_rho"),
+            ),
+            "source_kT": _first_nonmissing(
+                source.get("source_kT"),
+                state.get("kT"),
+            ),
+            "source_nsteps": source.get("source_nsteps", np.nan),
+            "source_seed": source.get("source_seed", np.nan),
+            "source_radius": _first_nonmissing(
+                creation.get("radius"),
+                creation.get("bubble_radius"),
+            ),
+            "bubble_seed": creation.get("bubble_seed", np.nan),
+            "evolve_nsteps": run.get("nsteps", np.nan),
+            "evolve_seed": run.get("seed", np.nan),
+            "trajectory_path": str(paths.get("trajectory_path", "")),
+        })
+
+        final_state_path = paths.get("final_state_path")
+        voxel, _ = classification.read_phase_method_attrs(log_path, "voxel")
+        if "phase_separated" not in voxel:
+            voxel = classification.write_voxel_phase_separation_metadata(
+                log_path=log_path,
+                state_path=final_state_path,
+                **classification_kwargs,
+            )
+
+        row["final_phase_separated"] = voxel.get("phase_separated")
+
+        try:
+            survival = _summarize_cavitation_radius(
+                log_path=log_path,
+                trajectory_path=row["trajectory_path"],
+            )
+            row["radius_outcome"] = survival.get("radius_outcome", np.nan)
+        except Exception as error:
+            row["radius_outcome"] = np.nan
+            row["radius_summary_error"] = repr(error)
+
+        if not bool(row["final_phase_separated"]):
+            row["status"] = "rethermalized"
+            row["reason"] = "final voxel classifier did not phase separate"
+            return row
+
+        terms = seitz.extract_bubble_state_terms(
+            metadata_path=log_path,
+            eos_table=eos_table,
+            n_last=n_last,
+            **seitz_kwargs,
+        )
+        row.update({
+            "status": "seitz_computed",
+            "reason": "",
+            "N_cav": terms.get("Nc", np.nan),
+            "u_c": terms.get("uc", np.nan),
+            "rho_liquid": terms.get("rho_0", np.nan),
+            "rho_cav": terms.get("rho_c", np.nan),
+            "P_EOS": terms.get("P0", terms.get("p0", np.nan)),
+            "u_EOS": terms.get("u0", np.nan),
+            "Q": terms.get("Q", terms.get("q_seitz", np.nan)),
+        })
+        return row
+    except Exception as error:
+        row["status"] = "summary_failed"
+        row["reason"] = repr(error)
+        return row
+
+
+def build_seitz_master_csv(
+    root=CAVITATION_EVOLVED_V3_ROOT,
+    output_path=None,
+    output_name="seitz_master.csv",
+    eos_table=None,
+    n_last=100,
+    classification_kwargs=None,
+    seitz_kwargs=None,
+    preserve_extra_columns=True,
+):
+    """Build/update the barebones Seitz master CSV for found cavitation runs."""
+
+    root = Path(root)
+    output_path = _default_master_csv_path(output_path, output_name)
+
+    rows = []
+    if root.exists():
+        for log_path in sorted(root.rglob("cavitation_log.hdf5")):
+            rows.append(summarize_seitz_cavitation_log(
+                log_path=log_path,
+                eos_table=eos_table,
+                n_last=n_last,
+                classification_kwargs=classification_kwargs,
+                seitz_kwargs=seitz_kwargs,
+            ))
+
+    table = pd.DataFrame(rows)
+    for column in SEITZ_MASTER_COLUMNS:
+        if column not in table.columns:
+            table[column] = np.nan
+
+    extra_columns = [
+        column for column in table.columns
+        if column not in SEITZ_MASTER_COLUMNS
+    ]
+    table = table[[*SEITZ_MASTER_COLUMNS, *extra_columns]]
+
+    if not table.empty:
+        table = table.sort_values([
+            column for column in [
+                "n_cells",
+                "rho_source",
+                "source_kT",
+                "source_nsteps",
+                "source_seed",
+                "source_radius",
+                "bubble_seed",
+                "evolve_nsteps",
+                "evolve_seed",
+                "cavitation_log_path",
+            ]
+            if column in table.columns
+        ]).reset_index(drop=True)
+
+    if (
+        preserve_extra_columns
+        and output_path.exists()
+        and "cavitation_log_path" in table.columns
+    ):
+        old = pd.read_csv(output_path)
+        if "cavitation_log_path" in old.columns:
+            old_extra_cols = [
+                col for col in old.columns
+                if col not in table.columns and col != "cavitation_log_path"
+            ]
+            if old_extra_cols:
+                table = table.merge(
+                    old[["cavitation_log_path", *old_extra_cols]],
+                    on="cavitation_log_path",
+                    how="left",
+                )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output_path, index=False)
+
+    return table
+
+
 def summarize_thermalization_log(log_path, n_last=100):
     """
     Summarize one V3 thermalization HDF5 log as one master-CSV row.

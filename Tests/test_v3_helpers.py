@@ -708,6 +708,127 @@ class MasterCsvTests(unittest.TestCase):
             self.assertEqual(int(summary["n_files"].sum()), 2)
             self.assertIn("trajectory", set(summary["file_role"]))
 
+    def test_seitz_master_leaves_terms_empty_for_rethermalized_run(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Cavitation_Evolved_v3"
+            run = root / "FCC" / "run_1"
+            run.mkdir(parents=True)
+            log_path = run / "cavitation_log.hdf5"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["n_fcc_cells"] = 30
+                state.attrs["source_rho"] = 0.6
+                state.attrs["kT"] = 1.0
+
+                run_group = hdf.require_group("metadata/run")
+                run_group.attrs["nsteps"] = 100_000
+                run_group.attrs["seed"] = 1
+
+                source = hdf.require_group("metadata/source")
+                source.attrs["source_N"] = 108000
+                source.attrs["source_rho"] = 0.6
+                source.attrs["source_kT"] = 1.0
+                source.attrs["source_nsteps"] = 1_000_000
+                source.attrs["source_seed"] = 1
+
+                creation = hdf.require_group("metadata/creation")
+                creation.attrs["radius"] = 7.0
+                creation.attrs["bubble_seed"] = 1
+
+                paths_group = hdf.require_group("metadata/paths")
+                paths_group.attrs["trajectory_path"] = str(
+                    run / "cavitation_trajectory.gsd"
+                )
+
+                voxel = hdf.require_group(
+                    "metadata/classification/phase_separation/voxel"
+                )
+                voxel.attrs["phase_separated"] = False
+
+            table = master_csv.build_seitz_master_csv(
+                root=root,
+                output_path=Path(tmp) / "seitz.csv",
+            )
+
+        self.assertEqual(len(table), 1)
+        self.assertEqual(table.loc[0, "status"], "rethermalized")
+        self.assertFalse(bool(table.loc[0, "final_phase_separated"]))
+        self.assertTrue(pd.isna(table.loc[0, "Q"]))
+        self.assertTrue(pd.isna(table.loc[0, "N_cav"]))
+
+    def test_seitz_master_computes_terms_for_phase_separated_run(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Cavitation_Evolved_v3"
+            run = root / "FCC" / "run_1"
+            run.mkdir(parents=True)
+            log_path = run / "cavitation_log.hdf5"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["n_fcc_cells"] = 30
+                state.attrs["source_rho"] = 0.6
+                state.attrs["kT"] = 1.0
+
+                run_group = hdf.require_group("metadata/run")
+                run_group.attrs["nsteps"] = 100_000
+                run_group.attrs["seed"] = 2
+
+                source = hdf.require_group("metadata/source")
+                source.attrs["source_N"] = 108000
+                source.attrs["source_rho"] = 0.6
+                source.attrs["source_kT"] = 1.0
+                source.attrs["source_nsteps"] = 1_000_000
+                source.attrs["source_seed"] = 1
+
+                creation = hdf.require_group("metadata/creation")
+                creation.attrs["radius"] = 7.0
+                creation.attrs["bubble_seed"] = 3
+
+                paths_group = hdf.require_group("metadata/paths")
+                paths_group.attrs["trajectory_path"] = str(
+                    run / "cavitation_trajectory.gsd"
+                )
+
+                voxel = hdf.require_group(
+                    "metadata/classification/phase_separation/voxel"
+                )
+                voxel.attrs["phase_separated"] = True
+
+            with patch(
+                "md_Helpers.seitz.extract_bubble_state_terms",
+                return_value={
+                    "Nc": 100.0,
+                    "uc": -1.2,
+                    "rho_0": 0.61,
+                    "rho_c": 0.02,
+                    "P0": 0.4,
+                    "u0": -2.0,
+                    "Q": 15.0,
+                },
+            ) as seitz_mock:
+                table = master_csv.build_seitz_master_csv(
+                    root=root,
+                    output_path=Path(tmp) / "seitz.csv",
+                )
+
+        seitz_mock.assert_called_once()
+        self.assertEqual(table.loc[0, "status"], "seitz_computed")
+        self.assertTrue(bool(table.loc[0, "final_phase_separated"]))
+        self.assertAlmostEqual(table.loc[0, "N_cav"], 100.0)
+        self.assertAlmostEqual(table.loc[0, "Q"], 15.0)
+        self.assertEqual(table.loc[0, "bubble_seed"], 3)
+
 
 class EosSweepTests(unittest.TestCase):
     def test_pressure_stop_region_uses_old_stop_defaults(self):
