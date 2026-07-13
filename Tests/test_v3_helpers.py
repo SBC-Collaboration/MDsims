@@ -281,6 +281,33 @@ class SeitzTests(unittest.TestCase):
             0.3,
         )
 
+    def test_eos_estimator_averages_duplicate_density_rows(self):
+        eos = pd.DataFrame({
+            "status": ["completed", "completed", "completed"],
+            "phase_separated": [False, False, False],
+            "kT": [0.8, 0.8, 0.8],
+            "actual_rho": [0.7, 0.7, 0.8],
+            "PE_per_particle_mean_last100": [-2.0, -4.0, -5.0],
+            "pressure_mean_last100": [0.2, 0.4, 0.8],
+        })
+
+        self.assertAlmostEqual(
+            seitz.estimate_u0_from_eos(
+                eos,
+                kT=0.8,
+                target_rho=0.75,
+            ),
+            -4.0,
+        )
+        self.assertAlmostEqual(
+            seitz.estimate_p0_from_eos(
+                eos,
+                kT=0.8,
+                target_rho=0.75,
+            ),
+            0.55,
+        )
+
     def test_estimates_use_default_eos_csv_when_table_is_omitted(self):
         eos = pd.DataFrame({
             "status": ["completed", "completed"],
@@ -492,6 +519,43 @@ class SeitzTests(unittest.TestCase):
                     plot=False,
                     estimate_reference=False,
                 )
+
+    def test_extract_bubble_state_terms_reports_missing_evolution_log(self):
+        with TemporaryDirectory() as tmp:
+            missing_log = Path(tmp) / "cavitation_log.hdf5"
+
+            with self.assertRaisesRegex(
+                FileNotFoundError,
+                "cavitation evolution did not complete",
+            ):
+                seitz.extract_bubble_state_terms(
+                    metadata_path=missing_log,
+                    plot=False,
+                    estimate_reference=False,
+                )
+
+    def test_extract_cavitation_result_terms_handles_skipped_cavitation(self):
+        result = seitz.extract_bubble_state_terms({
+            "status": "source_phase_separated",
+            "paths": {
+                "log_path": "missing_log.hdf5",
+                "trajectory_path": "missing_trajectory.gsd",
+            },
+            "initial_result": {
+                "source_phase_separation": {
+                    "phase_separated": True,
+                    "low_density_fraction": 0.044,
+                },
+            },
+        })
+
+        self.assertEqual(result["status"], "seitz_not_computed")
+        self.assertEqual(
+            result["cavitation_status"],
+            "source_phase_separated",
+        )
+        self.assertTrue(np.isnan(result["Q"]))
+        self.assertAlmostEqual(result["source_low_density_fraction"], 0.044)
 
     def test_extract_bubble_state_terms_defaults_to_five_frames_skip_five(self):
         try:

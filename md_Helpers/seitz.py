@@ -1,4 +1,5 @@
 import numpy as np
+from pathlib import Path
 
 
 THERMO_BASE = "hoomd-data/md/compute/ThermodynamicQuantities"
@@ -29,6 +30,17 @@ def _eos_table_source(eos_table):
     if isinstance(resolved, (str, bytes)) or hasattr(resolved, "__fspath__"):
         return str(resolved)
     return "provided_table"
+
+
+def _require_existing_hdf5(path, label):
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{label} does not exist: {path}. "
+            "This usually means the cavitation evolution did not complete. "
+            "Check the result status before extracting Seitz terms."
+        )
+    return path
 
 
 def seitz_threshold(nc, uc, u0, p0, rho_c, rho_0):
@@ -193,13 +205,18 @@ def _estimate_eos_quantity(
     if method != "linear":
         raise ValueError(f"Unsupported EOS interpolation method: {method}")
 
+    same_temperature = (
+        same_temperature.groupby("actual_rho", as_index=False)[
+            quantity_column
+        ]
+        .mean()
+        .sort_values("actual_rho")
+    )
+
     values = np.asarray(same_temperature[quantity_column], dtype=np.float64)
     rho = np.asarray(same_temperature["actual_rho"], dtype=np.float64)
     order = np.argsort(rho)
     rho_sorted = rho[order]
-
-    if np.any(np.diff(rho_sorted) == 0):
-        raise ValueError("rho values must be unique")
 
     return float(np.interp(float(target_rho), rho_sorted, values[order]))
 
@@ -362,6 +379,35 @@ def extract_bubble_state_terms(
     default EOS table at ``(kT, rho_0)``.
     """
 
+    if isinstance(metadata_path, dict):
+        return extract_cavitation_result_terms(
+            metadata_path,
+            trajectory_path=trajectory_path,
+            log_path=log_path,
+            seeded_potential_energy=seeded_potential_energy,
+            n_last=n_last,
+            kT=kT,
+            nbins=nbins,
+            nframes=nframes,
+            nskip=nskip,
+            tail_fraction=tail_fraction,
+            interface_void_fraction=interface_void_fraction,
+            interface_points=interface_points,
+            max_iterations=max_iterations,
+            plot=plot,
+            show_residuals=show_residuals,
+            animate=animate,
+            eos_table=eos_table,
+            estimate_reference=estimate_reference,
+            eos_method=eos_method,
+            eos_kT_atol=eos_kT_atol,
+        )
+
+    metadata_path = _require_existing_hdf5(
+        metadata_path,
+        "bubble/evolution metadata_path",
+    )
+
     from . import metadata
     from .visualization import fit_and_animate_final_bubble
 
@@ -376,6 +422,7 @@ def extract_bubble_state_terms(
     if seeded_potential_energy is None:
         if log_path is None:
             log_path = paths_attrs.get("log_path") or metadata_path
+        log_path = _require_existing_hdf5(log_path, "bubble/evolution log_path")
         seeded_potential_energy = _read_thermo_mean(
             log_path,
             "potential_energy",
@@ -466,3 +513,51 @@ def extract_bubble_state_terms(
         result.pop("check", None)
 
     return result
+
+
+def extract_cavitation_result_terms(cavitation_result, **kwargs):
+    """
+    Extract Seitz terms from a ``get_or_create_cavitation`` result.
+
+    If cavitation was skipped or did not complete, return a status row with
+    ``Q``/``q_seitz`` set to ``nan`` instead of trying to open a missing log.
+    """
+
+    status = cavitation_result.get("status", "unknown")
+    completed_statuses = {"created_evolution", "loaded_evolution"}
+
+    if status not in completed_statuses:
+        result = {
+            "status": "seitz_not_computed",
+            "cavitation_status": status,
+            "Q": np.nan,
+            "q_seitz": np.nan,
+            "reason": "cavitation evolution did not complete",
+        }
+
+        initial = cavitation_result.get("initial_result", {})
+        source_phase = initial.get("source_phase_separation", {})
+        if source_phase:
+            result["source_phase_separated"] = source_phase.get(
+                "phase_separated"
+            )
+            result["source_low_density_fraction"] = source_phase.get(
+                "low_density_fraction"
+            )
+
+        paths = cavitation_result.get("paths", {})
+        if paths:
+            result["expected_log_path"] = str(paths.get("log_path", ""))
+            result["expected_trajectory_path"] = str(
+                paths.get("trajectory_path", "")
+            )
+
+        return result
+
+    terms = extract_bubble_state_terms(
+        metadata_path=cavitation_result["paths"]["log_path"],
+        **kwargs,
+    )
+    terms["status"] = "seitz_computed"
+    terms["cavitation_status"] = status
+    return terms
