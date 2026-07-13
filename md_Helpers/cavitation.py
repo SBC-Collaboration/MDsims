@@ -364,6 +364,7 @@ def get_source_randomization_result(
         missing_paths.append(source_log_path)
 
     if missing_paths:
+        print("Thermalized state does not exist: running now.")
         print("No source thermalized state found for the specified values.")
         print("=" * 70)
         print("n_fcc_cells       =", n_fcc_cells)
@@ -394,6 +395,8 @@ def get_source_randomization_result(
             }
 
         print("create_source_if_missing=True; starting thermalization now.")
+    else:
+        print("Thermalized state exists: checking phase separation.")
 
     result = simulation_helpers.get_or_make_thermalized_state(
         n_fcc_cells=n_fcc_cells,
@@ -668,6 +671,7 @@ def get_or_create_cavitation_state(
         reject_phase_separated_source
         and source_phase_separation["phase_separated"]
     ):
+        print("Thermalized state phase separated; no cavitation will be done.")
         print("Skipping cavitation: thermalized source is phase separated.")
         print("=" * 70)
         print("source_state_path:", source_result["paths"]["state_path"])
@@ -686,6 +690,12 @@ def get_or_create_cavitation_state(
             "created_new": False,
             "status": "source_phase_separated",
         }
+
+    print("Thermalized state good; continuing to cavitation.")
+    print(
+        "source_low_density_fraction:",
+        source_phase_separation.get("low_density_fraction"),
+    )
 
     source_frame = source_result["frame"]
     state_path = Path(paths["state_path"])
