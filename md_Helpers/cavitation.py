@@ -692,10 +692,6 @@ def get_or_create_cavitation_state(
         }
 
     print("Thermalized state good; continuing to cavitation.")
-    print(
-        "source_low_density_fraction:",
-        source_phase_separation.get("low_density_fraction"),
-    )
 
     source_frame = source_result["frame"]
     state_path = Path(paths["state_path"])
@@ -711,6 +707,8 @@ def get_or_create_cavitation_state(
     )
 
     if state_path.exists() and not overwrite:
+        print()
+        print()
         print("Loaded existing cavitation initial state:")
         print(state_path)
 
@@ -1027,6 +1025,8 @@ def get_or_create_cavitation(
         and log_path.exists()
         and not overwrite
     ):
+        print()
+        print()
         print("Loaded existing cavitation evolution:")
         print(final_state_path)
 
