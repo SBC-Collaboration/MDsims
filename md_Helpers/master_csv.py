@@ -3,11 +3,37 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .paths import MASTER_CSVS_V3_ROOT, THERMALIZED_STATES_V3_ROOT
+from .paths import (
+    CAVITATION_EVOLVED_V3_ROOT,
+    CAVITATION_STATES_V3_ROOT,
+    EXCITATION_EVOLVED_V3_ROOT,
+    EXCITATION_STATES_V3_ROOT,
+    MASTER_CSVS_V3_ROOT,
+    SIMPLE_LATTICES_V3_ROOT,
+    THERMALIZED_STATES_V3_ROOT,
+)
 
 
 THERMO_BASE = "hoomd-data/md/compute/ThermodynamicQuantities"
 TIMESTEP_PATH = "hoomd-data/Simulation/timestep"
+
+RESULT_FILE_SUFFIXES = {
+    ".csv",
+    ".gsd",
+    ".h5",
+    ".hdf5",
+    ".parquet",
+}
+
+DEFAULT_RESULTS_INVENTORY_ROOTS = {
+    "simple_lattice": SIMPLE_LATTICES_V3_ROOT,
+    "thermalized": THERMALIZED_STATES_V3_ROOT,
+    "cavitation_initial": CAVITATION_STATES_V3_ROOT,
+    "cavitation_evolved": CAVITATION_EVOLVED_V3_ROOT,
+    "excitation_initial": EXCITATION_STATES_V3_ROOT,
+    "excitation_evolved": EXCITATION_EVOLVED_V3_ROOT,
+    "master_csv": MASTER_CSVS_V3_ROOT,
+}
 
 
 def _clean_value(value):
@@ -51,6 +77,198 @@ def _read_dataset(hdf, dataset_path):
         return None
 
     return np.asarray(hdf[dataset_path])
+
+
+def _relative_path(path, root):
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _result_file_role(path):
+    name = path.name
+
+    if name.endswith("_log.hdf5") or name in {
+        "cavitation_log.hdf5",
+        "excitation_log.hdf5",
+        "randomization_log.hdf5",
+    }:
+        return "log"
+
+    if name.endswith("_metadata.hdf5") or name.endswith("_creation.hdf5"):
+        return "metadata"
+
+    if name.endswith("_trajectory.gsd"):
+        return "trajectory"
+
+    if name.endswith("_final.gsd"):
+        return "final_state"
+
+    if name.endswith(".gsd"):
+        return "state"
+
+    if name.endswith(".csv"):
+        return "summary_csv"
+
+    if name.endswith(".parquet"):
+        return "index"
+
+    return "result_file"
+
+
+def _file_stem_key(path):
+    stem = path.stem
+    for suffix in [
+        "_trajectory",
+        "_final",
+        "_initial",
+        "_creation",
+        "_metadata",
+        "_log",
+    ]:
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
+def inventory_result_files(
+    roots=None,
+    suffixes=RESULT_FILE_SUFFIXES,
+    include_missing_roots=True,
+):
+    """
+    Return one row per discovered result file under the configured V3 roots.
+
+    The inventory is intentionally shallow: it records what files exist,
+    where they live, their size/mtime, and simple role labels inferred from
+    filename conventions. It does not open GSD/HDF5 contents, so it can be run
+    quickly while compute services are unavailable.
+    """
+
+    roots = roots or DEFAULT_RESULTS_INVENTORY_ROOTS
+    suffixes = {str(suffix).lower() for suffix in suffixes}
+    rows = []
+
+    for result_family, root in roots.items():
+        root = Path(root)
+
+        if not root.exists():
+            if include_missing_roots:
+                rows.append({
+                    "result_family": result_family,
+                    "root": str(root),
+                    "relative_path": "",
+                    "path": "",
+                    "filename": "",
+                    "suffix": "",
+                    "file_role": "missing_root",
+                    "stem_key": "",
+                    "parent": "",
+                    "exists": False,
+                    "size_bytes": np.nan,
+                    "mtime": "",
+                })
+            continue
+
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in suffixes:
+                continue
+
+            stat = path.stat()
+            rows.append({
+                "result_family": result_family,
+                "root": str(root),
+                "relative_path": _relative_path(path, root),
+                "path": str(path),
+                "filename": path.name,
+                "suffix": path.suffix.lower(),
+                "file_role": _result_file_role(path),
+                "stem_key": _file_stem_key(path),
+                "parent": str(path.parent),
+                "exists": True,
+                "size_bytes": int(stat.st_size),
+                "mtime": pd.Timestamp.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+
+    sort_cols = [
+        col for col in [
+            "exists",
+            "result_family",
+            "parent",
+            "stem_key",
+            "file_role",
+            "filename",
+        ]
+        if col in table.columns
+    ]
+    return table.sort_values(sort_cols).reset_index(drop=True)
+
+
+def summarize_results_inventory(inventory):
+    """Summarize an inventory table by result family and file role."""
+
+    if inventory.empty:
+        return pd.DataFrame(columns=[
+            "result_family",
+            "file_role",
+            "n_files",
+            "total_size_bytes",
+        ])
+
+    existing = inventory[inventory["exists"]].copy()
+    if existing.empty:
+        return pd.DataFrame(columns=[
+            "result_family",
+            "file_role",
+            "n_files",
+            "total_size_bytes",
+        ])
+
+    return (
+        existing.groupby(["result_family", "file_role"], dropna=False)
+        .agg(
+            n_files=("path", "count"),
+            total_size_bytes=("size_bytes", "sum"),
+        )
+        .reset_index()
+        .sort_values(["result_family", "file_role"])
+        .reset_index(drop=True)
+    )
+
+
+def build_results_inventory_csv(
+    roots=None,
+    output_path=None,
+    output_name="results_inventory.csv",
+    suffixes=RESULT_FILE_SUFFIXES,
+    include_missing_roots=True,
+):
+    """
+    Scan V3 result folders and write a lightweight file inventory CSV.
+
+    Returns the detailed inventory table. Use
+    :func:`summarize_results_inventory` on the returned table for a compact
+    count/size summary by result family and file role.
+    """
+
+    output_path = _default_master_csv_path(output_path, output_name)
+    table = inventory_result_files(
+        roots=roots,
+        suffixes=suffixes,
+        include_missing_roots=include_missing_roots,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output_path, index=False)
+
+    return table
 
 
 def summarize_thermalization_log(log_path, n_last=100):

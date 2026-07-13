@@ -238,76 +238,302 @@ class VoxelMixtureFitTests(unittest.TestCase):
 
 
 class SeitzTests(unittest.TestCase):
-    def test_seitz_threshold_matches_whiteboard_formula(self):
+    def test_seitz_threshold_matches_intensive_formula(self):
         result = seitz.seitz_threshold(
-            volume=10.0,
-            n_cavity=6.0,
-            u_cavity=-12.0,
-            rho0=0.8,
+            nc=75.0,
+            uc=-140.0 / 75.0,
             u0=-2.0,
             p0=0.5,
+            rho_c=0.75,
+            rho_0=0.8,
         )
 
-        n0 = 8.0
-        u0_total = -16.0
-        expected = (-12.0 - u0_total) + ((n0 - 6.0) / n0) * (
-            u0_total + 0.5 * 10.0
+        expected = 75.0 * (
+            (-140.0 / 75.0 - -2.0) + 0.5 * (1.0 / 0.75 - 1.0 / 0.8)
         )
 
         self.assertAlmostEqual(result, expected)
 
-    def test_interpolates_liquid_reference_by_density(self):
-        result = seitz.interpolate_liquid_reference(
-            target_rho=0.75,
-            rho=[0.8, 0.7],
-            u_per_particle=[-3.0, -2.0],
-            pressure=[0.4, 0.2],
-        )
-
-        self.assertAlmostEqual(result["rho0"], 0.75)
-        self.assertAlmostEqual(result["u0"], -2.5)
-        self.assertAlmostEqual(result["p0"], 0.3)
-
-    def test_liquid_reference_from_eos_filters_and_interpolates(self):
+    def test_estimates_u0_and_p0_from_eos(self):
         eos = pd.DataFrame({
-            "status": ["completed", "completed", "completed"],
-            "phase_separated": [False, False, True],
-            "kT": [0.8, 0.8, 0.8],
-            "actual_rho": [0.7, 0.8, 0.9],
-            "PE_per_particle_mean_last100": [-2.0, -3.0, -4.0],
-            "pressure_mean_last100": [0.2, 0.4, 0.6],
+            "status": ["completed", "completed"],
+            "phase_separated": [False, False],
+            "kT": [0.8, 0.8],
+            "actual_rho": [0.7, 0.8],
+            "PE_per_particle_mean_last100": [-2.0, -3.0],
+            "pressure_mean_last100": [0.2, 0.4],
         })
 
-        result = seitz.liquid_reference_from_eos(
-            eos,
-            kT=0.8,
-            target_rho=0.75,
+        self.assertAlmostEqual(
+            seitz.estimate_u0_from_eos(
+                eos,
+                kT=0.8,
+                target_rho=0.75,
+            ),
+            -2.5,
+        )
+        self.assertAlmostEqual(
+            seitz.estimate_p0_from_eos(
+                eos,
+                kT=0.8,
+                target_rho=0.75,
+            ),
+            0.3,
         )
 
-        self.assertAlmostEqual(result["rho0"], 0.75)
-        self.assertAlmostEqual(result["u0"], -2.5)
-        self.assertAlmostEqual(result["p0"], 0.3)
+    def test_estimates_use_default_eos_csv_when_table_is_omitted(self):
+        eos = pd.DataFrame({
+            "status": ["completed", "completed"],
+            "phase_separated": [False, False],
+            "kT": [0.8, 0.8],
+            "actual_rho": [0.7, 0.8],
+            "PE_per_particle_mean_last100": [-2.0, -3.0],
+            "pressure_mean_last100": [0.2, 0.4],
+        })
 
-    def test_cavity_terms_from_frame_sums_lj_per_particle_energy(self):
-        frame = make_frame(
-            positions=[
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [3.0, 0.0, 0.0],
-            ],
-            box_lengths=[10.0, 10.0, 10.0],
+        with TemporaryDirectory() as tmp, patch.object(
+            paths,
+            "MASTER_CSVS_V3_ROOT",
+            Path(tmp),
+        ), patch.object(
+            seitz,
+            "DEFAULT_EOS_TABLE_NAME",
+            "default_eos.csv",
+        ):
+            eos.to_csv(Path(tmp) / "default_eos.csv", index=False)
+
+            self.assertAlmostEqual(
+                seitz.estimate_u0_from_eos(
+                    kT=0.8,
+                    target_rho=0.75,
+                ),
+                -2.5,
+            )
+            self.assertAlmostEqual(
+                seitz.estimate_p0_from_eos(
+                    kT=0.8,
+                    target_rho=0.75,
+                ),
+                0.3,
+            )
+
+    def test_eos_estimator_rejects_unknown_method(self):
+        eos = pd.DataFrame({
+            "status": ["completed", "completed"],
+            "phase_separated": [False, False],
+            "kT": [0.8, 0.8],
+            "actual_rho": [0.7, 0.8],
+            "PE_per_particle_mean_last100": [-2.0, -3.0],
+            "pressure_mean_last100": [0.2, 0.4],
+        })
+
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            seitz.estimate_u0_from_eos(
+                eos,
+                kT=0.8,
+                target_rho=0.75,
+                method="quadratic",
+            )
+
+    def test_extract_bubble_state_terms_uses_metadata_log_and_check(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        fake_check = {
+            "fit": {
+                "liquid_density": 0.8,
+                "liquid_sigma_density": 0.04,
+                "gas_density": 0.02,
+                "bubble_radius_estimate": 3.0,
+                "bubble_volume_estimate": 100.0,
+            },
+        }
+
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "bubble_log.hdf5"
+            trajectory_path = Path(tmp) / "bubble_trajectory.gsd"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["kT"] = 0.8
+                state.attrs["N"] = 999
+                state.attrs["volume"] = 100.0
+
+                creation = hdf.require_group("metadata/creation")
+                creation.attrs["N_after"] = 75
+
+                paths = hdf.require_group("metadata/paths")
+                paths.attrs["trajectory_path"] = str(trajectory_path)
+                paths.attrs["log_path"] = str(log_path)
+
+                thermo = hdf.require_group(
+                    "hoomd-data/md/compute/ThermodynamicQuantities"
+                )
+                thermo.create_dataset(
+                    "potential_energy",
+                    data=np.array([-120.0, -140.0]),
+                )
+
+            with patch(
+                "md_Helpers.visualization.fit_and_animate_final_bubble",
+                return_value=fake_check,
+            ) as check_mock:
+                result = seitz.extract_bubble_state_terms(
+                    metadata_path=log_path,
+                    n_last=None,
+                    nbins=8,
+                    nframes=3,
+                    nskip=2,
+                    plot=True,
+                    estimate_reference=False,
+                )
+
+        check_mock.assert_called_once()
+        self.assertEqual(
+            check_mock.call_args.args[0],
+            str(trajectory_path),
+        )
+        self.assertEqual(check_mock.call_args.kwargs["nbins"], 8)
+        self.assertEqual(check_mock.call_args.kwargs["nframes"], 3)
+        self.assertEqual(check_mock.call_args.kwargs["skip"], 2)
+        self.assertTrue(check_mock.call_args.kwargs["show_histogram"])
+        self.assertTrue(check_mock.call_args.kwargs["show_residuals"])
+        self.assertAlmostEqual(result["Nc"], 75.0)
+        self.assertAlmostEqual(result["Uc"], -140.0)
+        self.assertAlmostEqual(result["uc"], -140.0 / 75.0)
+        self.assertAlmostEqual(result["rho_c"], 0.75)
+        self.assertAlmostEqual(result["rho_0"], 0.8)
+        self.assertAlmostEqual(result["V"], 100.0)
+        self.assertAlmostEqual(result["kT"], 0.8)
+
+    def test_extract_bubble_state_terms_adds_reference_values_and_q(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        eos = pd.DataFrame({
+            "status": ["completed", "completed"],
+            "phase_separated": [False, False],
+            "kT": [0.8, 0.8],
+            "actual_rho": [0.7, 0.9],
+            "PE_per_particle_mean_last100": [-2.0, -4.0],
+            "pressure_mean_last100": [0.2, 0.6],
+        })
+        fake_check = {"fit": {"liquid_density": 0.8}}
+
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "bubble_log.hdf5"
+            trajectory_path = Path(tmp) / "bubble_trajectory.gsd"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["kT"] = 0.8
+                state.attrs["volume"] = 100.0
+
+                creation = hdf.require_group("metadata/creation")
+                creation.attrs["N_after"] = 75
+
+                paths_group = hdf.require_group("metadata/paths")
+                paths_group.attrs["trajectory_path"] = str(trajectory_path)
+
+                thermo = hdf.require_group(
+                    "hoomd-data/md/compute/ThermodynamicQuantities"
+                )
+                thermo.create_dataset("potential_energy", data=np.array([-140.0]))
+
+            with patch(
+                "md_Helpers.visualization.fit_and_animate_final_bubble",
+                return_value=fake_check,
+            ):
+                result = seitz.extract_bubble_state_terms(
+                    metadata_path=log_path,
+                    eos_table=eos,
+                    plot=False,
+                )
+
+        expected_q = seitz.seitz_threshold(
+            nc=75.0,
+            uc=-140.0 / 75.0,
+            u0=-3.0,
+            p0=0.4,
+            rho_c=0.75,
+            rho_0=0.8,
         )
 
-        result = seitz.cavity_terms_from_frame(
-            frame,
-            radius=0.2,
-            center=[0.0, 0.0, 0.0],
-            r_cut_LJ=2.5,
-            lj_mode="none",
-        )
+        self.assertAlmostEqual(result["u0"], -3.0)
+        self.assertAlmostEqual(result["P0"], 0.4)
+        self.assertAlmostEqual(result["p0"], 0.4)
+        self.assertAlmostEqual(result["Q"], expected_q)
+        self.assertAlmostEqual(result["q_seitz"], expected_q)
 
-        self.assertEqual(result["n_cavity"], 1)
-        self.assertAlmostEqual(result["u_cavity"], 0.0)
+    def test_extract_bubble_state_terms_requires_n_after(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "bubble_log.hdf5"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["kT"] = 0.8
+                state.attrs["N"] = 75
+                state.attrs["volume"] = 100.0
+
+                hdf.require_group("metadata/creation")
+
+            with self.assertRaisesRegex(ValueError, "N_after"):
+                seitz.extract_bubble_state_terms(
+                    metadata_path=log_path,
+                    plot=False,
+                    estimate_reference=False,
+                )
+
+    def test_extract_bubble_state_terms_defaults_to_five_frames_skip_five(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        fake_check = {"fit": {"liquid_density": 0.8}}
+
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "bubble_log.hdf5"
+            trajectory_path = Path(tmp) / "bubble_trajectory.gsd"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["kT"] = 0.8
+                state.attrs["volume"] = 100.0
+
+                creation = hdf.require_group("metadata/creation")
+                creation.attrs["N_after"] = 75
+
+                paths = hdf.require_group("metadata/paths")
+                paths.attrs["trajectory_path"] = str(trajectory_path)
+
+                thermo = hdf.require_group(
+                    "hoomd-data/md/compute/ThermodynamicQuantities"
+                )
+                thermo.create_dataset("potential_energy", data=np.array([-140.0]))
+
+            with patch(
+                "md_Helpers.visualization.fit_and_animate_final_bubble",
+                return_value=fake_check,
+            ) as check_mock:
+                seitz.extract_bubble_state_terms(
+                    metadata_path=log_path,
+                    plot=False,
+                    estimate_reference=False,
+                )
+
+        self.assertEqual(check_mock.call_args.kwargs["nframes"], 5)
+        self.assertEqual(check_mock.call_args.kwargs["skip"], 5)
+        self.assertFalse(check_mock.call_args.kwargs["show_histogram"])
 
 
 class MasterCsvTests(unittest.TestCase):
@@ -379,6 +605,44 @@ class MasterCsvTests(unittest.TestCase):
                 table.loc[0, "PE_per_particle_mean_last2"],
                 -2.5,
             )
+
+    def test_builds_results_inventory_csv(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Cavitation_Evolved_v3"
+            run = root / "FCC" / "n_cells_20" / "run_1"
+            run.mkdir(parents=True)
+
+            trajectory_path = run / "cavitation_trajectory.gsd"
+            log_path = run / "cavitation_log.hdf5"
+            trajectory_path.write_bytes(b"gsd")
+            log_path.write_bytes(b"hdf5")
+
+            output_path = Path(tmp) / "inventory.csv"
+            table = master_csv.build_results_inventory_csv(
+                roots={
+                    "cavitation_evolved": root,
+                    "missing_family": Path(tmp) / "missing",
+                },
+                output_path=output_path,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(len(table), 3)
+            self.assertEqual(
+                set(table["file_role"]),
+                {"trajectory", "log", "missing_root"},
+            )
+            self.assertEqual(
+                table.loc[
+                    table["filename"] == "cavitation_trajectory.gsd",
+                    "result_family",
+                ].item(),
+                "cavitation_evolved",
+            )
+
+            summary = master_csv.summarize_results_inventory(table)
+            self.assertEqual(int(summary["n_files"].sum()), 2)
+            self.assertIn("trajectory", set(summary["file_role"]))
 
 
 class EosSweepTests(unittest.TestCase):
