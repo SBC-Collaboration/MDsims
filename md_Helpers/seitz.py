@@ -345,6 +345,21 @@ def _infer_bubble_particle_count(creation_attrs):
     return float(value), "metadata/creation:N_after"
 
 
+def nbins_for_ncells(n_fcc_cells):
+    return round(0.3 * int(n_fcc_cells) + 3)
+
+
+def _infer_voxel_nbins(state_attrs, explicit_nbins=None):
+    if explicit_nbins is not None:
+        return int(explicit_nbins), "explicit"
+
+    n_fcc_cells = state_attrs.get("n_fcc_cells")
+    if n_fcc_cells is None:
+        return 12, "default_no_n_fcc_cells"
+
+    return nbins_for_ncells(n_fcc_cells), "n_fcc_cells_rule"
+
+
 def extract_bubble_state_terms(
     metadata_path,
     trajectory_path=None,
@@ -352,7 +367,7 @@ def extract_bubble_state_terms(
     seeded_potential_energy=None,
     n_last=100,
     kT=None,
-    nbins=12,
+    nbins=None,
     nframes=5,
     nskip=5,
     tail_fraction=0.5,
@@ -418,6 +433,7 @@ def extract_bubble_state_terms(
     nc, nc_source = _infer_bubble_particle_count(creation_attrs)
     volume, volume_source = _infer_full_volume(state_attrs, creation_attrs)
     kT_value, kT_source = _infer_temperature(state_attrs, kT)
+    nbins, nbins_source = _infer_voxel_nbins(state_attrs, nbins)
 
     if seeded_potential_energy is None:
         if log_path is None:
@@ -468,6 +484,8 @@ def extract_bubble_state_terms(
         "rho_c": float(rho_c),
         "rho_0": rho_0,
         "rho_0_source": "check.fit.liquid_density",
+        "voxel_nbins": int(nbins),
+        "voxel_nbins_source": nbins_source,
         "check": check,
         "voxel_fit": fit,
         "trajectory_path": trajectory_path,

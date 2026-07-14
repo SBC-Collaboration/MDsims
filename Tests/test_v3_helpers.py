@@ -300,6 +300,11 @@ class VoxelMixtureFitTests(unittest.TestCase):
 
 
 class SeitzTests(unittest.TestCase):
+    def test_nbins_for_ncells_uses_linear_rule(self):
+        self.assertEqual(seitz.nbins_for_ncells(10), 6)
+        self.assertEqual(seitz.nbins_for_ncells(20), 9)
+        self.assertEqual(seitz.nbins_for_ncells(30), 12)
+
     def test_seitz_threshold_matches_intensive_formula(self):
         result = seitz.seitz_threshold(
             nc=75.0,
@@ -496,6 +501,52 @@ class SeitzTests(unittest.TestCase):
         self.assertAlmostEqual(result["rho_0"], 0.8)
         self.assertAlmostEqual(result["V"], 100.0)
         self.assertAlmostEqual(result["kT"], 0.8)
+        self.assertEqual(result["voxel_nbins"], 8)
+        self.assertEqual(result["voxel_nbins_source"], "explicit")
+
+    def test_extract_bubble_state_terms_infers_nbins_from_ncells(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        fake_check = {"fit": {"liquid_density": 0.8}}
+
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "bubble_log.hdf5"
+            trajectory_path = Path(tmp) / "bubble_trajectory.gsd"
+
+            with h5py.File(log_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["kT"] = 0.8
+                state.attrs["volume"] = 100.0
+                state.attrs["n_fcc_cells"] = 10
+
+                creation = hdf.require_group("metadata/creation")
+                creation.attrs["N_after"] = 75
+
+                paths = hdf.require_group("metadata/paths")
+                paths.attrs["trajectory_path"] = str(trajectory_path)
+                paths.attrs["log_path"] = str(log_path)
+
+                thermo = hdf.require_group(
+                    "hoomd-data/md/compute/ThermodynamicQuantities"
+                )
+                thermo.create_dataset("potential_energy", data=np.array([-140.0]))
+
+            with patch(
+                "md_Helpers.visualization.fit_and_animate_final_bubble",
+                return_value=fake_check,
+            ) as check_mock:
+                result = seitz.extract_bubble_state_terms(
+                    metadata_path=log_path,
+                    plot=False,
+                    estimate_reference=False,
+                )
+
+        self.assertEqual(check_mock.call_args.kwargs["nbins"], 6)
+        self.assertEqual(result["voxel_nbins"], 6)
+        self.assertEqual(result["voxel_nbins_source"], "n_fcc_cells_rule")
 
     def test_extract_bubble_state_terms_adds_reference_values_and_q(self):
         try:
