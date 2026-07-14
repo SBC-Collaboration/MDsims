@@ -936,6 +936,76 @@ def animate_xy_slice_trajectory(
     return IPython.display.HTML(anim.to_jshtml())
 
 
+def _periodic_weighted_center(points, weights, box_lengths):
+    """Return a weighted center for periodic coordinates in [-L/2, L/2)."""
+
+    points = np.asarray(points, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    box_lengths = np.asarray(box_lengths, dtype=float)
+
+    center = []
+    for axis in range(3):
+        angles = 2.0 * np.pi * (
+            (points[:, axis] + 0.5 * box_lengths[axis])
+            / box_lengths[axis]
+        )
+        sin_mean = np.sum(weights * np.sin(angles))
+        cos_mean = np.sum(weights * np.cos(angles))
+        angle = np.arctan2(sin_mean, cos_mean) % (2.0 * np.pi)
+        coordinate = angle * box_lengths[axis] / (2.0 * np.pi)
+        center.append(coordinate - 0.5 * box_lengths[axis])
+
+    return np.asarray(center, dtype=float)
+
+
+def _estimate_low_density_center_from_frame(frame, nbins):
+    """Estimate bubble center from low-density voxels in one frame."""
+
+    positions, box_lengths, _ = positions_and_box(frame, wrap=True)
+    bounds = [
+        [-box_length / 2.0, box_length / 2.0]
+        for box_length in box_lengths
+    ]
+    counts, edges = np.histogramdd(
+        positions,
+        bins=int(nbins),
+        range=bounds,
+    )
+    flat_counts = counts.ravel()
+
+    center_axes = [
+        0.5 * (axis_edges[:-1] + axis_edges[1:])
+        for axis_edges in edges
+    ]
+    centers = np.stack(
+        np.meshgrid(*center_axes, indexing="ij"),
+        axis=-1,
+    ).reshape(-1, 3)
+
+    low_cut = np.percentile(flat_counts, 20)
+    liquid_count = np.percentile(flat_counts, 75)
+    low_mask = flat_counts <= low_cut
+    weights = np.clip(liquid_count - flat_counts[low_mask], 0.0, None)
+
+    if weights.size == 0 or np.sum(weights) <= 0.0:
+        min_index = int(np.argmin(flat_counts))
+        return centers[min_index], {
+            "center_method": "minimum_count_voxel",
+            "center_voxel_count": float(flat_counts[min_index]),
+        }
+
+    return _periodic_weighted_center(
+        centers[low_mask],
+        weights,
+        box_lengths,
+    ), {
+        "center_method": "weighted_low_density_voxels",
+        "center_low_count_percentile": 20.0,
+        "center_liquid_count_percentile": 75.0,
+        "center_n_low_voxels": int(np.sum(low_mask)),
+    }
+
+
 def fit_and_animate_final_bubble(
     trajectory,
     nbins=12,
@@ -959,10 +1029,9 @@ def fit_and_animate_final_bubble(
     final ``tail_fraction`` of the trajectory.  The video independently shows
     the final 50 consecutive frames, or the entire trajectory when it contains
     fewer than 50 frames.  The fitted radius uses
-    ``gas_weight + 0.5 * interface_weight`` by default.  The circle stays at
-    the constructed bubble center (or the explicitly supplied
-    ``bubble_center``); this is intended as a preliminary visual scale check,
-    not bubble tracking.
+    ``gas_weight + 0.5 * interface_weight`` by default.  If ``bubble_center``
+    is not supplied, the circle center is estimated from low-density voxels in
+    the final frame.
 
     Returns a dictionary containing ``fit`` (the per-frame-average smoothed
     histogram and size estimate) and ``animation`` (notebook HTML).
@@ -976,6 +1045,9 @@ def fit_and_animate_final_bubble(
 
     trajectory_path = _get_trajectory_path(trajectory)
 
+    bubble_center_source = "explicit"
+    center_diagnostics = {}
+
     if bubble_center is None:
         creation_info = {}
         if isinstance(trajectory, dict):
@@ -987,11 +1059,16 @@ def fit_and_animate_final_bubble(
                         {},
                     )
                 )
-        bubble_center = creation_info.get("bubble_center", [
+        constructed_center = creation_info.get("bubble_center", [
             creation_info.get("bubble_center_x", 0.0),
             creation_info.get("bubble_center_y", 0.0),
             creation_info.get("bubble_center_z", 0.0),
         ])
+        bubble_center = constructed_center
+        bubble_center_source = "final_frame_low_density_voxels"
+    else:
+        constructed_center = bubble_center
+
     bubble_center = np.asarray(bubble_center, dtype=float)
     if bubble_center.shape != (3,):
         raise ValueError("bubble_center must contain three coordinates")
@@ -1016,6 +1093,19 @@ def fit_and_animate_final_bubble(
 
     frames = []
     with gsd.hoomd.open(name=trajectory_path, mode="r") as gsd_trajectory:
+        if bubble_center_source == "final_frame_low_density_voxels":
+            try:
+                bubble_center, center_diagnostics = (
+                    _estimate_low_density_center_from_frame(
+                        gsd_trajectory[-1],
+                        nbins=nbins,
+                    )
+                )
+            except Exception as error:
+                bubble_center = np.asarray(constructed_center, dtype=float)
+                bubble_center_source = "constructed_center_fallback"
+                center_diagnostics = {"center_error": repr(error)}
+
         first_video_frame = max(0, len(gsd_trajectory) - 50)
         video_frame_indices = list(range(
             first_video_frame,
@@ -1091,6 +1181,9 @@ def fit_and_animate_final_bubble(
         "video_frame_indices": video_frame_indices,
         "frame_indices": video_frame_indices,
         "bubble_radius": radius,
+        "bubble_center": bubble_center,
+        "bubble_center_source": bubble_center_source,
+        "bubble_center_diagnostics": center_diagnostics,
         "bubble_volume": fit["bubble_volume_estimate"],
         "bubble_volume_fraction": fit["bubble_volume_fraction"],
     }
