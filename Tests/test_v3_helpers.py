@@ -189,6 +189,68 @@ class CavitationSweepTests(unittest.TestCase):
         self.assertEqual(summary.loc[0, "outcome"], "not_cavitated")
         self.assertEqual(call_kwargs["radius"], 2.0)
 
+    def test_rethermalized_cavitation_can_skip_measurement(self):
+        fake_result = {
+            "status": "loaded_evolution",
+            "paths": {
+                "log_path": "cavitation_log.hdf5",
+                "trajectory_path": "cavitation_trajectory.gsd",
+            },
+            "initial_result": {
+                "source_phase_separation": {
+                    "phase_separated": False,
+                    "low_density_fraction": 0.0,
+                },
+                "source_result": {
+                    "paths": {
+                        "state_path": "source.gsd",
+                        "log_path": "source.hdf5",
+                    },
+                },
+            },
+        }
+
+        fake_cavitation = SimpleNamespace(
+            get_or_create_cavitation=lambda **kwargs: fake_result,
+        )
+        fake_classification = SimpleNamespace(
+            read_phase_method_attrs=lambda log_path, method: (
+                {
+                    "phase_separated": False,
+                    "low_density_fraction": 0.0,
+                },
+                "metadata/classification/phase_separation/voxel",
+            ),
+        )
+
+        with TemporaryDirectory() as tmp, patch.dict(sys.modules, {
+            "md_Helpers.cavitation": fake_cavitation,
+            "md_Helpers.classification": fake_classification,
+        }), patch.object(
+            cavitation_sweep_module.cavitation_analysis,
+            "measure_cavitation_trajectory",
+            side_effect=AssertionError(
+                "rethermalized cavitation must not be measured"
+            ),
+        ):
+            summary = run_cavitation_size_sweep(
+                n_fcc_cells_values=[10],
+                conditions=[(0.71, 0.8)],
+                source_nsteps=100,
+                evolve_nsteps=100,
+                radius=2.0,
+                summary_path=Path(tmp) / "summary.csv",
+                summary_mode="interesting_only",
+            )
+
+        self.assertEqual(
+            summary.loc[0, "run_status"],
+            "cavitation_rethermalized",
+        )
+        self.assertTrue(bool(summary.loc[0, "thermalization_passed"]))
+        self.assertEqual(summary.loc[0, "outcome"], "rethermalized")
+        self.assertFalse(bool(summary.loc[0, "final_phase_separated"]))
+
 
 class VoxelMixtureFitTests(unittest.TestCase):
     def test_converts_mixture_weights_to_equivalent_radius(self):

@@ -139,6 +139,7 @@ def run_cavitation_size_sweep(
     stabilized_radius_ratio=0.5,
     collapsed_radius_ratio=0.1,
     overwrite=False,
+    summary_mode="detailed",
     **cavitation_kwargs,
 ):
     """Run a fixed-absolute-radius cavitation sweep and save one row per run.
@@ -147,6 +148,12 @@ def run_cavitation_size_sweep(
     pairs, so nearby state points can be compared without accidentally taking
     their Cartesian product. ``radius`` is held fixed in simulation length
     units while the FCC system size changes.
+
+    ``summary_mode="detailed"`` keeps the historical behavior and measures
+    every completed cavitation trajectory. ``summary_mode="interesting_only"``
+    writes lightweight status rows for rethermalized cavitations and only
+    measures trajectories whose final voxel classifier reports phase
+    separation.
     """
 
     # Keep HOOMD/GSD as run-time dependencies so the summary helper remains
@@ -164,6 +171,10 @@ def run_cavitation_size_sweep(
     evolve_seeds = [int(seed) for seed in evolve_seeds]
     if not evolve_seeds:
         raise ValueError("evolve_seeds must not be empty")
+    if summary_mode not in {"detailed", "interesting_only"}:
+        raise ValueError(
+            "summary_mode must be 'detailed' or 'interesting_only'"
+        )
 
     forbidden = {
         "radius",
@@ -250,15 +261,6 @@ def run_cavitation_size_sweep(
                         f"temperature={condition['temperature']}"
                     )
 
-                measurements = cavitation_analysis.measure_cavitation_trajectory(
-                    evolution=result,
-                )
-                survival = summarize_bubble_survival(
-                    measurements,
-                    tail_fraction=tail_fraction,
-                    stabilized_radius_ratio=stabilized_radius_ratio,
-                    collapsed_radius_ratio=collapsed_radius_ratio,
-                )
                 voxel, _ = classification.read_phase_method_attrs(
                     result["paths"]["log_path"],
                     "voxel",
@@ -266,6 +268,7 @@ def run_cavitation_size_sweep(
                 source_paths = result["initial_result"]["source_result"][
                     "paths"
                 ]
+                final_phase_separated = bool(voxel.get("phase_separated"))
 
                 row = {
                     **base_row,
@@ -277,21 +280,46 @@ def run_cavitation_size_sweep(
                     .get("low_density_fraction"),
                     "source_state_path": str(source_paths["state_path"]),
                     "source_log_path": str(source_paths["log_path"]),
-                    "post_cavitation_N": int(measurements["N"].iloc[0]),
-                    "box_length": float(measurements["BoxLength_x"].iloc[0]),
                     "final_phase_separated": voxel.get("phase_separated"),
                     "final_low_density_fraction": voxel.get(
                         "low_density_fraction"
                     ),
                     "trajectory_path": str(result["paths"]["trajectory_path"]),
                     "log_path": str(result["paths"]["log_path"]),
-                    **survival,
                 }
                 row["outcome"] = (
                     "stabilized"
-                    if bool(row["final_phase_separated"])
+                    if final_phase_separated
                     else "rethermalized"
                 )
+
+                if (
+                    summary_mode == "interesting_only"
+                    and not final_phase_separated
+                ):
+                    row["run_status"] = "cavitation_rethermalized"
+                    rows.append(row)
+
+                    if summary_path is not None:
+                        summary_path.parent.mkdir(parents=True, exist_ok=True)
+                        pd.DataFrame(rows).to_csv(summary_path, index=False)
+
+                    continue
+
+                measurements = cavitation_analysis.measure_cavitation_trajectory(
+                    evolution=result,
+                )
+                survival = summarize_bubble_survival(
+                    measurements,
+                    tail_fraction=tail_fraction,
+                    stabilized_radius_ratio=stabilized_radius_ratio,
+                    collapsed_radius_ratio=collapsed_radius_ratio,
+                )
+                row.update({
+                    "post_cavitation_N": int(measurements["N"].iloc[0]),
+                    "box_length": float(measurements["BoxLength_x"].iloc[0]),
+                    **survival,
+                })
                 rows.append(row)
 
                 if summary_path is not None:
