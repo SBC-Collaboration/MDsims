@@ -14,7 +14,7 @@ conda install matplotlib scipy ipython fresnel jupyter h5py gsd pandas ipympl
 
 # Recommended implementation on Fermilab flexible computing facility
 When on Fermilab network (or on Fermilab VPN), access the flexible computing facility at
-https://analytics-hub.fnal.gov/hub/home
+https://eaf.fnal.gov/hub/home
 
 Creating a server from that link launches a VM and jupyterlab server.
 
