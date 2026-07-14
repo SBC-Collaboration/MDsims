@@ -1022,6 +1022,7 @@ def fit_and_animate_final_bubble(
     interval=120,
     show_histogram=True,
     show_residuals=True,
+    phase_separation_kwargs=None,
 ):
     """Fit a pooled tail histogram and overlay its radius for a quick check.
 
@@ -1034,11 +1035,15 @@ def fit_and_animate_final_bubble(
     the final frame.
 
     Returns a dictionary containing ``fit`` (the per-frame-average smoothed
-    histogram and size estimate) and ``animation`` (notebook HTML).
+    histogram and size estimate), ``has_bubble``, and ``animation`` (notebook
+    HTML, or ``None`` when the final state rethermalized).
     """
 
     import gsd.hoomd
+    from .classification import compute_voxel_fraction_phase_separation
     from .voxel_fit import fit_trajectory_tail_voxel_histogram
+
+    phase_separation_kwargs = dict(phase_separation_kwargs or {})
 
     if slice_fraction <= 0.0 or slice_fraction > 1.0:
         raise ValueError("slice_fraction must satisfy 0 < value <= 1")
@@ -1093,6 +1098,32 @@ def fit_and_animate_final_bubble(
 
     frames = []
     with gsd.hoomd.open(name=trajectory_path, mode="r") as gsd_trajectory:
+        final_frame = gsd_trajectory[-1]
+        phase_separation = compute_voxel_fraction_phase_separation(
+            final_frame,
+            nbins=nbins,
+            **phase_separation_kwargs,
+        )
+        has_bubble = bool(phase_separation["phase_separated"])
+
+        if not has_bubble:
+            return {
+                "fit": fit,
+                "animation": None,
+                "has_bubble": False,
+                "outcome": "rethermalized",
+                "message": "Final state is not phase separated; no bubble found.",
+                "phase_separation": phase_separation,
+                "fit_frame_indices": fit["frame_indices"],
+                "frame_indices": [],
+                "bubble_radius": None,
+                "bubble_center": None,
+                "bubble_center_source": None,
+                "bubble_center_diagnostics": {},
+                "bubble_volume": None,
+                "bubble_volume_fraction": None,
+            }
+
         if bubble_center_source == "final_frame_low_density_voxels":
             try:
                 bubble_center, center_diagnostics = (
@@ -1177,6 +1208,9 @@ def fit_and_animate_final_bubble(
     return {
         "fit": fit,
         "animation": html_animation,
+        "has_bubble": True,
+        "outcome": "phase_separated",
+        "phase_separation": phase_separation,
         "fit_frame_indices": fit["frame_indices"],
         "video_frame_indices": video_frame_indices,
         "frame_indices": video_frame_indices,

@@ -713,6 +713,54 @@ class SeitzTests(unittest.TestCase):
         self.assertFalse(check_mock.call_args.kwargs["show_histogram"])
 
 
+class VisualizationTests(unittest.TestCase):
+    def test_fit_and_animate_final_bubble_reports_no_bubble_when_rethermalized(self):
+        try:
+            from md_Helpers import visualization
+        except ImportError as error:
+            raise unittest.SkipTest("visualization dependencies are missing") from error
+
+        fake_fit = {
+            "frame_indices": [1, 2],
+            "bubble_radius_estimate": 0.0,
+            "bubble_volume_estimate": 0.0,
+            "bubble_volume_fraction": 0.0,
+        }
+        fake_frame = make_frame(
+            positions=[[0, 0, 0], [1, 1, 1]],
+            box_lengths=[10, 10, 10],
+        )
+        fake_trajectory = [fake_frame]
+
+        with patch(
+            "md_Helpers.voxel_fit.fit_trajectory_tail_voxel_histogram",
+            return_value=fake_fit,
+        ), patch(
+            "md_Helpers.visualization.plot_voxel_mixture_fit",
+        ), patch(
+            "gsd.hoomd.open",
+            return_value=SimpleNamespace(
+                __enter__=lambda self: fake_trajectory,
+                __exit__=lambda self, exc_type, exc, tb: False,
+            ),
+        ), patch(
+            "md_Helpers.classification.compute_voxel_fraction_phase_separation",
+            return_value={"phase_separated": False},
+        ):
+            result = visualization.fit_and_animate_final_bubble(
+                "trajectory.gsd",
+                show_histogram=True,
+            )
+
+        self.assertFalse(result["has_bubble"])
+        self.assertEqual(result["outcome"], "rethermalized")
+        self.assertIsNone(result["animation"])
+        self.assertEqual(
+            result["message"],
+            "Final state is not phase separated; no bubble found.",
+        )
+
+
 class MasterCsvTests(unittest.TestCase):
     def test_builds_thermalization_master_csv_from_hdf5_logs(self):
         try:
