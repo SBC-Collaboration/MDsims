@@ -221,6 +221,145 @@ def _estimate_eos_quantity(
     return float(np.interp(float(target_rho), rho_sorted, values[order]))
 
 
+def _mean_with_local_slope(x, y, target_x):
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+    target_x = float(target_x)
+
+    value = float(np.interp(target_x, x, y))
+    if len(x) < 2:
+        return value, np.nan
+
+    if target_x <= x[0]:
+        left = 0
+        right = 1
+    elif target_x >= x[-1]:
+        left = len(x) - 2
+        right = len(x) - 1
+    else:
+        right = int(np.searchsorted(x, target_x, side="right"))
+        left = right - 1
+
+    dx = x[right] - x[left]
+    slope = np.nan if dx == 0 else float((y[right] - y[left]) / dx)
+    return value, slope
+
+
+def _eos_grouped_quantity_table(same_temperature, quantity_column):
+    std_column = quantity_column.replace("_mean_last100", "_std_last100")
+    aggregations = {quantity_column: (quantity_column, "mean")}
+
+    if std_column in same_temperature.columns:
+        aggregations[std_column] = (std_column, "mean")
+    if "n_log_rows" in same_temperature.columns:
+        aggregations["n_log_rows"] = ("n_log_rows", "mean")
+
+    grouped = (
+        same_temperature.groupby("actual_rho", as_index=False)
+        .agg(**aggregations)
+        .sort_values("actual_rho")
+    )
+    return grouped, std_column if std_column in grouped.columns else None
+
+
+def _standard_error_from_std(std_value, n_last=100, n_available=None):
+    if std_value is None or not np.isfinite(std_value):
+        return np.nan
+
+    n_eff = int(n_last) if n_last is not None else 1
+    if n_available is not None and np.isfinite(n_available):
+        n_eff = min(n_eff, int(n_available))
+    if n_eff <= 0:
+        return np.nan
+
+    return float(std_value) / np.sqrt(n_eff)
+
+
+def _estimate_eos_quantity_with_uncertainty(
+    eos_table,
+    kT,
+    target_rho,
+    quantity_column,
+    target_rho_uncertainty=0.0,
+    n_last=100,
+    method="linear",
+    kT_atol=1e-8,
+):
+    """
+    Estimate an EOS quantity, its local density slope, and propagated error.
+
+    The returned uncertainty combines the interpolated standard error of the
+    last-window mean with ``abs(slope) * target_rho_uncertainty``.
+    """
+
+    same_temperature = _same_temperature_eos(
+        eos_table=eos_table,
+        kT=kT,
+        target_rho=target_rho,
+        kT_atol=kT_atol,
+    )
+
+    if quantity_column not in same_temperature.columns:
+        raise KeyError(f"EOS table is missing column: {quantity_column}")
+
+    method = str(method).lower()
+    if method != "linear":
+        raise ValueError(f"Unsupported EOS interpolation method: {method}")
+
+    grouped, std_column = _eos_grouped_quantity_table(
+        same_temperature,
+        quantity_column,
+    )
+
+    rho = np.asarray(grouped["actual_rho"], dtype=np.float64)
+    values = np.asarray(grouped[quantity_column], dtype=np.float64)
+    value, slope = _mean_with_local_slope(rho, values, target_rho)
+
+    if std_column is None:
+        mean_uncertainty = np.nan
+    else:
+        std_values = np.asarray(grouped[std_column], dtype=np.float64)
+        std_at_rho = float(np.interp(float(target_rho), rho, std_values))
+        if "n_log_rows" in grouped.columns:
+            n_available_values = np.asarray(
+                grouped["n_log_rows"],
+                dtype=np.float64,
+            )
+            n_available = float(
+                np.interp(float(target_rho), rho, n_available_values)
+            )
+        else:
+            n_available = None
+        mean_uncertainty = _standard_error_from_std(
+            std_at_rho,
+            n_last=n_last,
+            n_available=n_available,
+        )
+
+    density_uncertainty = (
+        abs(slope) * float(target_rho_uncertainty)
+        if np.isfinite(slope)
+        else np.nan
+    )
+    parts = [
+        part for part in [mean_uncertainty, density_uncertainty]
+        if np.isfinite(part)
+    ]
+    uncertainty = float(np.sqrt(np.sum(np.square(parts)))) if parts else np.nan
+
+    return {
+        "value": float(value),
+        "slope": float(slope),
+        "mean_uncertainty": float(mean_uncertainty),
+        "density_uncertainty": float(density_uncertainty),
+        "uncertainty": uncertainty,
+        "std_column": std_column,
+    }
+
+
 def estimate_u0_from_eos(
     eos_table=None,
     kT=None,
@@ -259,16 +398,68 @@ def estimate_p0_from_eos(
     )
 
 
-def _last_window_mean(values, n_last):
+def estimate_u0_from_eos_with_uncertainty(
+    eos_table=None,
+    kT=None,
+    target_rho=None,
+    target_rho_uncertainty=0.0,
+    n_last=100,
+    method="linear",
+    kT_atol=1e-8,
+):
+    """Return homogeneous reference PE/N with uncertainty metadata."""
+
+    return _estimate_eos_quantity_with_uncertainty(
+        eos_table=eos_table,
+        kT=kT,
+        target_rho=target_rho,
+        quantity_column="PE_per_particle_mean_last100",
+        target_rho_uncertainty=target_rho_uncertainty,
+        n_last=n_last,
+        method=method,
+        kT_atol=kT_atol,
+    )
+
+
+def estimate_p0_from_eos_with_uncertainty(
+    eos_table=None,
+    kT=None,
+    target_rho=None,
+    target_rho_uncertainty=0.0,
+    n_last=100,
+    method="linear",
+    kT_atol=1e-8,
+):
+    """Return homogeneous reference pressure with uncertainty metadata."""
+
+    return _estimate_eos_quantity_with_uncertainty(
+        eos_table=eos_table,
+        kT=kT,
+        target_rho=target_rho,
+        quantity_column="pressure_mean_last100",
+        target_rho_uncertainty=target_rho_uncertainty,
+        n_last=n_last,
+        method=method,
+        kT_atol=kT_atol,
+    )
+
+
+def _last_window_stats(values, n_last):
     values = np.asarray(values, dtype=np.float64)
     if values.size == 0:
         raise ValueError("Cannot average an empty thermo series")
 
     if n_last is None:
-        return float(values[-1])
+        return float(values[-1]), 0.0, 1
 
     window = values[-min(int(n_last), values.size):]
-    return float(np.mean(window))
+    std = float(np.std(window, ddof=1)) if window.size > 1 else 0.0
+    return float(np.mean(window)), std, int(window.size)
+
+
+def _last_window_mean(values, n_last):
+    mean, _, _ = _last_window_stats(values, n_last)
+    return mean
 
 
 def _read_thermo_mean(log_path, quantity, n_last=100):
@@ -279,6 +470,60 @@ def _read_thermo_mean(log_path, quantity, n_last=100):
         if dataset_path not in hdf:
             raise KeyError(f"{log_path} is missing dataset {dataset_path}")
         return _last_window_mean(hdf[dataset_path][()], n_last)
+
+
+def _read_thermo_summary(log_path, quantity, n_last=100):
+    import h5py
+
+    dataset_path = f"{THERMO_BASE}/{quantity}"
+    with h5py.File(log_path, mode="r") as hdf:
+        if dataset_path not in hdf:
+            raise KeyError(f"{log_path} is missing dataset {dataset_path}")
+        return _last_window_stats(hdf[dataset_path][()], n_last)
+
+
+def seitz_threshold_uncertainty(
+    nc,
+    uc,
+    u0,
+    p0,
+    rho_c,
+    rho_0,
+    uc_uncertainty=0.0,
+    u0_uncertainty=0.0,
+    p0_uncertainty=0.0,
+    rho_0_uncertainty=0.0,
+):
+    """
+    Propagate independent uncertainties through the Seitz threshold.
+
+    ``rho_c`` and ``Nc`` are treated as exact here because the current workflow
+    gets them from particle count and box volume metadata.
+    """
+
+    nc = float(nc)
+    p0 = float(p0)
+    rho_c = float(rho_c)
+    rho_0 = float(rho_0)
+    delta_v = 1.0 / rho_c - 1.0 / rho_0
+
+    components = {
+        "uc": abs(nc) * float(uc_uncertainty),
+        "u0": abs(nc) * float(u0_uncertainty),
+        "P0": abs(nc * delta_v) * float(p0_uncertainty),
+        "rho_0": abs(nc * p0 / rho_0 ** 2) * float(rho_0_uncertainty),
+    }
+    finite_components = [
+        value for value in components.values()
+        if np.isfinite(value)
+    ]
+    total = (
+        float(np.sqrt(np.sum(np.square(finite_components))))
+        if finite_components
+        else np.nan
+    )
+    components["total"] = total
+    return components
 
 
 def _first_available(mapping, keys):
@@ -435,11 +680,17 @@ def extract_bubble_state_terms(
     kT_value, kT_source = _infer_temperature(state_attrs, kT)
     nbins, nbins_source = _infer_voxel_nbins(state_attrs, nbins)
 
+    seeded_potential_energy_std = np.nan
+    seeded_potential_energy_n = np.nan
     if seeded_potential_energy is None:
         if log_path is None:
             log_path = paths_attrs.get("log_path") or metadata_path
         log_path = _require_existing_hdf5(log_path, "bubble/evolution log_path")
-        seeded_potential_energy = _read_thermo_mean(
+        (
+            seeded_potential_energy,
+            seeded_potential_energy_std,
+            seeded_potential_energy_n,
+        ) = _read_thermo_summary(
             log_path,
             "potential_energy",
             n_last=n_last,
@@ -447,6 +698,22 @@ def extract_bubble_state_terms(
         uc_source = f"{log_path}:potential_energy"
     else:
         uc_source = "explicit"
+        if log_path is None:
+            log_path = paths_attrs.get("log_path")
+        if log_path is not None:
+            log_path = _require_existing_hdf5(
+                log_path,
+                "bubble/evolution log_path",
+            )
+            (
+                _,
+                seeded_potential_energy_std,
+                seeded_potential_energy_n,
+            ) = _read_thermo_summary(
+                log_path,
+                "potential_energy",
+                n_last=n_last,
+            )
 
     trajectory_path, trajectory_source = _infer_trajectory_path(
         paths_attrs,
@@ -469,13 +736,25 @@ def extract_bubble_state_terms(
 
     rho_c = nc / volume
     uc = seeded_potential_energy / nc
+    uc_uncertainty = (
+        _standard_error_from_std(
+            seeded_potential_energy_std,
+            n_last=n_last,
+            n_available=seeded_potential_energy_n,
+        )
+        / nc
+    )
     rho_0 = float(fit["liquid_density"])
+    rho_0_uncertainty = float(fit.get("liquid_sigma_density", np.nan))
 
     result = {
         "Nc": float(nc),
         "nc_source": nc_source,
         "Uc": float(seeded_potential_energy),
+        "Uc_std_last_window": float(seeded_potential_energy_std),
+        "Uc_n_last_window": float(seeded_potential_energy_n),
         "uc": float(uc),
+        "uc_uncertainty": float(uc_uncertainty),
         "uc_source": uc_source,
         "V": float(volume),
         "volume_source": volume_source,
@@ -483,7 +762,9 @@ def extract_bubble_state_terms(
         "kT_source": kT_source,
         "rho_c": float(rho_c),
         "rho_0": rho_0,
+        "rho_0_uncertainty": rho_0_uncertainty,
         "rho_0_source": "check.fit.liquid_density",
+        "rho_0_uncertainty_source": "check.fit.liquid_sigma_density",
         "voxel_nbins": int(nbins),
         "voxel_nbins_source": nbins_source,
         "check": check,
@@ -493,20 +774,26 @@ def extract_bubble_state_terms(
     }
 
     if estimate_reference:
-        u0 = estimate_u0_from_eos(
+        u0_info = estimate_u0_from_eos_with_uncertainty(
             eos_table=eos_table,
             kT=kT_value,
             target_rho=rho_0,
+            target_rho_uncertainty=rho_0_uncertainty,
+            n_last=n_last,
             method=eos_method,
             kT_atol=eos_kT_atol,
         )
-        p0 = estimate_p0_from_eos(
+        p0_info = estimate_p0_from_eos_with_uncertainty(
             eos_table=eos_table,
             kT=kT_value,
             target_rho=rho_0,
+            target_rho_uncertainty=rho_0_uncertainty,
+            n_last=n_last,
             method=eos_method,
             kT_atol=eos_kT_atol,
         )
+        u0 = u0_info["value"]
+        p0 = p0_info["value"]
         q_seitz = seitz_threshold(
             nc=nc,
             uc=uc,
@@ -515,14 +802,44 @@ def extract_bubble_state_terms(
             rho_c=rho_c,
             rho_0=rho_0,
         )
+        q_uncertainty = seitz_threshold_uncertainty(
+            nc=nc,
+            uc=uc,
+            u0=u0,
+            p0=p0,
+            rho_c=rho_c,
+            rho_0=rho_0,
+            uc_uncertainty=uc_uncertainty,
+            u0_uncertainty=u0_info["uncertainty"],
+            p0_uncertainty=p0_info["uncertainty"],
+            rho_0_uncertainty=rho_0_uncertainty,
+        )
         result.update({
             "u0": float(u0),
+            "u0_uncertainty": float(u0_info["uncertainty"]),
+            "u0_mean_uncertainty": float(u0_info["mean_uncertainty"]),
+            "u0_density_uncertainty": float(
+                u0_info["density_uncertainty"]
+            ),
+            "u0_density_slope": float(u0_info["slope"]),
             "u0_source": "EOS:PE_per_particle_mean_last100",
             "P0": float(p0),
             "p0": float(p0),
+            "P0_uncertainty": float(p0_info["uncertainty"]),
+            "P0_mean_uncertainty": float(p0_info["mean_uncertainty"]),
+            "P0_density_uncertainty": float(
+                p0_info["density_uncertainty"]
+            ),
+            "P0_density_slope": float(p0_info["slope"]),
             "P0_source": "EOS:pressure_mean_last100",
             "q_seitz": float(q_seitz),
             "Q": float(q_seitz),
+            "q_seitz_uncertainty": float(q_uncertainty["total"]),
+            "Q_uncertainty": float(q_uncertainty["total"]),
+            "Q_uncertainty_uc_component": float(q_uncertainty["uc"]),
+            "Q_uncertainty_u0_component": float(q_uncertainty["u0"]),
+            "Q_uncertainty_P0_component": float(q_uncertainty["P0"]),
+            "Q_uncertainty_rho_0_component": float(q_uncertainty["rho_0"]),
             "eos_table": _eos_table_source(eos_table),
             "eos_method": eos_method,
         })
