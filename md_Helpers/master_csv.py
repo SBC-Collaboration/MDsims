@@ -281,6 +281,7 @@ SEITZ_MASTER_COLUMNS = [
     "source_radius",
     "bubble_seed",
     "evolve_nsteps",
+    "n_timesteps",
     "evolve_seed",
     "final_phase_separated",
     "radius_outcome",
@@ -423,6 +424,7 @@ def summarize_seitz_cavitation_log(
             ),
             "bubble_seed": creation.get("bubble_seed", np.nan),
             "evolve_nsteps": run.get("nsteps", np.nan),
+            "n_timesteps": run.get("nsteps", np.nan),
             "evolve_seed": run.get("seed", np.nan),
             "trajectory_path": str(paths.get("trajectory_path", "")),
         })
