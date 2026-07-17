@@ -193,8 +193,8 @@ def excitation_state_paths(
         Path(base_folder)
         / "FCC"
         / f"n_cells_{int(n_fcc_cells)}"
-        / f"source_rho_{format_float(source_rho)}"
-        / f"kT_{format_float(kT)}"
+        / f"source_kT_{format_float(kT)}"
+        / f"rho_{format_float(source_rho)}"
         / f"source_nsteps_{int(source_nsteps)}"
         / f"source_seed_{int(source_seed)}"
         / f"method_{method}"
