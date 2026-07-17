@@ -42,6 +42,7 @@ def make_simulation(
     seed=1,
     dt=0.005,
     kT=1.5,
+    ensemble="NVT",
     epsilon_LJ=1.0,
     sigma_LJ=1.0,
     r_cut_LJ=2.5,
@@ -111,12 +112,21 @@ def make_simulation(
 
     integrator.forces.append(lj)
 
-    nvt = hoomd.md.methods.ConstantVolume(
-        filter=hoomd.filter.All(),
-        thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT),
-    )
+    ensemble = str(ensemble).upper()
 
-    integrator.methods.append(nvt)
+    if ensemble == "NVT":
+        method = hoomd.md.methods.ConstantVolume(
+            filter=hoomd.filter.All(),
+            thermostat=hoomd.md.methods.thermostats.Bussi(kT=kT),
+        )
+    elif ensemble == "NVE":
+        method = hoomd.md.methods.ConstantVolume(
+            filter=hoomd.filter.All(),
+        )
+    else:
+        raise ValueError("ensemble must be 'NVT' or 'NVE'")
+
+    integrator.methods.append(method)
 
     simulation.operations.integrator = integrator
 
@@ -164,6 +174,7 @@ def make_simulation(
         "seed": seed,
         "dt": dt,
         "kT": kT,
+        "ensemble": ensemble,
 
         "epsilon_LJ": epsilon_LJ,
         "sigma_LJ": sigma_LJ,

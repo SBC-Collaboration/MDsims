@@ -197,7 +197,6 @@ def excitation_state_paths(
         / f"kT_{format_float(kT)}"
         / f"source_nsteps_{int(source_nsteps)}"
         / f"source_seed_{int(source_seed)}"
-        / f"source_phase_{source_phase_name}"
         / f"method_{method}"
         / f"radius_{format_float(radius)}"
         / f"energy_{format_float(energy)}"
@@ -225,15 +224,21 @@ def excitation_evolved_paths(
     method,
     radius,
     energy,
-    evolve_kT,
-    evolve_nsteps,
-    evolve_seed,
+    evolve_kT=None,
+    evolve_nsteps=None,
+    evolve_seed=None,
     source_phase_name="randomization",
+    dt=0.005,
     center=None,
     random_location=False,
     excitation_seed=None,
     base_folder=EXCITATION_EVOLVED_V3_ROOT,
 ):
+    if evolve_nsteps is None:
+        raise ValueError("evolve_nsteps is required")
+    if evolve_seed is None:
+        raise ValueError("evolve_seed is required")
+
     state_paths = excitation_state_paths(
         n_fcc_cells=n_fcc_cells,
         source_rho=source_rho,
@@ -252,7 +257,7 @@ def excitation_evolved_paths(
 
     folder = (
         state_paths["folder"]
-        / f"evolve_kT_{format_float(evolve_kT)}"
+        / f"dt_{format_float(dt, decimals=4)}"
         / f"nsteps_{int(evolve_nsteps)}"
         / f"seed_{int(evolve_seed)}"
     )

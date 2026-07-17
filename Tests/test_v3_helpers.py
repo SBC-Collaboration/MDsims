@@ -58,6 +58,27 @@ class PathTests(unittest.TestCase):
         self.assertEqual(evolved["final_state_path"].name, "cavitation_final.gsd")
         self.assertIn("radius_2.000", str(initial["state_path"]))
 
+    def test_excitation_paths_include_method_energy_and_dt(self):
+        evolved = paths.excitation_evolved_paths(
+            n_fcc_cells=30,
+            source_rho=0.71,
+            kT=0.8,
+            source_nsteps=1_000_000,
+            source_seed=1,
+            method="velocity_rescale_com",
+            radius=3.0,
+            energy=4000.0,
+            evolve_nsteps=100_000,
+            evolve_seed=1,
+            dt=0.0005,
+        )
+        path_text = str(evolved["final_state_path"])
+        self.assertEqual(evolved["final_state_path"].name, "excitation_final.gsd")
+        self.assertIn("method_velocity_rescale_com", path_text)
+        self.assertIn("energy_4000.000", path_text)
+        self.assertIn("dt_0.0005", path_text)
+        self.assertNotIn("source_phase_randomization", path_text)
+
 
 class SpatialTests(unittest.TestCase):
     def test_periodic_distance(self):

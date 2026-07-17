@@ -10,6 +10,7 @@ Primary modules:
 - classification: phase-separation and PE-drop classifiers
 - voxel_fit: gas, liquid, and interface voxel-mixture fitting
 - cavitation: cavitated starting-state creation and evolution
+- hot_spike: localized kinetic-energy excitation and NVE evolution
 - cavitation_analysis: trajectory and bubble measurements
 - cavitation_sweep: fixed-radius cavitation parameter sweeps
 - eos_sweep: adaptive liquid EOS pressure-window sweeps and plots
@@ -29,6 +30,7 @@ __all__ = [
     "classification",
     "voxel_fit",
     "cavitation",
+    "hot_spike",
     "cavitation_analysis",
     "cavitation_sweep",
     "eos_sweep",
