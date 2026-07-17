@@ -745,7 +745,17 @@ def extract_bubble_state_terms(
         / nc
     )
     rho_0 = float(fit["liquid_density"])
-    rho_0_uncertainty = float(fit.get("liquid_sigma_density", np.nan))
+    rho_0_uncertainty = float(
+        fit.get(
+            "liquid_density_uncertainty",
+            fit.get("liquid_sigma_density", np.nan),
+        )
+    )
+    rho_0_uncertainty_source = (
+        "check.fit.liquid_density_uncertainty"
+        if "liquid_density_uncertainty" in fit
+        else "check.fit.liquid_sigma_density"
+    )
 
     result = {
         "Nc": float(nc),
@@ -764,7 +774,7 @@ def extract_bubble_state_terms(
         "rho_0": rho_0,
         "rho_0_uncertainty": rho_0_uncertainty,
         "rho_0_source": "check.fit.liquid_density",
-        "rho_0_uncertainty_source": "check.fit.liquid_sigma_density",
+        "rho_0_uncertainty_source": rho_0_uncertainty_source,
         "voxel_nbins": int(nbins),
         "voxel_nbins_source": nbins_source,
         "check": check,

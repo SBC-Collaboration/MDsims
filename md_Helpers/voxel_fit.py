@@ -66,6 +66,104 @@ def _unpack_parameters(parameters):
     return gas_mean, liquid_mean, liquid_sigma, weights
 
 
+def _finite_difference_hessian(function, parameters, relative_step=1e-4):
+    """Numerically estimate the Hessian of a scalar function."""
+
+    parameters = np.asarray(parameters, dtype=float)
+    n_parameters = len(parameters)
+    steps = relative_step * np.maximum(1.0, np.abs(parameters))
+    hessian = np.zeros((n_parameters, n_parameters), dtype=float)
+    center_value = float(function(parameters))
+
+    for i in range(n_parameters):
+        step_i = np.zeros(n_parameters, dtype=float)
+        step_i[i] = steps[i]
+        forward = float(function(parameters + step_i))
+        backward = float(function(parameters - step_i))
+        hessian[i, i] = (
+            forward - 2.0 * center_value + backward
+        ) / steps[i] ** 2
+
+        for j in range(i + 1, n_parameters):
+            step_j = np.zeros(n_parameters, dtype=float)
+            step_j[j] = steps[j]
+            f_pp = float(function(parameters + step_i + step_j))
+            f_pm = float(function(parameters + step_i - step_j))
+            f_mp = float(function(parameters - step_i + step_j))
+            f_mm = float(function(parameters - step_i - step_j))
+            mixed = (
+                f_pp - f_pm - f_mp + f_mm
+            ) / (4.0 * steps[i] * steps[j])
+            hessian[i, j] = mixed
+            hessian[j, i] = mixed
+
+    return 0.5 * (hessian + hessian.T)
+
+
+def _covariance_from_hessian(hessian):
+    """Return an approximate covariance matrix from a Hessian."""
+
+    try:
+        covariance = np.linalg.inv(hessian)
+        method = "inverse_hessian"
+    except np.linalg.LinAlgError:
+        covariance = np.linalg.pinv(hessian)
+        method = "pseudo_inverse_hessian"
+
+    covariance = 0.5 * (covariance + covariance.T)
+    return covariance, method
+
+
+def _liquid_mean_gradient(parameters):
+    """Gradient of fitted liquid count mean in transformed parameter space."""
+
+    parameters = np.asarray(parameters, dtype=float)
+    gradient = np.zeros_like(parameters, dtype=float)
+    gradient[0] = np.exp(parameters[0])
+    gradient[1] = np.exp(parameters[1])
+    return gradient
+
+
+def _fit_uncertainty_summary(objective, parameters, voxel_volume):
+    """
+    Estimate fitted liquid-mean uncertainty from the likelihood Hessian.
+
+    The optimizer works in transformed parameters.  The covariance from the
+    negative-log-likelihood Hessian is propagated to the fitted liquid Gaussian
+    mean and then divided by voxel volume to get density uncertainty.
+    """
+
+    hessian = _finite_difference_hessian(objective, parameters)
+    covariance, method = _covariance_from_hessian(hessian)
+    liquid_gradient = _liquid_mean_gradient(parameters)
+    liquid_variance = float(liquid_gradient @ covariance @ liquid_gradient)
+
+    if liquid_variance >= 0.0 and np.isfinite(liquid_variance):
+        liquid_mean_uncertainty = float(np.sqrt(liquid_variance))
+        liquid_density_uncertainty = (
+            liquid_mean_uncertainty / float(voxel_volume)
+        )
+    else:
+        liquid_mean_uncertainty = np.nan
+        liquid_density_uncertainty = np.nan
+
+    parameter_variances = np.diag(covariance)
+    parameter_uncertainties = np.where(
+        parameter_variances >= 0.0,
+        np.sqrt(np.clip(parameter_variances, 0.0, None)),
+        np.nan,
+    )
+
+    return {
+        "parameter_hessian": hessian,
+        "parameter_covariance": covariance,
+        "parameter_uncertainties": parameter_uncertainties,
+        "uncertainty_method": method,
+        "liquid_mean_count_uncertainty": liquid_mean_uncertainty,
+        "liquid_density_uncertainty": liquid_density_uncertainty,
+    }
+
+
 def _initial_parameters(observed):
     count_axis = np.arange(len(observed))
     liquid_mean = max(1.0, float(np.argmax(observed)))
@@ -152,6 +250,11 @@ def fit_voxel_count_mixture(
     gas_mean, liquid_mean, liquid_sigma, weights = _unpack_parameters(
         optimum.x
     )
+    uncertainty = _fit_uncertainty_summary(
+        objective,
+        optimum.x,
+        voxel_volume=voxel_volume,
+    )
     gas_pmf, liquid_pmf, interface_pmf = voxel_mixture_components(
         count_axis,
         gas_mean,
@@ -181,9 +284,15 @@ def fit_voxel_count_mixture(
         "interface_counts": n_voxels * component_pmfs["interface"],
         "gas_mean_count": float(gas_mean),
         "liquid_mean_count": float(liquid_mean),
+        "liquid_mean_count_uncertainty": float(
+            uncertainty["liquid_mean_count_uncertainty"]
+        ),
         "liquid_sigma_count": float(liquid_sigma),
         "gas_density": float(gas_mean / voxel_volume),
         "liquid_density": float(liquid_mean / voxel_volume),
+        "liquid_density_uncertainty": float(
+            uncertainty["liquid_density_uncertainty"]
+        ),
         "liquid_sigma_density": float(liquid_sigma / voxel_volume),
         "gas_weight": float(weights[0]),
         "liquid_weight": float(weights[1]),
@@ -191,6 +300,10 @@ def fit_voxel_count_mixture(
         "voxel_volume": float(voxel_volume),
         "n_voxels": n_voxels,
         "log_likelihood": log_likelihood,
+        "parameter_hessian": uncertainty["parameter_hessian"],
+        "parameter_covariance": uncertainty["parameter_covariance"],
+        "parameter_uncertainties": uncertainty["parameter_uncertainties"],
+        "uncertainty_method": uncertainty["uncertainty_method"],
         "AIC": float(2 * parameter_count - 2 * log_likelihood),
         "BIC": float(
             parameter_count * np.log(n_voxels) - 2 * log_likelihood
