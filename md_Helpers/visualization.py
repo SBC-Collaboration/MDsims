@@ -824,6 +824,111 @@ def plot_cavitation_xy_slice(
     plt.show()
 
 
+def _hot_spike_creation_info(obj):
+    info = {}
+
+    if isinstance(obj, dict):
+        info = dict(obj.get("creation_info", {}))
+
+        if not info and "initial_result" in obj:
+            info = dict(
+                obj.get("initial_result", {}).get("creation_info", {})
+            )
+
+    return info
+
+
+# ============================================================
+# Plot hot-spike x-y slice
+# ============================================================
+
+def plot_hot_spike_xy_slice(
+    obj,
+    fraction=0.05,
+    point_size=1,
+    alpha=0.7,
+    show_radius=True,
+):
+    """
+    Plot a thin x-y slice through the hot-spike center.
+
+    Input should usually be the result dictionary returned by
+    hot_spike.get_or_create_hot_spike_state(...) or
+    hot_spike.get_or_create_hot_spike(...).
+    """
+
+    if fraction <= 0 or fraction > 1:
+        raise ValueError("fraction must satisfy 0 < fraction <= 1")
+
+    info = _hot_spike_creation_info(obj)
+
+    spike_center = info.get("spike_center", None)
+    if spike_center is not None:
+        spike_center = np.asarray(
+            spike_center,
+            dtype=np.float64,
+        )
+
+    center_x = float(info.get(
+        "spike_center_x",
+        0.0 if spike_center is None else spike_center[0],
+    ))
+    center_y = float(info.get(
+        "spike_center_y",
+        0.0 if spike_center is None else spike_center[1],
+    ))
+    center_z = float(info.get(
+        "spike_center_z",
+        0.0 if spike_center is None else spike_center[2],
+    ))
+
+    radius = info.get("radius", None)
+
+    positions, Lx, Ly, Lz, snapshot = _get_positions_and_box(obj)
+
+    x = positions[:, 0]
+    y = positions[:, 1]
+    z = positions[:, 2]
+
+    half_thickness = 0.5 * fraction * Lz
+    mask = np.abs(z - center_z) <= half_thickness
+
+    plt.figure(figsize=(6, 6))
+
+    plt.scatter(
+        x[mask],
+        y[mask],
+        s=point_size,
+        alpha=alpha,
+        rasterized=True,
+    )
+
+    if show_radius and radius is not None:
+        circle = plt.Circle(
+            (center_x, center_y),
+            float(radius),
+            fill=False,
+            linewidth=2,
+            color="red",
+            linestyle="--",
+        )
+        plt.gca().add_patch(circle)
+
+    plt.xlim(-Lx / 2, Lx / 2)
+    plt.ylim(-Ly / 2, Ly / 2)
+
+    plt.xlabel("x")
+    plt.ylabel("y")
+
+    plt.title(
+        f"Hot-spike x-y slice at z={center_z:.3f} "
+        f"({100 * fraction:.1f}% box thickness)"
+    )
+
+    plt.gca().set_aspect("equal")
+    plt.show()
+
+
 # ============================================================
 # Animate x-y trajectory slice
 # ============================================================
@@ -922,6 +1027,130 @@ def animate_xy_slice_trajectory(
             f"step {frame_data['step']}"
         )
         return (scatter,)
+
+    anim = animation.FuncAnimation(
+        fig,
+        update,
+        frames=frames,
+        interval=interval,
+        blit=True,
+    )
+
+    plt.close(fig)
+
+    return IPython.display.HTML(anim.to_jshtml())
+
+
+def animate_hot_spike_xy_slice_trajectory(
+    result,
+    fraction=0.10,
+    stride=1,
+    max_frames=100,
+    point_size=1,
+    alpha=0.7,
+    interval=120,
+    show_radius=True,
+):
+    """
+    Animate the hot-spike trajectory x-y slice with the initial radius overlaid.
+    """
+
+    import gsd.hoomd
+
+    if fraction <= 0 or fraction > 1:
+        raise ValueError("fraction must satisfy 0 < fraction <= 1")
+
+    trajectory_path = _get_trajectory_path(result)
+    info = _hot_spike_creation_info(result)
+
+    center = np.array(
+        [
+            info.get("spike_center_x", 0.0),
+            info.get("spike_center_y", 0.0),
+            info.get("spike_center_z", 0.0),
+        ],
+        dtype=np.float64,
+    )
+    radius = info.get("radius", None)
+
+    frames = []
+
+    with gsd.hoomd.open(
+        name=trajectory_path,
+        mode="r",
+    ) as trajectory:
+        total_frames = len(trajectory)
+        frame_indices = range(0, total_frames, int(stride))
+
+        if max_frames is not None:
+            frame_indices = list(frame_indices)[:int(max_frames)]
+
+        for frame_index in frame_indices:
+            frame = trajectory[frame_index]
+            positions = np.asarray(
+                frame.particles.position,
+                dtype=np.float64,
+            )
+            box_lengths = np.asarray(
+                frame.configuration.box[:3],
+                dtype=np.float64,
+            )
+            positions = (
+                (positions + 0.5 * box_lengths) % box_lengths
+                - 0.5 * box_lengths
+            )
+            dz = positions[:, 2] - center[2]
+            dz -= box_lengths[2] * np.round(dz / box_lengths[2])
+            mask = np.abs(dz) <= 0.5 * float(fraction) * box_lengths[2]
+
+            frames.append({
+                "frame_index": int(frame_index),
+                "step": int(frame.configuration.step),
+                "xy": positions[mask][:, :2],
+                "box_lengths": box_lengths,
+            })
+
+    if not frames:
+        raise ValueError(f"No frames found in trajectory: {trajectory_path}")
+
+    Lx, Ly = frames[0]["box_lengths"][:2]
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    scatter = ax.scatter(
+        [],
+        [],
+        s=point_size,
+        alpha=alpha,
+        rasterized=True,
+    )
+    artists = [scatter]
+
+    circle = None
+    if show_radius and radius is not None:
+        circle = plt.Circle(
+            center[:2],
+            float(radius),
+            fill=False,
+            linewidth=2,
+            color="red",
+            linestyle="--",
+        )
+        ax.add_patch(circle)
+        artists.append(circle)
+
+    ax.set_xlim(-Lx / 2, Lx / 2)
+    ax.set_ylim(-Ly / 2, Ly / 2)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal")
+
+    def update(frame_data):
+        scatter.set_offsets(frame_data["xy"])
+        ax.set_title(
+            f"Hot-spike x-y slice | frame {frame_data['frame_index']} | "
+            f"step {frame_data['step']}"
+        )
+        return tuple(artists)
 
     anim = animation.FuncAnimation(
         fig,
