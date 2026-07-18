@@ -1,4 +1,22 @@
+from pathlib import Path
+
 import numpy as np
+
+
+def _load_last_gsd_frame(path):
+    import gsd.hoomd
+
+    path = Path(path)
+    if not path.exists():
+        return None
+
+    with gsd.hoomd.open(
+        name=str(path),
+        mode="r",
+    ) as trajectory:
+        if len(trajectory) == 0:
+            return None
+        return trajectory[-1]
 
 
 def as_snapshot(obj):
@@ -9,6 +27,20 @@ def as_snapshot(obj):
             return as_snapshot(obj["frame"])
         if obj.get("simulation") is not None:
             return as_snapshot(obj["simulation"])
+
+        paths = obj.get("paths", {})
+        for path_key in [
+            "final_state_path",
+            "trajectory_path",
+            "state_path",
+        ]:
+            if path_key not in paths:
+                continue
+
+            frame = _load_last_gsd_frame(paths[path_key])
+            if frame is not None:
+                return frame
+
         raise TypeError("Result dictionary has no usable frame or simulation.")
 
     if obj is None:

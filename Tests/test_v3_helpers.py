@@ -85,6 +85,26 @@ class PathTests(unittest.TestCase):
 
 
 class SpatialTests(unittest.TestCase):
+    def test_result_dict_can_resolve_path_frame(self):
+        fake_frame = make_frame(
+            positions=[[0.0, 0.0, 0.0]],
+            box_lengths=[1.0, 1.0, 1.0],
+        )
+
+        with patch.object(
+            spatial,
+            "_load_last_gsd_frame",
+            return_value=fake_frame,
+        ) as load_frame:
+            snapshot = spatial.as_snapshot({
+                "paths": {
+                    "final_state_path": "final.gsd",
+                },
+            })
+
+        self.assertIs(snapshot, fake_frame)
+        load_frame.assert_called_once_with("final.gsd")
+
     def test_periodic_distance(self):
         distance = spatial.periodic_distances(
             positions=[[0.49, 0.0, 0.0]],
