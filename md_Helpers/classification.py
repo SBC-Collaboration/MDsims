@@ -286,7 +286,7 @@ def write_voxel_phase_separation_metadata(
     if state_path is None or not state_path.exists():
         raise FileNotFoundError(f"Could not find state for log: {log_path}")
 
-    state_attrs = _read_group_attrs(log_path, "metadata/state")
+    state_attrs = _read_log_metadata(log_path)
     n_fcc_cells = state_attrs.get("n_fcc_cells")
 
     with gsd.hoomd.open(name=str(state_path), mode="r") as trajectory:
