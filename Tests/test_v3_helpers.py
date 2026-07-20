@@ -8,7 +8,14 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from md_Helpers import eos_sweep, master_csv, paths, seitz, spatial
+from md_Helpers import (
+    classification,
+    eos_sweep,
+    master_csv,
+    paths,
+    seitz,
+    spatial,
+)
 from md_Helpers import cavitation_sweep as cavitation_sweep_module
 from md_Helpers.cavitation_analysis import estimate_bubble_from_radial_density
 from md_Helpers.cavitation_sweep import (
@@ -125,6 +132,47 @@ class SpatialTests(unittest.TestCase):
         self.assertEqual(int(counts.sum()), 2)
         self.assertEqual(len(densities), 8)
         self.assertAlmostEqual(voxel_volume, 0.125)
+
+
+class ClassificationTests(unittest.TestCase):
+    def test_voxel_classifier_uses_ncells_rule(self):
+        frame = object()
+        with patch(
+            "md_Helpers.classification.compute_voxel_densities",
+            return_value=(
+                np.asarray([0.0, 0.5]),
+                np.asarray([0, 1]),
+                1.0,
+            ),
+        ) as compute_densities:
+            result = classification.compute_voxel_fraction_phase_separation(
+                frame,
+                n_fcc_cells=30,
+            )
+
+        compute_densities.assert_called_once_with(frame, 12)
+        self.assertEqual(result["nbins"], 12)
+        self.assertEqual(result["nbins_source"], "n_fcc_cells_rule")
+
+    def test_explicit_voxel_nbins_overrides_ncells_rule(self):
+        frame = object()
+        with patch(
+            "md_Helpers.classification.compute_voxel_densities",
+            return_value=(
+                np.asarray([0.0, 0.5]),
+                np.asarray([0, 1]),
+                1.0,
+            ),
+        ) as compute_densities:
+            result = classification.compute_voxel_fraction_phase_separation(
+                frame,
+                nbins=8,
+                n_fcc_cells=30,
+            )
+
+        compute_densities.assert_called_once_with(frame, 8)
+        self.assertEqual(result["nbins"], 8)
+        self.assertEqual(result["nbins_source"], "explicit")
 
 
 class CavitationAnalysisTests(unittest.TestCase):

@@ -3,6 +3,12 @@ from pathlib import Path
 import numpy as np
 
 
+def nbins_for_ncells(n_fcc_cells):
+    """Choose the voxel resolution used by Seitz-style density fits."""
+
+    return round(0.3 * int(n_fcc_cells) + 3)
+
+
 def _load_last_gsd_frame(path):
     import gsd.hoomd
 

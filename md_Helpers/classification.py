@@ -4,7 +4,7 @@ import gsd.hoomd
 import h5py
 import numpy as np
 
-from .spatial import compute_voxel_densities
+from .spatial import compute_voxel_densities, nbins_for_ncells
 
 
 DEFAULT_PHASE_SEP_NBINS = 10
@@ -48,11 +48,26 @@ def read_phase_method_attrs(log_path, method_name):
 
 def compute_voxel_fraction_phase_separation(
     obj,
-    nbins=DEFAULT_PHASE_SEP_NBINS,
+    nbins=None,
     density_threshold=DEFAULT_PHASE_SEP_DENSITY_THRESHOLD,
     voxel_fraction_threshold=DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD,
+    n_fcc_cells=None,
 ):
-    """Classify a frame from its fraction of low-density voxels."""
+    """Classify a frame from its fraction of low-density voxels.
+
+    When ``nbins`` is omitted, use the Seitz resolution rule when
+    ``n_fcc_cells`` is available, otherwise retain the legacy default.
+    """
+
+    if nbins is not None:
+        nbins = int(nbins)
+        nbins_source = "explicit"
+    elif n_fcc_cells is not None:
+        nbins = nbins_for_ncells(n_fcc_cells)
+        nbins_source = "n_fcc_cells_rule"
+    else:
+        nbins = DEFAULT_PHASE_SEP_NBINS
+        nbins_source = "default_no_n_fcc_cells"
 
     voxel_densities, _, voxel_volume = compute_voxel_densities(obj, nbins)
     low_density_fraction = float(
@@ -65,6 +80,7 @@ def compute_voxel_fraction_phase_separation(
         ),
         "method": "voxel_low_density_fraction",
         "nbins": int(nbins),
+        "nbins_source": nbins_source,
         "density_threshold": float(density_threshold),
         "voxel_fraction_threshold": float(voxel_fraction_threshold),
         "low_density_fraction": low_density_fraction,
@@ -253,23 +269,31 @@ def _state_path_for_log(log_path):
 def write_voxel_phase_separation_metadata(
     log_path,
     state_path=None,
-    nbins=DEFAULT_PHASE_SEP_NBINS,
+    nbins=None,
     density_threshold=DEFAULT_PHASE_SEP_DENSITY_THRESHOLD,
     voxel_fraction_threshold=DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD,
     updated_from_saved_gsd=True,
     dry_run=False,
 ):
-    """Compute and store the voxel classifier for one completed state."""
+    """Compute and store the voxel classifier for one completed state.
+
+    By default, infer ``nbins`` from ``metadata/state:n_fcc_cells`` using the
+    same rule as the Seitz voxel-density fit. Pass ``nbins`` to override it.
+    """
 
     log_path = Path(log_path)
     state_path = Path(state_path) if state_path else _state_path_for_log(log_path)
     if state_path is None or not state_path.exists():
         raise FileNotFoundError(f"Could not find state for log: {log_path}")
 
+    state_attrs = _read_group_attrs(log_path, "metadata/state")
+    n_fcc_cells = state_attrs.get("n_fcc_cells")
+
     with gsd.hoomd.open(name=str(state_path), mode="r") as trajectory:
         result = compute_voxel_fraction_phase_separation(
             trajectory[-1],
             nbins=nbins,
+            n_fcc_cells=n_fcc_cells,
             density_threshold=density_threshold,
             voxel_fraction_threshold=voxel_fraction_threshold,
         )

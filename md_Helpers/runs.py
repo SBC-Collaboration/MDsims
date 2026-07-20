@@ -541,7 +541,6 @@ def run_logged_phase(
     ps.write_voxel_phase_separation_metadata(
         log_path=paths["log_path"],
         state_path=paths["state_path"],
-        nbins=DEFAULT_PHASE_SEP_NBINS,
         density_threshold=DEFAULT_PHASE_SEP_DENSITY_THRESHOLD,
         voxel_fraction_threshold=DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD,
         updated_from_saved_gsd=False,

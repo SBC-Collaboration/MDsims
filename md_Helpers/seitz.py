@@ -1,6 +1,8 @@
 import numpy as np
 from pathlib import Path
 
+from .spatial import nbins_for_ncells
+
 
 THERMO_BASE = "hoomd-data/md/compute/ThermodynamicQuantities"
 DEFAULT_EOS_TABLE_NAME = "thermalization_master_ncells_30.csv"
@@ -588,10 +590,6 @@ def _infer_bubble_particle_count(creation_attrs):
             "Expected metadata/creation['N_after']."
         )
     return float(value), "metadata/creation:N_after"
-
-
-def nbins_for_ncells(n_fcc_cells):
-    return round(0.3 * int(n_fcc_cells) + 3)
 
 
 def _infer_voxel_nbins(state_attrs, explicit_nbins=None):
