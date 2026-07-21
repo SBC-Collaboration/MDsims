@@ -10,6 +10,7 @@ import pandas as pd
 
 from md_Helpers import (
     classification,
+    dt_validation,
     eos_sweep,
     master_csv,
     paths,
@@ -42,6 +43,35 @@ def make_frame(positions, box_lengths):
 
 
 class PathTests(unittest.TestCase):
+    def test_dt_validation_path_is_isolated_and_explicit(self):
+        result = dt_validation.timestep_validation_paths(
+            n_fcc_cells=30,
+            target_rho=0.71,
+            kT=0.8,
+            dt=0.005,
+            physical_time=5000.0,
+            seed=2,
+            base_folder="/tmp/dt_validation",
+        )
+        path_text = str(result["state_path"])
+        self.assertIn("/tmp/dt_validation/", path_text)
+        self.assertIn("dt_0.00500", path_text)
+        self.assertIn("physical_time_5000.000", path_text)
+        self.assertIn("seed_2", path_text)
+        self.assertIn("physical_time_5000.000/sweep_manifest.json", str(
+            result["manifest_path"]
+        ))
+
+    def test_dt_validation_preserves_physical_time(self):
+        self.assertEqual(
+            dt_validation.nsteps_for_physical_time(5000.0, 0.005),
+            1_000_000,
+        )
+        self.assertEqual(
+            dt_validation.nsteps_for_physical_time(5000.0, 0.01),
+            500_000,
+        )
+
     def test_thermalized_path(self):
         result = paths.thermalized_run_paths(
             n_fcc_cells=30,

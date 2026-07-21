@@ -19,6 +19,7 @@ Primary modules:
 - metadata: structured HDF5 metadata helpers
 - seitz: Seitz threshold calculation helpers
 - visualization: rendering and plotting
+- dt_validation: isolated thermalization timestep-convergence sweeps
 """
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "metadata",
     "seitz",
     "visualization",
+    "dt_validation",
 ]
