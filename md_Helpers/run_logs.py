@@ -49,7 +49,7 @@ def configure_run_logging(enabled=True, notebook_name="Notebook", log_dir=None):
 
     folder = Path(RUN_LOGS_ROOT if log_dir is None else log_dir)
     folder.mkdir(parents=True, exist_ok=True)
-    started = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    started = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
     _log_path = folder / f"{_safe_notebook_name(notebook_name)}_{started}.log"
     _log_path.touch(exist_ok=False)
     return _log_path

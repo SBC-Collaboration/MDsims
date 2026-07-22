@@ -71,6 +71,10 @@ class RunLogTests(unittest.TestCase):
             cell_text = output.getvalue()
             file_text = log_path.read_text(encoding="utf-8")
             self.assertTrue(log_path.name.startswith("My_Sweep_"))
+            self.assertRegex(
+                log_path.name,
+                r"^My_Sweep_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.log$",
+            )
             start_line = (
                 "Starting Cavitation Evolution (ncells = 30, "
                 "source_rho = 0.71, kT = 0.8, radius = 4.0, "
