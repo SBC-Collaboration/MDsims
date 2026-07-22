@@ -18,6 +18,7 @@ EXCITATION_STATES_V3_ROOT = PROJECT_ROOT / "Excitation_States_v3"
 EXCITATION_EVOLVED_V3_ROOT = PROJECT_ROOT / "Excitation_Evolved_v3"
 
 MASTER_CSVS_V3_ROOT = PROJECT_ROOT / "Master_CSVs_v3"
+RUN_LOGS_ROOT = PROJECT_ROOT / "run_logs"
 
 
 def format_float(value, decimals=3):

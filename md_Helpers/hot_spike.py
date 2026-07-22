@@ -8,6 +8,7 @@ from . import classification as classification_helpers
 from . import metadata as metadata_helpers
 from . import runs as run_helpers
 from . import simulation as simulation_helpers
+from .run_logs import simulation_progress
 from .paths import (
     EXCITATION_STATES_V3_ROOT,
     excitation_evolved_paths,
@@ -933,18 +934,25 @@ def get_or_create_hot_spike(
         lj_kwargs=lj_kwargs,
     )
 
-    run_result = run_helpers.run_logged_trajectory_phase(
-        simulation=simulation,
+    with simulation_progress(
+        "Excitation",
+        ncells=n_fcc_cells,
+        rho=target_rho,
+        Source_kT=kT,
         nsteps=evolve_nsteps,
-        log_path=log_path,
-        trajectory_path=trajectory_path,
-        final_state_path=final_state_path,
-        log_period=log_period,
-        trajectory_period=trajectory_period,
-        metadata_groups=metadata_groups,
-        classify_final=True,
-        classification_kwargs=None,
-    )
+    ):
+        run_result = run_helpers.run_logged_trajectory_phase(
+            simulation=simulation,
+            nsteps=evolve_nsteps,
+            log_path=log_path,
+            trajectory_path=trajectory_path,
+            final_state_path=final_state_path,
+            log_period=log_period,
+            trajectory_period=trajectory_period,
+            metadata_groups=metadata_groups,
+            classify_final=True,
+            classification_kwargs=None,
+        )
 
     final_frame = _load_frame_from_gsd(final_state_path)
     classification_result = classification_helpers.read_phase_method_attrs(

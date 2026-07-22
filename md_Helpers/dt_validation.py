@@ -59,6 +59,7 @@ def timestep_validation_paths(
         "folder": folder,
         "state_path": folder / "thermalized_final.gsd",
         "log_path": folder / "thermalization_log.hdf5",
+        "trajectory_path": folder / "thermalization_trajectory.gsd",
         "manifest_path": sweep_folder / "sweep_manifest.json",
     }
 
@@ -106,6 +107,7 @@ def run_thermalization_dt_sweep(
     physical_time,
     seeds=(1,),
     log_interval=5.0,
+    trajectory_interval=None,
     epsilon_LJ=1.0,
     sigma_LJ=1.0,
     r_cut_LJ=2.5,
@@ -126,6 +128,8 @@ def run_thermalization_dt_sweep(
     seeds = [int(seed) for seed in seeds]
     physical_time = float(physical_time)
     log_interval = float(log_interval)
+    if trajectory_interval is not None:
+        trajectory_interval = float(trajectory_interval)
 
     if not timesteps:
         raise ValueError("timesteps must contain at least one value")
@@ -133,6 +137,8 @@ def run_thermalization_dt_sweep(
         raise ValueError("seeds must contain at least one value")
     if log_interval <= 0:
         raise ValueError("log_interval must be positive")
+    if trajectory_interval is not None and trajectory_interval <= 0:
+        raise ValueError("trajectory_interval must be positive")
 
     frame = lattices.make_lattice_frame(
         n_fcc_cells=n_fcc_cells,
@@ -151,6 +157,7 @@ def run_thermalization_dt_sweep(
         "physical_time_requested": physical_time,
         "seeds": seeds,
         "log_interval_requested": log_interval,
+        "trajectory_interval_requested": trajectory_interval,
         "epsilon_LJ": float(epsilon_LJ),
         "sigma_LJ": float(sigma_LJ),
         "r_cut_LJ": float(r_cut_LJ),
@@ -179,6 +186,12 @@ def run_thermalization_dt_sweep(
         nsteps = nsteps_for_physical_time(physical_time, dt)
         actual_physical_time = nsteps * dt
         log_period = max(1, int(round(log_interval / dt)))
+        trajectory_period = None
+        if trajectory_interval is not None:
+            trajectory_period = max(
+                1,
+                int(round(trajectory_interval / dt)),
+            )
 
         for seed in seeds:
             paths = timestep_validation_paths(
@@ -193,17 +206,28 @@ def run_thermalization_dt_sweep(
 
             state_exists = paths["state_path"].exists()
             log_exists = paths["log_path"].exists()
-            if state_exists and log_exists and not overwrite:
+            trajectory_exists = paths["trajectory_path"].exists()
+            output_complete = state_exists and log_exists
+            if trajectory_interval is not None:
+                output_complete = output_complete and trajectory_exists
+
+            if output_complete and not overwrite:
                 results.append({
                     **paths,
                     "dt": dt,
                     "seed": seed,
                     "nsteps": nsteps,
                     "physical_time_actual": actual_physical_time,
+                    "trajectory_period": trajectory_period,
                     "status": "existing",
                 })
                 continue
-            if (state_exists or log_exists) and not overwrite:
+            requested_output_exists = state_exists or log_exists
+            if trajectory_interval is not None:
+                requested_output_exists = (
+                    requested_output_exists or trajectory_exists
+                )
+            if requested_output_exists and not overwrite:
                 raise FileExistsError(
                     "Incomplete validation output exists. Use overwrite=True "
                     f"after inspecting: {paths['folder']}"
@@ -235,10 +259,23 @@ def run_thermalization_dt_sweep(
                 log_path=paths["log_path"],
                 log_period=log_period,
             )
+            trajectory_handle = None
+            if trajectory_period is not None:
+                trajectory_handle = runs.start_gsd_trajectory_writer(
+                    simulation=simulation,
+                    trajectory_path=paths["trajectory_path"],
+                    trajectory_period=trajectory_period,
+                    mode="wb",
+                )
             try:
                 simulation.run(0)
                 simulation.run(nsteps)
             finally:
+                if trajectory_handle is not None:
+                    runs.stop_gsd_trajectory_writer(
+                        simulation=simulation,
+                        writer_handle=trajectory_handle,
+                    )
                 runs.stop_hdf5_logger(
                     simulation=simulation,
                     logger_objects=logger_handle,
@@ -276,6 +313,8 @@ def run_thermalization_dt_sweep(
                         "physical_time_requested": physical_time,
                         "physical_time_actual": actual_physical_time,
                         "log_interval_requested": log_interval,
+                        "trajectory_interval_requested": trajectory_interval,
+                        "trajectory_period": trajectory_period,
                         "validation_root": str(Path(base_folder)),
                     }
                 },
@@ -291,6 +330,7 @@ def run_thermalization_dt_sweep(
                 "nsteps": nsteps,
                 "physical_time_actual": actual_physical_time,
                 "log_period": log_period,
+                "trajectory_period": trajectory_period,
                 "status": "created",
             })
             _write_manifest(manifest_path, configuration, results)

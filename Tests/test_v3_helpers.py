@@ -1,9 +1,11 @@
 import unittest
 import sys
+import io
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
+from contextlib import redirect_stdout
 
 import numpy as np
 import pandas as pd
@@ -14,6 +16,7 @@ from md_Helpers import (
     eos_sweep,
     master_csv,
     paths,
+    run_logs,
     seitz,
     spatial,
 )
@@ -40,6 +43,82 @@ def make_frame(positions, box_lengths):
             N=len(positions),
         ),
     )
+
+
+class RunLogTests(unittest.TestCase):
+    def tearDown(self):
+        run_logs.configure_run_logging(False)
+
+    def test_progress_is_printed_and_immediately_written(self):
+        with TemporaryDirectory() as folder:
+            log_path = run_logs.configure_run_logging(
+                True,
+                notebook_name="My Sweep.ipynb",
+                log_dir=folder,
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with run_logs.simulation_progress(
+                    "Cavitation",
+                    ncells=30,
+                    source_rho=0.71,
+                    kT=0.8,
+                    radius=4.0,
+                    nsteps=100_000,
+                ):
+                    pass
+
+            cell_text = output.getvalue()
+            file_text = log_path.read_text(encoding="utf-8")
+            self.assertTrue(log_path.name.startswith("My_Sweep_"))
+            start_line = (
+                "Starting Cavitation Evolution (ncells = 30, "
+                "source_rho = 0.71, kT = 0.8, radius = 4.0, "
+                "nsteps = 100000)"
+            )
+            self.assertIn(start_line, cell_text)
+            self.assertIn(start_line, file_text)
+            self.assertIn("simulation done, simulation time =", cell_text)
+            self.assertIn("simulation done, simulation time =", file_text)
+
+    def test_disabled_logging_still_prints_progress(self):
+        run_logs.configure_run_logging(False)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            run_logs.progress_print("still visible")
+        self.assertEqual(output.getvalue(), "still visible\n")
+
+    def test_requested_thermalization_and_excitation_lines(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with run_logs.simulation_progress(
+                "Thermalization",
+                ncells=30,
+                rho=0.71,
+                kT=0.8,
+                nsteps=1_000,
+            ):
+                pass
+            with run_logs.simulation_progress(
+                "Excitation",
+                ncells=30,
+                rho=0.71,
+                Source_kT=0.8,
+                nsteps=2_000,
+            ):
+                pass
+
+        cell_text = output.getvalue()
+        self.assertIn(
+            "Starting Thermalization Evolution (ncells = 30, rho = 0.71, "
+            "kT = 0.8, nsteps = 1000)",
+            cell_text,
+        )
+        self.assertIn(
+            "Starting Excitation Evolution (ncells = 30, rho = 0.71, "
+            "Source_kT = 0.8, nsteps = 2000)",
+            cell_text,
+        )
 
 
 class PathTests(unittest.TestCase):

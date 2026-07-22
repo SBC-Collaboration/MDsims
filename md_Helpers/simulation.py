@@ -5,6 +5,7 @@ import gsd.hoomd
 
 from . import runs as lh
 from . import lattices as cl
+from .run_logs import simulation_progress
 from .paths import lattice_paths, thermalized_run_paths
 
 
@@ -370,7 +371,7 @@ def get_or_make_thermalized_state(
     frame = cl.make_lattice_frame(
         n_fcc_cells=n_fcc_cells,
         target_rho=target_rho,
-        end_print=True,
+        end_print=False,
         overwrite=overwrite_lattice,
     )
 
@@ -404,14 +405,21 @@ def get_or_make_thermalized_state(
     # ============================================================
     # Thermalize, randomize, log, and save
     # ============================================================
-    simulation = thermalize_and_randomize(
-        simulation=simulation,
+    with simulation_progress(
+        "Thermalization",
+        ncells=n_fcc_cells,
+        rho=target_rho,
         kT=kT,
         nsteps=nsteps,
-        log=True,
-        phase_name=phase_name,
-        log_period=log_period,
-    )
+    ):
+        simulation = thermalize_and_randomize(
+            simulation=simulation,
+            kT=kT,
+            nsteps=nsteps,
+            log=True,
+            phase_name=phase_name,
+            log_period=log_period,
+        )
 
     # ============================================================
     # Load final randomized frame from saved GSD

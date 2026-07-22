@@ -8,6 +8,7 @@ import numpy as np
 from . import classification as classification_helpers
 from . import metadata as metadata_helpers
 from . import runs as run_helpers
+from .run_logs import simulation_progress
 from . import simulation as simulation_helpers
 from .paths import (
     CAVITATION_STATES_V3_ROOT,
@@ -1085,18 +1086,26 @@ def get_or_create_cavitation(
         lj_kwargs=lj_kwargs,
     )
 
-    run_result = run_helpers.run_logged_trajectory_phase(
-        simulation=simulation,
+    with simulation_progress(
+        "Cavitation",
+        ncells=n_fcc_cells,
+        source_rho=target_rho,
+        kT=evolve_kT,
+        radius=radius,
         nsteps=evolve_nsteps,
-        log_path=log_path,
-        trajectory_path=trajectory_path,
-        final_state_path=final_state_path,
-        log_period=log_period,
-        trajectory_period=trajectory_period,
-        metadata_groups=metadata_groups,
-        classify_final=classify_final,
-        classification_kwargs=classification_kwargs,
-    )
+    ):
+        run_result = run_helpers.run_logged_trajectory_phase(
+            simulation=simulation,
+            nsteps=evolve_nsteps,
+            log_path=log_path,
+            trajectory_path=trajectory_path,
+            final_state_path=final_state_path,
+            log_period=log_period,
+            trajectory_period=trajectory_period,
+            metadata_groups=metadata_groups,
+            classify_final=classify_final,
+            classification_kwargs=classification_kwargs,
+        )
 
     final_frame = load_frame_from_gsd(final_state_path)
 

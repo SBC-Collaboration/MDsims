@@ -20,6 +20,7 @@ Primary modules:
 - seitz: Seitz threshold calculation helpers
 - visualization: rendering and plotting
 - dt_validation: isolated thermalization timestep-convergence sweeps
+- run_logs: opt-in notebook progress logs for long simulations
 """
 
 __all__ = [
@@ -41,4 +42,5 @@ __all__ = [
     "seitz",
     "visualization",
     "dt_validation",
+    "run_logs",
 ]
