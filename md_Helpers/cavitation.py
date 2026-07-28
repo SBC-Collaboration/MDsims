@@ -439,7 +439,6 @@ def _source_phase_separation(source_result):
 def _frame_state_metadata(
     frame,
     n_fcc_cells,
-    source_rho,
     kT,
     state_kind,
     density_mode="fixed_volume_particle_removed",
@@ -454,17 +453,14 @@ def _frame_state_metadata(
 
     return {
         "state_kind": state_kind,
-        "data_version": "v3",
         "lattice_type": "fcc",
         "density_mode": density_mode,
         "n_fcc_cells": int(n_fcc_cells),
         "N": N,
-        "source_rho": float(source_rho),
         "actual_rho": float(N / volume),
         "kT": float(kT),
         "BoxLength": float(box[0]),
         "volume": volume,
-        "fcc_cell_size": float(box[0]) / int(n_fcc_cells),
     }
 
 
@@ -520,19 +516,15 @@ def _write_cavitation_creation_metadata(
     info,
     source_metadata,
     n_fcc_cells,
-    source_rho,
     kT,
     overwrite=False,
 ):
     state = _frame_state_metadata(
         frame=frame,
         n_fcc_cells=n_fcc_cells,
-        source_rho=source_rho,
         kT=kT,
         state_kind="cavitation_initial",
     )
-
-    state["target_rho"] = float(info["rho_after"])
 
     metadata_groups = {
         "metadata/state": state,
@@ -724,7 +716,6 @@ def get_or_create_cavitation_state(
         info=info,
         source_metadata=source_metadata,
         n_fcc_cells=n_fcc_cells,
-        source_rho=target_rho,
         kT=kT,
         overwrite=True,
     )

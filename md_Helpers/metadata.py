@@ -67,6 +67,18 @@ CAVITATION_CREATION_SOURCE_ATTRIBUTES = {
     "source_seed",
 }
 
+CAVITATION_CREATION_STATE_ATTRIBUTES = {
+    "BoxLength",
+    "N",
+    "actual_rho",
+    "density_mode",
+    "kT",
+    "lattice_type",
+    "n_fcc_cells",
+    "state_kind",
+    "volume",
+}
+
 
 def _open_hdf5(path, mode):
     import h5py
@@ -397,6 +409,10 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
             raise ValueError(
                 f"state_kind is {state_kind!r}, not 'cavitation_initial'"
             )
+        state = hdf["metadata/state"]
+        found_state_attrs = sorted(
+            set(state.attrs) - CAVITATION_CREATION_STATE_ATTRIBUTES
+        )
 
         creation_path = "metadata/creation"
         if creation_path not in hdf:
@@ -445,6 +461,8 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
         )
 
         if not dry_run:
+            for attr_name in found_state_attrs:
+                del state.attrs[attr_name]
             for attr_name in found_attrs:
                 del creation.attrs[attr_name]
             for dataset_name in found_datasets:
@@ -456,11 +474,18 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
 
     removed = [
         {
+            "path": f"metadata/state/{attr_name}",
+            "storage": "attribute",
+        }
+        for attr_name in found_state_attrs
+    ]
+    removed.extend(
+        {
             "path": f"{creation_path}/{attr_name}",
             "storage": "attribute",
         }
         for attr_name in found_attrs
-    ]
+    )
     removed.extend(
         {
             "path": f"{creation_path}/{dataset_name}",

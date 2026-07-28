@@ -12,6 +12,18 @@ class TestCavitationCreationMetadataCleanup(unittest.TestCase):
         with h5py.File(path, "w") as hdf:
             state = hdf.require_group("metadata/state")
             state.attrs["state_kind"] = "cavitation_initial"
+            state.attrs["BoxLength"] = 52.3
+            state.attrs["N"] = 107954
+            state.attrs["actual_rho"] = 0.7547
+            state.attrs["density_mode"] = "fixed_volume_particle_removed"
+            state.attrs["kT"] = 0.8
+            state.attrs["lattice_type"] = "fcc"
+            state.attrs["n_fcc_cells"] = 30
+            state.attrs["volume"] = 143000.0
+            state.attrs["data_version"] = "v3"
+            state.attrs["fcc_cell_size"] = 1.743
+            state.attrs["source_rho"] = 0.755
+            state.attrs["target_rho"] = 0.7547
 
             creation = hdf.require_group("metadata/creation")
             creation.attrs["bubble_center"] = [0.0, 0.0, 0.0]
@@ -71,6 +83,20 @@ class TestCavitationCreationMetadataCleanup(unittest.TestCase):
                 )
                 self.assertNotIn("removed_particle_indices", creation)
                 self.assertNotIn("metadata/paths", hdf)
+                self.assertEqual(
+                    set(hdf["metadata/state"].attrs),
+                    {
+                        "BoxLength",
+                        "N",
+                        "actual_rho",
+                        "density_mode",
+                        "kT",
+                        "lattice_type",
+                        "n_fcc_cells",
+                        "state_kind",
+                        "volume",
+                    },
+                )
                 self.assertEqual(
                     set(hdf["metadata/source"].attrs),
                     {
