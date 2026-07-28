@@ -1155,6 +1155,9 @@ def read_stitched_log(result_or_paths):
         "source_row_index": np.concatenate(row_pieces),
         "dt1": float(paths["dt1"]),
         "dt2": float(paths["dt2"]),
+        "segment_boundary_time": (
+            float(timing[1]["nsteps"]) * float(timing[1]["dt"])
+        ),
         "boundary_duplicate_removed": bool(not keep_2[0])
         if keep_2.size
         else False,

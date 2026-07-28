@@ -1607,6 +1607,7 @@ def plot_log_quantity(
     log,
     quantity,
     figsize=(8, 5),
+    show_segment_boundary=True,
 ):
     """
     Plot a ThermodynamicQuantities quantity against timestep.
@@ -1614,6 +1615,7 @@ def plot_log_quantity(
     Special behavior:
     - "kinetic_energy" plots KE/N
     - "potential_energy" plots PE/N
+    - stitched two-segment logs mark the segment boundary
 
     The calling keys stay the same:
 
@@ -1684,6 +1686,21 @@ def plot_log_quantity(
     plt.figure(figsize=figsize)
 
     plt.plot(x_values, values)
+
+    if (
+        show_segment_boundary
+        and "stitched" in log
+        and "segment_boundary_time" in log["stitched"]
+    ):
+        boundary_time = float(log["stitched"]["segment_boundary_time"])
+        plt.axvline(
+            boundary_time,
+            color="tab:red",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Segment boundary (t={boundary_time:g})",
+        )
+        plt.legend()
 
     plt.xlabel(x_label)
     plt.ylabel(y_label)
