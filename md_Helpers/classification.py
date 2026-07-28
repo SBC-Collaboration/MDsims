@@ -18,6 +18,17 @@ DEFAULT_PHASE_SEP_PE_DROP_DECISION_RULE = "either"
 
 PHASE_SEPARATION_METADATA_PATH = "metadata/classification/phase_separation"
 
+THERMALIZED_VOXEL_METADATA_KEYS = {
+    "phase_separated",
+    "method",
+    "nbins",
+    "nbins_source",
+    "density_threshold",
+    "voxel_fraction_threshold",
+    "low_density_fraction",
+    "updated_from_saved_gsd",
+}
+
 
 def _clean_value(value):
     if isinstance(value, bytes):
@@ -300,6 +311,12 @@ def write_voxel_phase_separation_metadata(
 
     attrs = dict(result)
     attrs["updated_from_saved_gsd"] = bool(updated_from_saved_gsd)
+    if state_attrs.get("state_kind") == "thermalized":
+        attrs = {
+            key: value
+            for key, value in attrs.items()
+            if key in THERMALIZED_VOXEL_METADATA_KEYS
+        }
     if not dry_run:
         write_phase_method_metadata(
             log_path,

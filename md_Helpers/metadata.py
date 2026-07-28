@@ -3,6 +3,36 @@ from pathlib import Path
 import numpy as np
 
 
+THERMALIZED_METADATA_REMOVALS = {
+    "metadata/state": {
+        "data_version",
+        "fcc_cell_size",
+        "migrated_from_data_version",
+    },
+    "metadata/run": {
+        "final_timestep",
+    },
+    "metadata/paths": {
+        "log_path",
+        "state_path",
+    },
+    "metadata/source": {
+        "migration_note",
+        "old_log_path",
+        "old_state_path",
+    },
+    "metadata/classification/phase_separation/voxel": {
+        "max_voxel_density",
+        "mean_voxel_density",
+        "min_voxel_density",
+        "n_fcc_cells",
+        "n_voxels",
+        "std_voxel_density",
+        "voxel_volume",
+    },
+}
+
+
 def _open_hdf5(path, mode):
     import h5py
     
@@ -114,6 +144,9 @@ def split_simulation_metadata(
 ):
     flat_metadata = dict(flat_metadata or {})
 
+    resolved_state_kind = flat_metadata.get("state_kind", state_kind)
+    is_thermalized = resolved_state_kind == "thermalized"
+
     state_keys = [
         "lattice_type",
         "density_mode",
@@ -124,8 +157,9 @@ def split_simulation_metadata(
         "kT",
         "BoxLength",
         "volume",
-        "fcc_cell_size",
     ]
+    if not is_thermalized:
+        state_keys.append("fcc_cell_size")
 
     run_keys = [
         "phase_name",
@@ -133,8 +167,9 @@ def split_simulation_metadata(
         "seed",
         "dt",
         "log_period",
-        "final_timestep",
     ]
+    if not is_thermalized:
+        run_keys.append("final_timestep")
 
     lj_keys = [
         "epsilon_LJ",
@@ -145,7 +180,7 @@ def split_simulation_metadata(
         "lj_mode",
     ]
 
-    path_keys = [
+    path_keys = [] if is_thermalized else [
         "state_path",
         "log_path",
         "metadata_path",
@@ -158,10 +193,12 @@ def split_simulation_metadata(
         "source_data_version",
     ]
 
-    state = {
-        "state_kind": flat_metadata.get("state_kind", state_kind),
-        "data_version": flat_metadata.get("data_version", data_version),
-    }
+    state = {"state_kind": resolved_state_kind}
+    if not is_thermalized:
+        state["data_version"] = flat_metadata.get(
+            "data_version",
+            data_version,
+        )
 
     for key in state_keys:
         if key in flat_metadata:
@@ -215,6 +252,97 @@ def split_simulation_metadata(
             groups[group_path] = attrs
 
     return groups
+
+
+def cleanup_thermalized_metadata_file(hdf5_path, dry_run=True):
+    """Remove retired metadata attributes from one thermalized-state log."""
+
+    hdf5_path = Path(hdf5_path)
+    mode = "r" if dry_run else "a"
+
+    with _open_hdf5(hdf5_path, mode=mode) as hdf:
+        if "metadata/state" not in hdf:
+            raise KeyError("missing metadata/state")
+
+        state_kind = clean_read_value(
+            hdf["metadata/state"].attrs.get("state_kind")
+        )
+        if state_kind != "thermalized":
+            raise ValueError(
+                f"state_kind is {state_kind!r}, not 'thermalized'"
+            )
+
+        found = []
+        for group_path, attr_names in THERMALIZED_METADATA_REMOVALS.items():
+            if group_path not in hdf:
+                continue
+
+            group = hdf[group_path]
+            for attr_name in sorted(attr_names):
+                if attr_name in group.attrs:
+                    found.append({
+                        "group": group_path,
+                        "attribute": attr_name,
+                        "value": clean_read_value(group.attrs[attr_name]),
+                    })
+
+        if not dry_run:
+            for item in found:
+                del hdf[item["group"]].attrs[item["attribute"]]
+
+            paths_group = hdf.get("metadata/paths")
+            if (
+                paths_group is not None
+                and not paths_group.attrs
+                and len(paths_group) == 0
+            ):
+                del hdf["metadata/paths"]
+
+    return {
+        "hdf5_path": str(hdf5_path),
+        "status": (
+            "would_clean"
+            if dry_run and found
+            else "cleaned"
+            if found
+            else "already_clean"
+        ),
+        "removed_count": len(found),
+        "removed": found,
+    }
+
+
+def cleanup_thermalized_metadata_tree(root=None, dry_run=True):
+    """Clean every thermalized HDF5 log below a root and report failures."""
+
+    if root is None:
+        from .paths import THERMALIZED_STATES_V3_ROOT
+
+        root = THERMALIZED_STATES_V3_ROOT
+
+    root = Path(root)
+    if not root.exists():
+        raise FileNotFoundError(f"Thermalized-state root does not exist: {root}")
+
+    reports = []
+    for hdf5_path in sorted(root.rglob("*.hdf5")):
+        try:
+            reports.append(
+                cleanup_thermalized_metadata_file(
+                    hdf5_path,
+                    dry_run=dry_run,
+                )
+            )
+        except Exception as error:
+            reports.append({
+                "hdf5_path": str(hdf5_path),
+                "status": "error",
+                "removed_count": 0,
+                "removed": [],
+                "error": f"{type(error).__name__}: {error}",
+            })
+
+    return reports
 
 
 def write_datasets(hdf5_path, datasets, mode="a", overwrite=True):

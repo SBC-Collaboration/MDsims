@@ -147,6 +147,41 @@ from md_Helpers.visualization import (
 animate_hot_spike_xy_slice_trajectory(result)
 ```
 
+## NPH Comparison Runs
+
+NVE remains the default. To run the same two-segment hot-spike evolution with
+an isotropic NPH barostat, keep the physical and numerical inputs unchanged
+and add the ensemble and pressure set point:
+
+```python
+nph_result = get_or_create_hot_spike(
+    n_fcc_cells=30,
+    target_rho=0.71,
+    kT=0.8,
+    source_nsteps=1_000_000,
+    radius=3.0,
+    injected_energy=4_000,
+    dt2=0.005,
+    nsteps2=100_000,
+    ensemble="NPH",
+    pressure=P0,
+)
+```
+
+Use the equilibrated homogeneous source pressure (for example, the tail mean
+from the matching EOS or source log) for `P0`, not the instantaneous pressure
+immediately after the hot spike. NPH uses no thermostat. The default
+sets `tauS = 1000 * dt2`, giving `tauS=5.0` when `dt2=0.005`. This physical
+barostat time is held constant across both segments even though their
+integration timesteps differ. Override `tauS` only as part of a
+barostat-sensitivity check.
+
+NPH results are saved below an `ensemble_NPH/pressure_.../tauS_...` branch, so
+they cannot collide with existing NVE results. HDF5 logs include the changing
+box volume and barostat energy in addition to pressure, temperature, and
+particle energies. Each segment also saves the barostat degrees of freedom so
+a resumed second segment keeps the same extended NPH state.
+
 Before producing new results, preview and then archive the old root:
 
 ```python
@@ -184,6 +219,13 @@ metadata/classification/phase_separation/PE_drop
 ancestry such as parent state paths and source data versions. Parent groups
 such as `metadata` and `metadata/classification` are containers only and should
 not store attributes directly.
+
+Thermalized-state logs use a leaner schema. Their standard folder and filename
+layout replaces `metadata/paths`; `metadata/state` omits `data_version` and the
+derived `fcc_cell_size`; and `metadata/run` omits `final_timestep`, which is
+identical to `nsteps` for these runs. The thermalized voxel classifier stores
+only its method, binning and threshold configuration, decision, and
+`low_density_fraction`.
 
 ## Helper Ownership
 

@@ -248,6 +248,11 @@ def excitation_evolved_paths(
     evolve_kT=None,
     evolve_nsteps=None,
     dt=None,
+    ensemble="NVE",
+    pressure=None,
+    tauS=None,
+    pressure_couple="xyz",
+    barostat_gamma=0.0,
 ):
     """
     Build paths for the two-segment V3 excitation evolution format.
@@ -273,6 +278,17 @@ def excitation_evolved_paths(
     if int(nsteps1) <= 0 or int(nsteps2) <= 0:
         raise ValueError("nsteps1 and nsteps2 must be positive")
 
+    ensemble = str(ensemble).upper()
+    if ensemble not in {"NVE", "NPH"}:
+        raise ValueError("ensemble must be 'NVE' or 'NPH'")
+    if ensemble == "NPH":
+        if pressure is None:
+            raise ValueError("pressure is required when ensemble='NPH'")
+        if tauS is None:
+            tauS = 1000.0 * float(dt2)
+        if float(tauS) <= 0:
+            raise ValueError("tauS must be positive")
+
     state_paths = excitation_state_paths(
         n_fcc_cells=n_fcc_cells,
         source_rho=source_rho,
@@ -289,8 +305,19 @@ def excitation_evolved_paths(
         base_folder=base_folder,
     )
 
+    evolution_root = state_paths["folder"]
+    if ensemble == "NPH":
+        evolution_root = (
+            evolution_root
+            / "ensemble_NPH"
+            / f"pressure_{format_float(pressure)}"
+            / f"tauS_{format_float(tauS)}"
+            / f"couple_{pressure_couple}"
+            / f"gamma_{format_float(barostat_gamma)}"
+        )
+
     folder = (
-        state_paths["folder"]
+        evolution_root
         / f"segment_1_dt_{format_dt(dt1)}"
         / f"nsteps_{int(nsteps1)}"
         / f"segment_2_dt_{format_dt(dt2)}"
@@ -306,12 +333,22 @@ def excitation_evolved_paths(
             "segment_index": int(segment_index),
             "folder": segment_folder,
             "dt": float(segment_dt),
+            "tauS": (
+                float(tauS)
+                if ensemble == "NPH"
+                else None
+            ),
             "nsteps": int(segment_nsteps),
             "trajectory_path": (
                 segment_folder / "excitation_trajectory.gsd"
             ),
             "final_state_path": segment_folder / "excitation_final.gsd",
             "log_path": segment_folder / "excitation_log.hdf5",
+            "barostat_dof_path": (
+                segment_folder / "barostat_dof.npy"
+                if ensemble == "NPH"
+                else None
+            ),
             "state_kind": "excitation_evolved_segment",
         }
 
@@ -347,6 +384,11 @@ def excitation_evolved_paths(
         ),
         "state_kind": "excitation_evolved",
         "evolution_format": "two_segment_dt_v1",
+        "ensemble": ensemble,
+        "pressure": None if pressure is None else float(pressure),
+        "tauS": None if tauS is None else float(tauS),
+        "pressure_couple": str(pressure_couple),
+        "barostat_gamma": float(barostat_gamma),
     }
 
 

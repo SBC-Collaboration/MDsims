@@ -419,7 +419,13 @@ def summarize_completed_result(
 
         "BoxLength": float(metadata["BoxLength"]),
         "volume": float(metadata["volume"]),
-        "fcc_cell_size": float(metadata["fcc_cell_size"]),
+        "fcc_cell_size": float(
+            metadata.get(
+                "fcc_cell_size",
+                float(metadata["BoxLength"])
+                / int(metadata["n_fcc_cells"]),
+            )
+        ),
 
         "kT": float(metadata["kT"]),
         "nsteps": int(metadata["nsteps"]),
@@ -452,7 +458,9 @@ def summarize_completed_result(
         "first_timestep_used": pressure_stats["first_timestep_used"],
         "last_timestep_used": pressure_stats["last_timestep_used"],
 
-        "final_timestep": int(metadata["final_timestep"]),
+        "final_timestep": int(
+            metadata.get("final_timestep", metadata["nsteps"])
+        ),
 
         "starting_state_path": metadata.get(
             "starting_state_path",

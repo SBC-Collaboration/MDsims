@@ -692,15 +692,32 @@ def infer_integrator_metadata(simulation):
         ensemble = "NVE"
     elif method_classes == ["ConstantVolume"] and thermostat_classes:
         ensemble = "NVT"
+    elif method_classes == ["ConstantPressure"] and not thermostat_classes:
+        ensemble = "NPH"
+    elif method_classes == ["ConstantPressure"] and thermostat_classes:
+        ensemble = "NPT"
     else:
         ensemble = "unknown"
 
-    return {
+    metadata = {
         "ensemble": ensemble,
         "integrator_dt": float(integrator.dt),
         "integrator_method_classes": ",".join(method_classes),
         "thermostat_classes": ",".join(thermostat_classes),
     }
+    simulation_metadata = getattr(simulation, "metadata", {})
+    if ensemble in {"NPH", "NPT"}:
+        if simulation_metadata.get("pressure") is not None:
+            metadata["pressure"] = float(simulation_metadata["pressure"])
+        if simulation_metadata.get("tauS") is not None:
+            metadata["tauS"] = float(simulation_metadata["tauS"])
+        metadata["pressure_couple"] = str(
+            simulation_metadata.get("pressure_couple", "xyz")
+        )
+        metadata["barostat_gamma"] = float(
+            simulation_metadata.get("barostat_gamma", 0.0)
+        )
+    return metadata
 
 
 def _build_evolution_metadata_groups(
@@ -730,12 +747,15 @@ def _build_evolution_metadata_groups(
     creation_info = initial_result["creation_info"]
     source_result = initial_result["source_result"]
     integrator_metadata = infer_integrator_metadata(simulation)
+    density_mode = "fixed_N_fixed_volume_velocity_rescaled"
+    if integrator_metadata["ensemble"] in {"NPH", "NPT"}:
+        density_mode = "fixed_N_variable_volume_velocity_rescaled"
 
     state = {
         "state_kind": "excitation_evolved",
         "data_version": "v3",
         "lattice_type": "fcc",
-        "density_mode": "fixed_N_fixed_volume_velocity_rescaled",
+        "density_mode": density_mode,
         "n_fcc_cells": int(n_fcc_cells),
         "N": N,
         "source_rho": float(source_rho),
@@ -1007,13 +1027,21 @@ def get_or_create_hot_spike(
     reject_phase_separated_source=True,
     evolve_nsteps=None,
     dt=None,
+    ensemble="NVE",
+    pressure=None,
+    tauS=None,
+    pressure_couple="xyz",
+    barostat_gamma=0.0,
 ):
     """
-    Load or run the standard two-segment hot-spike NVE evolution.
+    Load or run the standard two-segment hot-spike evolution.
 
     Segment 1 defaults to ``dt1=0.0005`` for ``nsteps1=200_000``.
     Supply ``dt2`` and ``nsteps2`` for segment 2. The old ``dt`` and
     ``evolve_nsteps`` keywords are accepted as aliases during migration.
+    Set ``ensemble='NPH'`` and supply ``pressure`` for an NPH comparison.
+    When omitted, ``tauS`` follows HOOMD's recommended starting point of
+    ``1000 * dt2`` and remains constant across both segments.
     """
 
     if dt2 is None:
@@ -1050,4 +1078,9 @@ def get_or_create_hot_spike(
         overwrite_source=overwrite_source,
         create_source_if_missing=create_source_if_missing,
         reject_phase_separated_source=reject_phase_separated_source,
+        ensemble=ensemble,
+        pressure=pressure,
+        tauS=tauS,
+        pressure_couple=pressure_couple,
+        barostat_gamma=barostat_gamma,
     )

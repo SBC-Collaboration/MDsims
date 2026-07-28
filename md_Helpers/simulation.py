@@ -44,6 +44,10 @@ def make_simulation(
     dt=0.005,
     kT=1.5,
     ensemble="NVT",
+    pressure=None,
+    tauS=None,
+    pressure_couple="xyz",
+    barostat_gamma=0.0,
     epsilon_LJ=1.0,
     sigma_LJ=1.0,
     r_cut_LJ=2.5,
@@ -124,8 +128,23 @@ def make_simulation(
         method = hoomd.md.methods.ConstantVolume(
             filter=hoomd.filter.All(),
         )
+    elif ensemble == "NPH":
+        if pressure is None:
+            raise ValueError("pressure is required when ensemble='NPH'")
+        if tauS is None or float(tauS) <= 0:
+            raise ValueError(
+                "a positive tauS is required when ensemble='NPH'"
+            )
+        method = hoomd.md.methods.ConstantPressure(
+            filter=hoomd.filter.All(),
+            S=float(pressure),
+            tauS=float(tauS),
+            couple=str(pressure_couple),
+            thermostat=None,
+            gamma=float(barostat_gamma),
+        )
     else:
-        raise ValueError("ensemble must be 'NVT' or 'NVE'")
+        raise ValueError("ensemble must be 'NVT', 'NVE', or 'NPH'")
 
     integrator.methods.append(method)
 
@@ -176,6 +195,10 @@ def make_simulation(
         "dt": dt,
         "kT": kT,
         "ensemble": ensemble,
+        "pressure": pressure,
+        "tauS": tauS,
+        "pressure_couple": pressure_couple,
+        "barostat_gamma": barostat_gamma,
 
         "epsilon_LJ": epsilon_LJ,
         "sigma_LJ": sigma_LJ,

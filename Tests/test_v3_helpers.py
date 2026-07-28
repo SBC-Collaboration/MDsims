@@ -230,6 +230,49 @@ class PathTests(unittest.TestCase):
                 evolve_seed=1,
             )
 
+    def test_nph_excitation_paths_are_isolated_and_store_constant_tau(self):
+        evolved = paths.excitation_evolved_paths(
+            n_fcc_cells=30,
+            source_rho=0.71,
+            kT=0.8,
+            source_nsteps=1_000_000,
+            source_seed=1,
+            method="velocity_rescale_com",
+            radius=3.0,
+            energy=4000.0,
+            evolve_seed=1,
+            dt1=0.0005,
+            nsteps1=200_000,
+            dt2=0.005,
+            nsteps2=100_000,
+            ensemble="NPH",
+            pressure=0.05,
+        )
+        path_text = str(evolved["final_state_path"])
+        self.assertIn("ensemble_NPH", path_text)
+        self.assertIn("pressure_0.050", path_text)
+        self.assertIn("tauS_5.000", path_text)
+        self.assertEqual(evolved["segment_1"]["tauS"], 5.0)
+        self.assertEqual(evolved["segment_2"]["tauS"], 5.0)
+        self.assertEqual(evolved["ensemble"], "NPH")
+
+    def test_nph_excitation_paths_require_pressure(self):
+        with self.assertRaisesRegex(ValueError, "pressure is required"):
+            paths.excitation_evolved_paths(
+                n_fcc_cells=30,
+                source_rho=0.71,
+                kT=0.8,
+                source_nsteps=1_000_000,
+                source_seed=1,
+                method="velocity_rescale_com",
+                radius=3.0,
+                energy=4000.0,
+                evolve_seed=1,
+                dt2=0.005,
+                nsteps2=100_000,
+                ensemble="NPH",
+            )
+
 
 class ExcitationEvolutionTests(unittest.TestCase):
     def _paths(self, root):

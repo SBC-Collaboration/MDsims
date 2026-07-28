@@ -73,8 +73,16 @@ def start_hdf5_logger(
             "pressure_tensor",
             "potential_energy",
             "kinetic_energy",
+            "volume",
         ],
     )
+
+    for method in simulation.operations.integrator.methods:
+        if type(method).__name__ == "ConstantPressure":
+            logger.add(
+                method,
+                quantities=["barostat_energy"],
+            )
 
     # ============================================================
     # HDF5 writer

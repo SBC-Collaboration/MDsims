@@ -59,6 +59,11 @@ def _as_paths(result_or_paths):
                 "segment_index": segment_index,
                 "folder": Path(path_attrs[f"{prefix}_log_path"]).parent,
                 "dt": float(attrs["dt"]),
+                "tauS": (
+                    float(attrs["tauS"])
+                    if "tauS" in attrs
+                    else None
+                ),
                 "nsteps": int(attrs["nsteps"]),
                 "trajectory_path": Path(
                     path_attrs[f"{prefix}_trajectory_path"]
@@ -67,6 +72,11 @@ def _as_paths(result_or_paths):
                     path_attrs[f"{prefix}_final_state_path"]
                 ),
                 "log_path": Path(path_attrs[f"{prefix}_log_path"]),
+                "barostat_dof_path": (
+                    Path(path_attrs[f"{prefix}_barostat_dof_path"])
+                    if f"{prefix}_barostat_dof_path" in path_attrs
+                    else None
+                ),
                 "state_kind": "excitation_evolved_segment",
             }
 
@@ -97,6 +107,11 @@ def _as_paths(result_or_paths):
             "total_physical_time": float(run["total_physical_time"]),
             "state_kind": "excitation_evolved",
             "evolution_format": run["evolution_format"],
+            "ensemble": str(run.get("ensemble", "NVE")),
+            "pressure": run.get("pressure"),
+            "tauS": run.get("tauS"),
+            "pressure_couple": str(run.get("pressure_couple", "xyz")),
+            "barostat_gamma": float(run.get("barostat_gamma", 0.0)),
         }
 
     if not isinstance(result_or_paths, dict):
@@ -113,10 +128,13 @@ def _as_paths(result_or_paths):
 
 
 def _segment_is_complete(segment_paths):
-    return all(
-        Path(segment_paths[key]).exists()
+    required_paths = [
+        segment_paths[key]
         for key in ["trajectory_path", "final_state_path", "log_path"]
-    )
+    ]
+    if segment_paths.get("barostat_dof_path") is not None:
+        required_paths.append(segment_paths["barostat_dof_path"])
+    return all(Path(path).exists() for path in required_paths)
 
 
 def ensure_two_segment_root(base_folder=EXCITATION_EVOLVED_V3_ROOT):
@@ -206,7 +224,14 @@ def _manifest_groups(
         "total_nsteps": int(paths["total_nsteps"]),
         "total_physical_time": float(paths["total_physical_time"]),
         "physical_time_units": "reduced_lj_time",
+        "ensemble": str(paths.get("ensemble", "NVE")),
+        "pressure_couple": str(paths.get("pressure_couple", "xyz")),
+        "barostat_gamma": float(paths.get("barostat_gamma", 0.0)),
     }
+    if paths.get("pressure") is not None:
+        run["pressure"] = float(paths["pressure"])
+    if paths.get("tauS") is not None:
+        run["tauS"] = float(paths["tauS"])
 
     path_attrs = {
         "manifest_path": str(paths["manifest_path"]),
@@ -218,6 +243,11 @@ def _manifest_groups(
         "segment_2_final_state_path": str(segment_2["final_state_path"]),
         "final_state_path": str(paths["final_state_path"]),
     }
+    for segment_index, segment in [(1, segment_1), (2, segment_2)]:
+        if segment.get("barostat_dof_path") is not None:
+            path_attrs[f"segment_{segment_index}_barostat_dof_path"] = str(
+                segment["barostat_dof_path"]
+            )
 
     groups = {
         "metadata/run": run,
@@ -241,6 +271,14 @@ def _manifest_groups(
             **segment_timing.get(2, {}),
         },
     }
+    if segment_1.get("tauS") is not None:
+        groups["metadata/segments/segment_1"]["tauS"] = float(
+            segment_1["tauS"]
+        )
+    if segment_2.get("tauS") is not None:
+        groups["metadata/segments/segment_2"]["tauS"] = float(
+            segment_2["tauS"]
+        )
 
     for group_path in [
         "metadata/state",
@@ -442,8 +480,20 @@ def get_or_create_two_segment_hot_spike(
     create_source_if_missing=True,
     reject_phase_separated_source=True,
     base_folder=EXCITATION_EVOLVED_V3_ROOT,
+    ensemble="NVE",
+    pressure=None,
+    tauS=None,
+    pressure_couple="xyz",
+    barostat_gamma=0.0,
 ):
-    """Run or load a hot-spike NVE evolution with exactly two timestep sizes."""
+    """
+    Run or load a two-segment hot-spike evolution.
+
+    ``ensemble='NVE'`` preserves the standard fixed-volume evolution.
+    ``ensemble='NPH'`` applies an isotropic constant-pressure barostat with
+    no thermostat. When omitted, ``tauS`` defaults to ``1000 * dt2`` and is
+    held constant across both segments.
+    """
 
     # Local import avoids a module cycle while keeping initial-state ownership
     # in hot_spike.py.
@@ -494,6 +544,11 @@ def get_or_create_two_segment_hot_spike(
         random_location=random_location,
         excitation_seed=source_metadata_seed,
         base_folder=base_folder,
+        ensemble=ensemble,
+        pressure=pressure,
+        tauS=tauS,
+        pressure_couple=pressure_couple,
+        barostat_gamma=barostat_gamma,
     )
 
     if initial_result["frame"] is None:
@@ -587,11 +642,19 @@ def get_or_create_two_segment_hot_spike(
             continue
 
         continued_live = segment_index == 2 and active_simulation is not None
+        restored_barostat_dof = False
         if continued_live:
             simulation = active_simulation
             simulation.operations.integrator.dt = float(segment_paths["dt"])
             if hasattr(simulation, "metadata"):
                 simulation.metadata["dt"] = float(segment_paths["dt"])
+            if str(ensemble).upper() == "NPH":
+                pressure_method = simulation.operations.integrator.methods[0]
+                pressure_method.tauS = float(segment_paths["tauS"])
+                if hasattr(simulation, "metadata"):
+                    simulation.metadata["tauS"] = float(
+                        segment_paths["tauS"]
+                    )
         else:
             simulation = simulation_helpers.make_simulation(
                 frame=current_frame,
@@ -600,7 +663,11 @@ def get_or_create_two_segment_hot_spike(
                 seed=evolve_seed,
                 dt=segment_paths["dt"],
                 kT=kT,
-                ensemble="NVE",
+                ensemble=ensemble,
+                pressure=pressure,
+                tauS=segment_paths.get("tauS"),
+                pressure_couple=pressure_couple,
+                barostat_gamma=barostat_gamma,
                 starting_state_path=(
                     str(initial_result["paths"]["state_path"])
                     if segment_index == 1
@@ -608,12 +675,24 @@ def get_or_create_two_segment_hot_spike(
                 ),
                 **lj_kwargs,
             )
+            if str(ensemble).upper() == "NPH" and segment_index == 2:
+                prior_dof_path = paths["segment_1"].get(
+                    "barostat_dof_path"
+                )
+                if prior_dof_path is not None and Path(prior_dof_path).exists():
+                    simulation.run(0)
+                    simulation.operations.integrator.methods[0].barostat_dof = (
+                        np.load(prior_dof_path)
+                    )
+                    restored_barostat_dof = True
         integrator_metadata = hot_spike_helpers.infer_integrator_metadata(
             simulation
         )
-        if integrator_metadata["ensemble"] != "NVE":
+        expected_ensemble = str(ensemble).upper()
+        if integrator_metadata["ensemble"] != expected_ensemble:
             raise RuntimeError(
-                "Hot-spike evolution must be NVE, but actual ensemble was "
+                f"Hot-spike evolution must be {expected_ensemble}, "
+                "but actual ensemble was "
                 f"{integrator_metadata['ensemble']}."
             )
 
@@ -638,7 +717,11 @@ def get_or_create_two_segment_hot_spike(
         metadata_groups["metadata/run"]["continuation_mode"] = (
             "live_integrator_dt_change"
             if continued_live
-            else "created_from_saved_or_initial_frame"
+            else (
+                "saved_frame_with_restored_barostat_dof"
+                if restored_barostat_dof
+                else "created_from_saved_or_initial_frame"
+            )
         )
         if not common_metadata:
             common_metadata = {
@@ -670,6 +753,13 @@ def get_or_create_two_segment_hot_spike(
                 metadata_groups=metadata_groups,
                 classify_final=(segment_index == 2),
                 classification_kwargs=None,
+            )
+
+        barostat_dof_path = segment_paths.get("barostat_dof_path")
+        if barostat_dof_path is not None:
+            np.save(
+                barostat_dof_path,
+                simulation.operations.integrator.methods[0].barostat_dof,
             )
 
         current_frame = _load_frame(segment_paths["final_state_path"])
