@@ -35,6 +35,16 @@ class TestCavitationCreationMetadataCleanup(unittest.TestCase):
             )
             paths.attrs["creation_metadata_path"] = str(path)
 
+            source = hdf.require_group("metadata/source")
+            source.attrs["source_state_path"] = "/tmp/randomization.gsd"
+            source.attrs["source_log_path"] = "/tmp/randomization_log.hdf5"
+            source.attrs["source_rho"] = 0.755
+            source.attrs["source_kT"] = 0.8
+            source.attrs["source_nsteps"] = 1_000_000
+            source.attrs["source_seed"] = 1
+            source.attrs["source_N"] = 108000
+            source.attrs["source_volume"] = 143000.0
+
     def test_cleanup_centered_creation_metadata(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "cavitation_creation.hdf5"
@@ -61,6 +71,17 @@ class TestCavitationCreationMetadataCleanup(unittest.TestCase):
                 )
                 self.assertNotIn("removed_particle_indices", creation)
                 self.assertNotIn("metadata/paths", hdf)
+                self.assertEqual(
+                    set(hdf["metadata/source"].attrs),
+                    {
+                        "source_state_path",
+                        "source_log_path",
+                        "source_rho",
+                        "source_kT",
+                        "source_nsteps",
+                        "source_seed",
+                    },
+                )
 
     def test_cleanup_random_creation_keeps_seed(self):
         with TemporaryDirectory() as tmp:

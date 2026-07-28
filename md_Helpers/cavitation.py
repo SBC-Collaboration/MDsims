@@ -474,50 +474,19 @@ def _build_source_metadata(
     source_kT,
     source_nsteps,
     source_seed,
-    source_phase_name,
 ):
     source_paths = source_result["paths"]
     source_state_path = Path(source_paths["state_path"])
     source_log_path = Path(source_paths["log_path"])
 
-    source = {
-        "source_state_kind": "thermalized",
-        "source_data_version": "v3",
+    return {
         "source_state_path": str(source_state_path),
         "source_log_path": str(source_log_path),
         "source_rho": float(source_rho),
         "source_kT": float(source_kT),
         "source_nsteps": int(source_nsteps),
         "source_seed": int(source_seed),
-        "source_phase_name": source_phase_name,
     }
-
-    if source_log_path.exists():
-        source_state_attrs = metadata_helpers.read_attrs(
-            source_log_path,
-            "metadata/state",
-        )
-        source_run_attrs = metadata_helpers.read_attrs(
-            source_log_path,
-            "metadata/run",
-        )
-
-        for key in [
-            "N",
-            "actual_rho",
-            "target_rho",
-            "BoxLength",
-            "volume",
-        ]:
-            if key in source_state_attrs:
-                source[f"source_{key}"] = source_state_attrs[key]
-
-        if "final_timestep" in source_run_attrs:
-            source["source_final_timestep"] = source_run_attrs[
-                "final_timestep"
-            ]
-
-    return source
 
 
 def _build_creation_metadata(
@@ -693,7 +662,6 @@ def get_or_create_cavitation_state(
         source_kT=kT,
         source_nsteps=source_nsteps,
         source_seed=source_seed,
-        source_phase_name=source_phase_name,
     )
 
     if state_path.exists() and not overwrite:

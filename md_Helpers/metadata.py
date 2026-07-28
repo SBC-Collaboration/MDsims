@@ -58,6 +58,15 @@ CAVITATION_CREATION_PATH_ATTRIBUTE_REMOVALS = {
     "state_path",
 }
 
+CAVITATION_CREATION_SOURCE_ATTRIBUTES = {
+    "source_state_path",
+    "source_log_path",
+    "source_rho",
+    "source_kT",
+    "source_nsteps",
+    "source_seed",
+}
+
 
 def _open_hdf5(path, mode):
     import h5py
@@ -426,6 +435,15 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
                 )
             found_path_attrs = sorted(paths_group.attrs)
 
+        source_path = "metadata/source"
+        if source_path not in hdf:
+            raise KeyError("missing metadata/source")
+
+        source = hdf[source_path]
+        found_source_attrs = sorted(
+            set(source.attrs) - CAVITATION_CREATION_SOURCE_ATTRIBUTES
+        )
+
         if not dry_run:
             for attr_name in found_attrs:
                 del creation.attrs[attr_name]
@@ -433,6 +451,8 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
                 del creation[dataset_name]
             if remove_paths_group:
                 del hdf[paths_path]
+            for attr_name in found_source_attrs:
+                del source.attrs[attr_name]
 
     removed = [
         {
@@ -460,6 +480,13 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
             "path": paths_path,
             "storage": "group",
         })
+    removed.extend(
+        {
+            "path": f"{source_path}/{attr_name}",
+            "storage": "attribute",
+        }
+        for attr_name in found_source_attrs
+    )
 
     return {
         "hdf5_path": str(hdf5_path),
