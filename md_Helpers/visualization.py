@@ -784,7 +784,10 @@ def plot_cavitation_xy_slice(
         0.0 if bubble_center is None else bubble_center[2],
     ))
 
-    bubble_radius = info.get("bubble_radius", None)
+    bubble_radius = info.get(
+        "radius",
+        info.get("bubble_radius"),
+    )
 
     positions, Lx, Ly, Lz, snapshot = _get_positions_and_box(obj)
 

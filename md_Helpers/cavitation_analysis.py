@@ -142,7 +142,10 @@ def measure_cavitation_trajectory(
     creation = _creation_info(evolution, log_path)
     center = _bubble_center(creation, bubble_center)
     if initial_radius is None:
-        initial_radius = creation.get("bubble_radius")
+        initial_radius = creation.get(
+            "radius",
+            creation.get("bubble_radius"),
+        )
     if initial_radius is not None:
         initial_radius = float(initial_radius)
 

@@ -523,16 +523,26 @@ def _build_source_metadata(
 def _build_creation_metadata(
     info,
 ):
-    skip_keys = {
-        "removed_particle_indices",
-        "removed_particle_positions",
+    stored_keys = {
+        "bubble_center",
+        "bubble_method",
+        "bubble_seed",
+        "particles_removed",
+        "periodic_distance",
+        "radius",
+        "random_location",
     }
 
-    return {
+    creation = {
         key: value
         for key, value in info.items()
-        if key not in skip_keys
+        if key in stored_keys
     }
+
+    if not creation.get("random_location", False):
+        creation.pop("bubble_seed", None)
+
+    return creation
 
 
 def _write_cavitation_creation_metadata(
@@ -566,26 +576,10 @@ def _write_cavitation_creation_metadata(
         },
     }
 
-    datasets = {
-        "metadata/creation/removed_particle_indices": info.get(
-            "removed_particle_indices"
-        ),
-        "metadata/creation/removed_particle_positions": info.get(
-            "removed_particle_positions"
-        ),
-    }
-
     metadata_helpers.write_metadata_groups(
         hdf5_path=metadata_path,
         groups=metadata_groups,
         mode="w" if overwrite else "a",
-        overwrite=True,
-    )
-
-    metadata_helpers.write_datasets(
-        hdf5_path=metadata_path,
-        datasets=datasets,
-        mode="a",
         overwrite=True,
     )
 

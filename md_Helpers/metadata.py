@@ -32,6 +32,27 @@ THERMALIZED_METADATA_REMOVALS = {
     },
 }
 
+CAVITATION_CREATION_ATTRIBUTE_REMOVALS = {
+    "BoxLength",
+    "N_after",
+    "N_before",
+    "bubble_center_x",
+    "bubble_center_y",
+    "bubble_center_z",
+    "bubble_radius",
+    "copied_particle_fields",
+    "particle_fraction_removed",
+    "radius_definition",
+    "rho_after",
+    "rho_before",
+    "volume",
+}
+
+CAVITATION_CREATION_DATASET_REMOVALS = {
+    "removed_particle_indices",
+    "removed_particle_positions",
+}
+
 
 def _open_hdf5(path, mode):
     import h5py
@@ -329,6 +350,112 @@ def cleanup_thermalized_metadata_tree(root=None, dry_run=True):
         try:
             reports.append(
                 cleanup_thermalized_metadata_file(
+                    hdf5_path,
+                    dry_run=dry_run,
+                )
+            )
+        except Exception as error:
+            reports.append({
+                "hdf5_path": str(hdf5_path),
+                "status": "error",
+                "removed_count": 0,
+                "removed": [],
+                "error": f"{type(error).__name__}: {error}",
+            })
+
+    return reports
+
+
+def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
+    """Remove retired creation metadata from one cavitation initial state."""
+
+    hdf5_path = Path(hdf5_path)
+    mode = "r" if dry_run else "a"
+
+    with _open_hdf5(hdf5_path, mode=mode) as hdf:
+        if "metadata/state" not in hdf:
+            raise KeyError("missing metadata/state")
+
+        state_kind = clean_read_value(
+            hdf["metadata/state"].attrs.get("state_kind")
+        )
+        if state_kind != "cavitation_initial":
+            raise ValueError(
+                f"state_kind is {state_kind!r}, not 'cavitation_initial'"
+            )
+
+        creation_path = "metadata/creation"
+        if creation_path not in hdf:
+            raise KeyError("missing metadata/creation")
+
+        creation = hdf[creation_path]
+        attr_names = set(CAVITATION_CREATION_ATTRIBUTE_REMOVALS)
+        if not bool(creation.attrs.get("random_location", False)):
+            attr_names.add("bubble_seed")
+
+        found_attrs = [
+            attr_name
+            for attr_name in sorted(attr_names)
+            if attr_name in creation.attrs
+        ]
+        found_datasets = [
+            dataset_name
+            for dataset_name in sorted(CAVITATION_CREATION_DATASET_REMOVALS)
+            if dataset_name in creation
+        ]
+
+        if not dry_run:
+            for attr_name in found_attrs:
+                del creation.attrs[attr_name]
+            for dataset_name in found_datasets:
+                del creation[dataset_name]
+
+    removed = [
+        {
+            "path": f"{creation_path}/{attr_name}",
+            "storage": "attribute",
+        }
+        for attr_name in found_attrs
+    ]
+    removed.extend(
+        {
+            "path": f"{creation_path}/{dataset_name}",
+            "storage": "dataset",
+        }
+        for dataset_name in found_datasets
+    )
+
+    return {
+        "hdf5_path": str(hdf5_path),
+        "status": (
+            "would_clean"
+            if dry_run and removed
+            else "cleaned"
+            if removed
+            else "already_clean"
+        ),
+        "removed_count": len(removed),
+        "removed": removed,
+    }
+
+
+def cleanup_cavitation_creation_metadata_tree(root=None, dry_run=True):
+    """Clean every cavitation creation HDF5 file below a root."""
+
+    if root is None:
+        from .paths import CAVITATION_STATES_V3_ROOT
+
+        root = CAVITATION_STATES_V3_ROOT
+
+    root = Path(root)
+    if not root.exists():
+        raise FileNotFoundError(f"Cavitation-state root does not exist: {root}")
+
+    reports = []
+    for hdf5_path in sorted(root.rglob("cavitation_creation.hdf5")):
+        try:
+            reports.append(
+                cleanup_cavitation_creation_metadata_file(
                     hdf5_path,
                     dry_run=dry_run,
                 )
