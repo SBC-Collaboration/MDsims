@@ -548,7 +548,6 @@ def _build_creation_metadata(
 def _write_cavitation_creation_metadata(
     metadata_path,
     frame,
-    paths,
     info,
     source_metadata,
     n_fcc_cells,
@@ -570,10 +569,6 @@ def _write_cavitation_creation_metadata(
         "metadata/state": state,
         "metadata/creation": _build_creation_metadata(info),
         "metadata/source": source_metadata,
-        "metadata/paths": {
-            "state_path": str(paths["state_path"]),
-            "creation_metadata_path": str(paths["creation_metadata_path"]),
-        },
     }
 
     metadata_helpers.write_metadata_groups(
@@ -758,7 +753,6 @@ def get_or_create_cavitation_state(
     _write_cavitation_creation_metadata(
         metadata_path=metadata_path,
         frame=frame,
-        paths=paths,
         info=info,
         source_metadata=source_metadata,
         n_fcc_cells=n_fcc_cells,

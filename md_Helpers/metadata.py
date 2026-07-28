@@ -53,6 +53,11 @@ CAVITATION_CREATION_DATASET_REMOVALS = {
     "removed_particle_positions",
 }
 
+CAVITATION_CREATION_PATH_ATTRIBUTE_REMOVALS = {
+    "creation_metadata_path",
+    "state_path",
+}
+
 
 def _open_hdf5(path, mode):
     import h5py
@@ -404,11 +409,30 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
             if dataset_name in creation
         ]
 
+        paths_path = "metadata/paths"
+        remove_paths_group = paths_path in hdf
+        found_path_attrs = []
+        if remove_paths_group:
+            paths_group = hdf[paths_path]
+            unexpected_attrs = (
+                set(paths_group.attrs)
+                - CAVITATION_CREATION_PATH_ATTRIBUTE_REMOVALS
+            )
+            if unexpected_attrs or len(paths_group) != 0:
+                raise ValueError(
+                    "metadata/paths contains unexpected content: "
+                    f"attributes={sorted(unexpected_attrs)}, "
+                    f"children={sorted(paths_group.keys())}"
+                )
+            found_path_attrs = sorted(paths_group.attrs)
+
         if not dry_run:
             for attr_name in found_attrs:
                 del creation.attrs[attr_name]
             for dataset_name in found_datasets:
                 del creation[dataset_name]
+            if remove_paths_group:
+                del hdf[paths_path]
 
     removed = [
         {
@@ -424,6 +448,18 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
         }
         for dataset_name in found_datasets
     )
+    removed.extend(
+        {
+            "path": f"{paths_path}/{attr_name}",
+            "storage": "attribute",
+        }
+        for attr_name in found_path_attrs
+    )
+    if remove_paths_group:
+        removed.append({
+            "path": paths_path,
+            "storage": "group",
+        })
 
     return {
         "hdf5_path": str(hdf5_path),
