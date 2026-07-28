@@ -89,6 +89,15 @@ def _relative_path(path, root):
 def _result_file_role(path):
     name = path.name
 
+    if name == "evolution_manifest.hdf5":
+        return "evolution_manifest"
+
+    if name == "excitation_log_stitched.hdf5":
+        return "stitched_log"
+
+    if name == "excitation_trajectory_stitched.gsd":
+        return "stitched_trajectory"
+
     if name.endswith("_log.hdf5") or name in {
         "cavitation_log.hdf5",
         "excitation_log.hdf5",

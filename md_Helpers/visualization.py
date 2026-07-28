@@ -353,6 +353,13 @@ def _get_trajectory_path(obj):
     return os.fspath(obj)
 
 
+def _is_two_segment_trajectory(obj):
+    if not isinstance(obj, dict):
+        return False
+    paths = obj.get("paths", obj)
+    return "segment_1" in paths and "segment_2" in paths
+
+
 def _select_trajectory_frame_indices(
     total_frames,
     last_n=5,
@@ -1060,7 +1067,6 @@ def animate_hot_spike_xy_slice_trajectory(
     if fraction <= 0 or fraction > 1:
         raise ValueError("fraction must satisfy 0 < fraction <= 1")
 
-    trajectory_path = _get_trajectory_path(result)
     info = _hot_spike_creation_info(result)
 
     center = np.array(
@@ -1075,43 +1081,67 @@ def animate_hot_spike_xy_slice_trajectory(
 
     frames = []
 
-    with gsd.hoomd.open(
-        name=trajectory_path,
-        mode="r",
-    ) as trajectory:
-        total_frames = len(trajectory)
-        frame_indices = range(0, total_frames, int(stride))
+    if _is_two_segment_trajectory(result):
+        from .excitation_evolution import load_stitched_trajectory_frames
 
-        if max_frames is not None:
-            frame_indices = list(frame_indices)[:int(max_frames)]
+        frame_items = load_stitched_trajectory_frames(
+            result,
+            stride=stride,
+            max_frames=max_frames,
+            sample_by_physical_time=True,
+        )
+    else:
+        trajectory_path = _get_trajectory_path(result)
 
-        for frame_index in frame_indices:
-            frame = trajectory[frame_index]
-            positions = np.asarray(
-                frame.particles.position,
-                dtype=np.float64,
-            )
-            box_lengths = np.asarray(
-                frame.configuration.box[:3],
-                dtype=np.float64,
-            )
-            positions = (
-                (positions + 0.5 * box_lengths) % box_lengths
-                - 0.5 * box_lengths
-            )
-            dz = positions[:, 2] - center[2]
-            dz -= box_lengths[2] * np.round(dz / box_lengths[2])
-            mask = np.abs(dz) <= 0.5 * float(fraction) * box_lengths[2]
+        def single_trajectory_items():
+            with gsd.hoomd.open(
+                name=trajectory_path,
+                mode="r",
+            ) as trajectory:
+                frame_indices = range(0, len(trajectory), int(stride))
+                if max_frames is not None:
+                    frame_indices = list(frame_indices)[:int(max_frames)]
+                for output_index, frame_index in enumerate(frame_indices):
+                    frame = trajectory[frame_index]
+                    yield {
+                        "frame": frame,
+                        "frame_index": output_index,
+                        "segment_index": 1,
+                        "timestep": int(frame.configuration.step),
+                        "elapsed_time": np.nan,
+                    }
 
-            frames.append({
-                "frame_index": int(frame_index),
-                "step": int(frame.configuration.step),
-                "xy": positions[mask][:, :2],
-                "box_lengths": box_lengths,
-            })
+        frame_items = single_trajectory_items()
+
+    for item in frame_items:
+        frame = item["frame"]
+        positions = np.asarray(
+            frame.particles.position,
+            dtype=np.float64,
+        )
+        box_lengths = np.asarray(
+            frame.configuration.box[:3],
+            dtype=np.float64,
+        )
+        positions = (
+            (positions + 0.5 * box_lengths) % box_lengths
+            - 0.5 * box_lengths
+        )
+        dz = positions[:, 2] - center[2]
+        dz -= box_lengths[2] * np.round(dz / box_lengths[2])
+        mask = np.abs(dz) <= 0.5 * float(fraction) * box_lengths[2]
+
+        frames.append({
+            "frame_index": int(item["frame_index"]),
+            "step": int(item["timestep"]),
+            "segment_index": int(item["segment_index"]),
+            "elapsed_time": float(item["elapsed_time"]),
+            "xy": positions[mask][:, :2],
+            "box_lengths": box_lengths,
+        })
 
     if not frames:
-        raise ValueError(f"No frames found in trajectory: {trajectory_path}")
+        raise ValueError("No frames found in the hot-spike trajectory.")
 
     Lx, Ly = frames[0]["box_lengths"][:2]
 
@@ -1146,9 +1176,16 @@ def animate_hot_spike_xy_slice_trajectory(
 
     def update(frame_data):
         scatter.set_offsets(frame_data["xy"])
+        if np.isfinite(frame_data["elapsed_time"]):
+            time_label = (
+                f" | segment {frame_data['segment_index']}"
+                f" | time {frame_data['elapsed_time']:.4f}"
+            )
+        else:
+            time_label = ""
         ax.set_title(
             f"Hot-spike x-y slice | frame {frame_data['frame_index']} | "
-            f"step {frame_data['step']}"
+            f"step {frame_data['step']}{time_label}"
         )
         return tuple(artists)
 
@@ -1527,7 +1564,14 @@ def plot_pressure_log(
     # ============================================================
     # Extract data
     # ============================================================
-    timestep = log["hoomd-data"]["Simulation"]["timestep"]
+    if "stitched" in log and "elapsed_time" in log["stitched"]:
+        x_values = log["stitched"]["elapsed_time"]
+        x_label = "Elapsed Physical Time"
+        title = "Pressure vs Elapsed Physical Time"
+    else:
+        x_values = log["hoomd-data"]["Simulation"]["timestep"]
+        x_label = "Timestep"
+        title = "Pressure vs Timestep"
 
     pressure = (
         log["hoomd-data"]["md"]
@@ -1541,11 +1585,11 @@ def plot_pressure_log(
     # ============================================================
     plt.figure(figsize=figsize)
 
-    plt.plot(timestep, pressure)
+    plt.plot(x_values, pressure)
 
-    plt.xlabel("Timestep")
+    plt.xlabel(x_label)
     plt.ylabel("Pressure")
-    plt.title("Pressure vs Timestep")
+    plt.title(title)
 
     plt.grid(alpha=0.3)
 
@@ -1579,7 +1623,14 @@ def plot_log_quantity(
     # ============================================================
     # Extract timestep and thermodynamic data
     # ============================================================
-    timestep = log["hoomd-data"]["Simulation"]["timestep"]
+    if "stitched" in log and "elapsed_time" in log["stitched"]:
+        x_values = log["stitched"]["elapsed_time"]
+        x_label = "Elapsed Physical Time"
+        x_name = "Elapsed Physical Time"
+    else:
+        x_values = log["hoomd-data"]["Simulation"]["timestep"]
+        x_label = "Timestep"
+        x_name = "Timestep"
 
     thermo = (
         log["hoomd-data"]["md"]
@@ -1614,24 +1665,24 @@ def plot_log_quantity(
 
         if quantity == "kinetic_energy":
             y_label = "KE/N"
-            title = "KE/N vs Timestep"
+            title = f"KE/N vs {x_name}"
 
         elif quantity == "potential_energy":
             y_label = "PE/N"
-            title = "PE/N vs Timestep"
+            title = f"PE/N vs {x_name}"
 
     else:
         y_label = quantity.replace("_", " ").title()
-        title = f"{y_label} vs Timestep"
+        title = f"{y_label} vs {x_name}"
 
     # ============================================================
     # Plot
     # ============================================================
     plt.figure(figsize=figsize)
 
-    plt.plot(timestep, values)
+    plt.plot(x_values, values)
 
-    plt.xlabel("Timestep")
+    plt.xlabel(x_label)
     plt.ylabel(y_label)
     plt.title(title)
 

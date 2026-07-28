@@ -16,6 +16,9 @@ CAVITATION_EVOLVED_V3_ROOT = PROJECT_ROOT / "Cavitation_Evolved_v3"
 
 EXCITATION_STATES_V3_ROOT = PROJECT_ROOT / "Excitation_States_v3"
 EXCITATION_EVOLVED_V3_ROOT = PROJECT_ROOT / "Excitation_Evolved_v3"
+EXCITATION_EVOLVED_V3_LEGACY_ROOT = (
+    PROJECT_ROOT / "Excitation_Evolved_v3_legacy_single_dt"
+)
 
 MASTER_CSVS_V3_ROOT = PROJECT_ROOT / "Master_CSVs_v3"
 RUN_LOGS_ROOT = PROJECT_ROOT / "run_logs"
@@ -23,6 +26,13 @@ RUN_LOGS_ROOT = PROJECT_ROOT / "run_logs"
 
 def format_float(value, decimals=3):
     return f"{float(value):.{decimals}f}"
+
+
+def format_dt(value):
+    """Format a timestep size without hiding meaningful small digits."""
+
+    text = f"{float(value):.10f}".rstrip("0").rstrip(".")
+    return text if text else "0"
 
 
 def center_label(center=None, random_location=False, seed=None):
@@ -225,20 +235,43 @@ def excitation_evolved_paths(
     method,
     radius,
     energy,
-    evolve_kT=None,
-    evolve_nsteps=None,
+    dt2=None,
+    nsteps2=None,
     evolve_seed=None,
+    dt1=0.0005,
+    nsteps1=200_000,
     source_phase_name="randomization",
-    dt=0.005,
     center=None,
     random_location=False,
     excitation_seed=None,
     base_folder=EXCITATION_EVOLVED_V3_ROOT,
+    evolve_kT=None,
+    evolve_nsteps=None,
+    dt=None,
 ):
-    if evolve_nsteps is None:
-        raise ValueError("evolve_nsteps is required")
+    """
+    Build paths for the two-segment V3 excitation evolution format.
+
+    ``dt1`` and ``nsteps1`` describe the short-timestep first segment.
+    ``dt2`` and ``nsteps2`` describe the caller-selected second segment.
+    ``dt`` and ``evolve_nsteps`` remain temporary aliases for older notebooks.
+    """
+
+    if dt2 is None:
+        dt2 = dt
+    if nsteps2 is None:
+        nsteps2 = evolve_nsteps
+
+    if dt2 is None:
+        raise ValueError("dt2 is required")
+    if nsteps2 is None:
+        raise ValueError("nsteps2 is required")
     if evolve_seed is None:
         raise ValueError("evolve_seed is required")
+    if float(dt1) <= 0 or float(dt2) <= 0:
+        raise ValueError("dt1 and dt2 must be positive")
+    if int(nsteps1) <= 0 or int(nsteps2) <= 0:
+        raise ValueError("nsteps1 and nsteps2 must be positive")
 
     state_paths = excitation_state_paths(
         n_fcc_cells=n_fcc_cells,
@@ -258,17 +291,112 @@ def excitation_evolved_paths(
 
     folder = (
         state_paths["folder"]
-        / f"dt_{format_float(dt, decimals=4)}"
-        / f"nsteps_{int(evolve_nsteps)}"
+        / f"segment_1_dt_{format_dt(dt1)}"
+        / f"nsteps_{int(nsteps1)}"
+        / f"segment_2_dt_{format_dt(dt2)}"
+        / f"nsteps_{int(nsteps2)}"
         / f"seed_{int(evolve_seed)}"
     )
 
+    segment_1_folder = folder / "segment_1"
+    segment_2_folder = folder / "segment_2"
+
+    def segment_paths(segment_index, segment_folder, segment_dt, segment_nsteps):
+        return {
+            "segment_index": int(segment_index),
+            "folder": segment_folder,
+            "dt": float(segment_dt),
+            "nsteps": int(segment_nsteps),
+            "trajectory_path": (
+                segment_folder / "excitation_trajectory.gsd"
+            ),
+            "final_state_path": segment_folder / "excitation_final.gsd",
+            "log_path": segment_folder / "excitation_log.hdf5",
+            "state_kind": "excitation_evolved_segment",
+        }
+
+    segment_1 = segment_paths(1, segment_1_folder, dt1, nsteps1)
+    segment_2 = segment_paths(2, segment_2_folder, dt2, nsteps2)
+
+    return {
+        "folder": folder,
+        "manifest_path": folder / "evolution_manifest.hdf5",
+        "segment_1": segment_1,
+        "segment_2": segment_2,
+        "segment_paths": [segment_1, segment_2],
+        "trajectory_paths": [
+            segment_1["trajectory_path"],
+            segment_2["trajectory_path"],
+        ],
+        "log_paths": [
+            segment_1["log_path"],
+            segment_2["log_path"],
+        ],
+        # Compatibility keys point at the overall final segment.
+        "trajectory_path": segment_2["trajectory_path"],
+        "final_state_path": segment_2["final_state_path"],
+        "log_path": segment_2["log_path"],
+        "dt1": float(dt1),
+        "nsteps1": int(nsteps1),
+        "dt2": float(dt2),
+        "nsteps2": int(nsteps2),
+        "total_nsteps": int(nsteps1) + int(nsteps2),
+        "total_physical_time": (
+            float(dt1) * int(nsteps1)
+            + float(dt2) * int(nsteps2)
+        ),
+        "state_kind": "excitation_evolved",
+        "evolution_format": "two_segment_dt_v1",
+    }
+
+
+def legacy_excitation_evolved_paths(
+    n_fcc_cells,
+    source_rho,
+    kT,
+    source_nsteps,
+    source_seed,
+    method,
+    radius,
+    energy,
+    evolve_nsteps,
+    evolve_seed,
+    dt=0.0005,
+    source_phase_name="randomization",
+    center=None,
+    random_location=False,
+    excitation_seed=None,
+    base_folder=EXCITATION_EVOLVED_V3_LEGACY_ROOT,
+):
+    """Build paths for archived single-dt excitation results."""
+
+    state_paths = excitation_state_paths(
+        n_fcc_cells=n_fcc_cells,
+        source_rho=source_rho,
+        kT=kT,
+        source_nsteps=source_nsteps,
+        source_seed=source_seed,
+        source_phase_name=source_phase_name,
+        method=method,
+        radius=radius,
+        energy=energy,
+        center=center,
+        random_location=random_location,
+        excitation_seed=excitation_seed,
+        base_folder=base_folder,
+    )
+    folder = (
+        state_paths["folder"]
+        / f"dt_{format_dt(dt)}"
+        / f"nsteps_{int(evolve_nsteps)}"
+        / f"seed_{int(evolve_seed)}"
+    )
     return {
         "folder": folder,
         "trajectory_path": folder / "excitation_trajectory.gsd",
         "final_state_path": folder / "excitation_final.gsd",
         "log_path": folder / "excitation_log.hdf5",
-        "state_kind": "excitation_evolved",
+        "state_kind": "excitation_evolved_legacy_single_dt",
     }
 
 

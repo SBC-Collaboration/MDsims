@@ -14,6 +14,7 @@ from md_Helpers import (
     classification,
     dt_validation,
     eos_sweep,
+    excitation_evolution,
     master_csv,
     paths,
     run_logs,
@@ -178,7 +179,7 @@ class PathTests(unittest.TestCase):
         self.assertEqual(evolved["final_state_path"].name, "cavitation_final.gsd")
         self.assertIn("radius_2.000", str(initial["state_path"]))
 
-    def test_excitation_paths_include_method_energy_and_dt(self):
+    def test_excitation_paths_include_two_dt_segments(self):
         evolved = paths.excitation_evolved_paths(
             n_fcc_cells=30,
             source_rho=0.71,
@@ -188,9 +189,9 @@ class PathTests(unittest.TestCase):
             method="velocity_rescale_com",
             radius=3.0,
             energy=4000.0,
-            evolve_nsteps=100_000,
             evolve_seed=1,
-            dt=0.0005,
+            dt2=0.005,
+            nsteps2=100_000,
         )
         path_text = str(evolved["final_state_path"])
         self.assertEqual(evolved["final_state_path"].name, "excitation_final.gsd")
@@ -200,8 +201,152 @@ class PathTests(unittest.TestCase):
         self.assertNotIn("/kT_0.800/", path_text)
         self.assertIn("method_velocity_rescale_com", path_text)
         self.assertIn("energy_4000.000", path_text)
-        self.assertIn("dt_0.0005", path_text)
+        self.assertIn("segment_1_dt_0.0005", path_text)
+        self.assertIn("nsteps_200000", path_text)
+        self.assertIn("segment_2_dt_0.005", path_text)
+        self.assertIn("nsteps_100000", path_text)
+        self.assertEqual(
+            evolved["final_state_path"],
+            evolved["segment_2"]["final_state_path"],
+        )
+        self.assertEqual(
+            evolved["manifest_path"].name,
+            "evolution_manifest.hdf5",
+        )
         self.assertNotIn("source_phase_randomization", path_text)
+
+    def test_excitation_paths_require_second_segment(self):
+        with self.assertRaisesRegex(ValueError, "dt2 is required"):
+            paths.excitation_evolved_paths(
+                n_fcc_cells=30,
+                source_rho=0.71,
+                kT=0.8,
+                source_nsteps=1_000_000,
+                source_seed=1,
+                method="velocity_rescale_com",
+                radius=3.0,
+                energy=4000.0,
+                nsteps2=100_000,
+                evolve_seed=1,
+            )
+
+
+class ExcitationEvolutionTests(unittest.TestCase):
+    def _paths(self, root):
+        return paths.excitation_evolved_paths(
+            n_fcc_cells=10,
+            source_rho=0.71,
+            kT=0.8,
+            source_nsteps=1_000,
+            source_seed=1,
+            method="velocity_rescale_com",
+            radius=2.0,
+            energy=100.0,
+            dt1=0.0005,
+            nsteps1=4,
+            dt2=0.002,
+            nsteps2=3,
+            evolve_seed=1,
+            base_folder=root,
+        )
+
+    @staticmethod
+    def _write_log(path, timesteps, values):
+        import h5py
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(path, mode="w") as hdf:
+            hdf.require_group("hoomd-data/Simulation").create_dataset(
+                "timestep",
+                data=np.asarray(timesteps, dtype=np.int64),
+            )
+            hdf.require_group(
+                "hoomd-data/md/compute/ThermodynamicQuantities"
+            ).create_dataset(
+                "pressure",
+                data=np.asarray(values, dtype=float),
+            )
+
+    def test_stitched_log_deduplicates_boundary_and_builds_time(self):
+        with TemporaryDirectory() as tmp:
+            evolved = self._paths(tmp)
+            self._write_log(
+                evolved["segment_1"]["log_path"],
+                [10, 12, 14],
+                [1.0, 2.0, 3.0],
+            )
+            self._write_log(
+                evolved["segment_2"]["log_path"],
+                [14, 15, 17],
+                [30.0, 4.0, 5.0],
+            )
+            excitation_evolution.write_evolution_manifest(
+                evolved,
+                status="complete",
+                evolve_seed=1,
+                segment_timing={
+                    1: {"start_timestep": 10, "final_timestep": 14},
+                    2: {"start_timestep": 14, "final_timestep": 17},
+                },
+            )
+
+            stitched = excitation_evolution.read_stitched_log(evolved)
+
+            np.testing.assert_array_equal(
+                stitched["stitched"]["timestep"],
+                [10, 12, 14, 15, 17],
+            )
+            np.testing.assert_allclose(
+                stitched["stitched"]["elapsed_time"],
+                [0.0, 0.001, 0.002, 0.004, 0.008],
+            )
+            np.testing.assert_allclose(
+                stitched["hoomd-data"]["md"]["compute"][
+                    "ThermodynamicQuantities"
+                ]["pressure"],
+                [1.0, 2.0, 3.0, 4.0, 5.0],
+            )
+            self.assertTrue(
+                stitched["stitched"]["boundary_duplicate_removed"]
+            )
+
+    def test_legacy_archive_is_dry_run_then_collision_safe_move(self):
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "Excitation_Evolved_v3"
+            archive = Path(tmp) / "Excitation_Evolved_v3_legacy_single_dt"
+            source.mkdir()
+            (source / "old_result.hdf5").touch()
+
+            preview = excitation_evolution.archive_legacy_excitation_evolved(
+                source_root=source,
+                archive_root=archive,
+                dry_run=True,
+            )
+            self.assertEqual(preview["status"], "would_move")
+            self.assertTrue(source.exists())
+            self.assertFalse(archive.exists())
+
+            moved = excitation_evolution.archive_legacy_excitation_evolved(
+                source_root=source,
+                archive_root=archive,
+                dry_run=False,
+            )
+            self.assertTrue(moved["moved"])
+            self.assertTrue(source.is_dir())
+            self.assertTrue((archive / "old_result.hdf5").exists())
+
+    def test_active_root_rejects_unarchived_single_dt_logs(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Excitation_Evolved_v3"
+            legacy_folder = root / "FCC" / "old_run" / "seed_1"
+            legacy_folder.mkdir(parents=True)
+            (legacy_folder / "excitation_log.hdf5").touch()
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "still contains legacy single-dt results",
+            ):
+                excitation_evolution.ensure_two_segment_root(root)
 
 
 class SpatialTests(unittest.TestCase):

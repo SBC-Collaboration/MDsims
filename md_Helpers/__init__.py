@@ -11,6 +11,7 @@ Primary modules:
 - voxel_fit: gas, liquid, and interface voxel-mixture fitting
 - cavitation: cavitated starting-state creation and evolution
 - hot_spike: localized kinetic-energy excitation and NVE evolution
+- excitation_evolution: two-segment dt changes, stitching, and migration
 - cavitation_analysis: trajectory and bubble measurements
 - cavitation_sweep: fixed-radius cavitation parameter sweeps
 - eos_sweep: adaptive liquid EOS pressure-window sweeps and plots
@@ -33,6 +34,7 @@ __all__ = [
     "voxel_fit",
     "cavitation",
     "hot_spike",
+    "excitation_evolution",
     "cavitation_analysis",
     "cavitation_sweep",
     "eos_sweep",

@@ -11,8 +11,8 @@ from . import simulation as simulation_helpers
 from .run_logs import simulation_progress
 from .paths import (
     EXCITATION_STATES_V3_ROOT,
-    excitation_evolved_paths,
     excitation_state_paths,
+    legacy_excitation_evolved_paths,
 )
 from .spatial import periodic_distances
 
@@ -797,7 +797,7 @@ def _build_evolution_metadata_groups(
     return groups
 
 
-def get_or_create_hot_spike(
+def get_or_create_hot_spike_single_dt(
     n_fcc_cells,
     target_rho,
     kT,
@@ -847,7 +847,7 @@ def get_or_create_hot_spike(
             fallback_seed=source_seed,
         )
 
-    evolved_paths = excitation_evolved_paths(
+    evolved_paths = legacy_excitation_evolved_paths(
         n_fcc_cells=n_fcc_cells,
         source_rho=target_rho,
         kT=kT,
@@ -980,3 +980,74 @@ def get_or_create_hot_spike(
         "created_new": True,
         "status": "created_evolution",
     }
+
+
+def get_or_create_hot_spike(
+    n_fcc_cells,
+    target_rho,
+    kT,
+    source_nsteps,
+    radius,
+    injected_energy,
+    dt2=None,
+    nsteps2=None,
+    method="velocity_rescale_com",
+    source_seed=1,
+    evolve_seed=1,
+    dt1=0.0005,
+    nsteps1=200_000,
+    source_log_period=1_000,
+    log_period=1_000,
+    trajectory_period=1_000,
+    random_location=False,
+    overwrite=False,
+    overwrite_initial=False,
+    overwrite_source=False,
+    create_source_if_missing=True,
+    reject_phase_separated_source=True,
+    evolve_nsteps=None,
+    dt=None,
+):
+    """
+    Load or run the standard two-segment hot-spike NVE evolution.
+
+    Segment 1 defaults to ``dt1=0.0005`` for ``nsteps1=200_000``.
+    Supply ``dt2`` and ``nsteps2`` for segment 2. The old ``dt`` and
+    ``evolve_nsteps`` keywords are accepted as aliases during migration.
+    """
+
+    if dt2 is None:
+        dt2 = dt
+    if nsteps2 is None:
+        nsteps2 = evolve_nsteps
+    if dt2 is None:
+        raise ValueError("dt2 is required")
+    if nsteps2 is None:
+        raise ValueError("nsteps2 is required")
+
+    from .excitation_evolution import get_or_create_two_segment_hot_spike
+
+    return get_or_create_two_segment_hot_spike(
+        n_fcc_cells=n_fcc_cells,
+        target_rho=target_rho,
+        kT=kT,
+        source_nsteps=source_nsteps,
+        radius=radius,
+        injected_energy=injected_energy,
+        dt1=dt1,
+        nsteps1=nsteps1,
+        dt2=dt2,
+        nsteps2=nsteps2,
+        method=method,
+        source_seed=source_seed,
+        evolve_seed=evolve_seed,
+        source_log_period=source_log_period,
+        log_period=log_period,
+        trajectory_period=trajectory_period,
+        random_location=random_location,
+        overwrite=overwrite,
+        overwrite_initial=overwrite_initial,
+        overwrite_source=overwrite_source,
+        create_source_if_missing=create_source_if_missing,
+        reject_phase_separated_source=reject_phase_separated_source,
+    )

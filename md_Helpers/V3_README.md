@@ -26,6 +26,9 @@ Excitation_Evolved_v3/
 Master_CSVs_v3/
 ```
 
+The old single-timestep contents of `Excitation_Evolved_v3` should be archived
+unchanged as `Excitation_Evolved_v3_legacy_single_dt/`.
+
 ## Phase Separation Policy
 
 Run phase-separation classifiers on final states from real dynamics:
@@ -68,6 +71,96 @@ thermalized-state paths. `cavitation_log.hdf5` stores the actual dynamics:
 thermodynamic time series, run metadata, trajectory/final-state paths, and
 final-state classification.
 
+## Two-Segment Excitation Evolution
+
+New excitation evolutions always contain exactly two NVE segments. Segment 1
+defaults to `dt1=0.0005` and `nsteps1=200_000`; callers provide `dt2` and
+`nsteps2`. The final state of segment 1 is the starting state of segment 2.
+During an uninterrupted call, the same live HOOMD simulation is retained and
+the integrator `dt` is changed directly at the boundary. If a partial run is
+resumed later, segment 2 restarts from segment 1's saved final GSD.
+
+```text
+Excitation_Evolved_v3/.../
+    segment_1_dt_0.0005/
+        nsteps_200000/
+            segment_2_dt_<dt2>/
+                nsteps_<nsteps2>/
+                    seed_<seed>/
+                        evolution_manifest.hdf5
+                        segment_1/
+                            excitation_trajectory.gsd
+                            excitation_final.gsd
+                            excitation_log.hdf5
+                        segment_2/
+                            excitation_trajectory.gsd
+                            excitation_final.gsd
+                            excitation_log.hdf5
+```
+
+`evolution_manifest.hdf5` is the authoritative overall record. It stores the
+ordered timestep schedule, physical duration, boundary timesteps, paths, run
+status, ancestry, creation details, and LJ settings. Segment 2's final GSD and
+log are exposed as the overall final-state and final-classification files.
+
+```python
+from md_Helpers.hot_spike import get_or_create_hot_spike
+
+result = get_or_create_hot_spike(
+    n_fcc_cells=30,
+    target_rho=0.71,
+    kT=0.8,
+    source_nsteps=1_000_000,
+    radius=3.0,
+    injected_energy=4_000,
+    dt2=0.005,
+    nsteps2=100_000,
+)
+```
+
+Stitch the saved outputs only when needed:
+
+```python
+from md_Helpers import excitation_evolution
+
+log = excitation_evolution.read_stitched_log(result)
+frames = excitation_evolution.iter_stitched_trajectory(result)
+
+combined_log_path = excitation_evolution.write_stitched_log(result)
+combined_gsd_path = excitation_evolution.write_stitched_trajectory(result)
+```
+
+The stitched log adds an `elapsed_time` array computed piecewise from each
+segment's own `dt`. Both stitched readers remove the duplicated segment
+boundary. The optional materialized files are derivatives; the two raw
+segments and manifest remain authoritative.
+
+The hot-spike animation accepts the result directly, samples across the full
+run at uniform physical-time spacing, and shows segment number, raw timestep,
+and continuous physical time:
+
+```python
+from md_Helpers.visualization import (
+    animate_hot_spike_xy_slice_trajectory,
+)
+
+animate_hot_spike_xy_slice_trajectory(result)
+```
+
+Before producing new results, preview and then archive the old root:
+
+```python
+from md_Helpers.excitation_evolution import (
+    archive_legacy_excitation_evolved,
+)
+
+archive_legacy_excitation_evolved(dry_run=True)
+archive_legacy_excitation_evolved(dry_run=False)
+```
+
+The archive helper refuses to overwrite or merge with an existing archive. It
+moves the old root intact and creates a new empty `Excitation_Evolved_v3`.
+
 ## Metadata Layout
 
 V3 keeps bare `metadata` as a container only. Metadata attributes live in
@@ -79,6 +172,9 @@ metadata/run
 metadata/lj
 metadata/source
 metadata/paths
+metadata/segments/segment_1
+metadata/segments/segment_2
+metadata/continuity
 metadata/classification/phase_separation
 metadata/classification/phase_separation/voxel
 metadata/classification/phase_separation/PE_drop
@@ -100,6 +196,8 @@ runs.py                  HDF5/GSD writers and run execution
 classification.py        current voxel and PE-drop classifiers
 voxel_fit.py             gas/liquid/interface voxel histogram fitting
 cavitation.py            cavitation creation and evolution
+hot_spike.py             localized excitation creation and public runner
+excitation_evolution.py  two-segment dt changes, stitching, legacy archiving
 cavitation_analysis.py   trajectory bubble measurements
 cavitation_sweep.py      FCC-size sweeps and bubble-survival summaries
 visualization.py         plotting and animation

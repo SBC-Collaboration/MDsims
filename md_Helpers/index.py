@@ -69,6 +69,14 @@ def scan_v3_metadata(roots=None):
         for hdf5_path in sorted(root.rglob("*.hdf5")):
             row = flatten_metadata(hdf5_path)
             row["object_kind"] = object_kind
+            if hdf5_path.name == "evolution_manifest.hdf5":
+                row["metadata_role"] = "evolution_manifest"
+            elif hdf5_path.name == "excitation_log_stitched.hdf5":
+                row["metadata_role"] = "stitched_analysis_log"
+            elif hdf5_path.parent.name in {"segment_1", "segment_2"}:
+                row["metadata_role"] = hdf5_path.parent.name
+            else:
+                row["metadata_role"] = "object_metadata"
             rows.append(row)
     return pd.DataFrame(rows)
 
