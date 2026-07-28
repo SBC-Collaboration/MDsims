@@ -1709,3 +1709,169 @@ def plot_log_quantity(
     plt.grid(alpha=0.3)
 
     plt.show()
+
+
+def plot_ke_and_fastest_particle_speed(
+    result,
+    max_time=500.0,
+    figsize=(10, 6),
+    show_segment_boundary=True,
+):
+    """
+    Plot KE/N and the fastest saved particle speed on separate y-axes.
+
+    The fastest speed is evaluated from the GSD frame at every stitched log
+    point through ``max_time``. Log rows and trajectory frames are matched by
+    both segment index and timestep, so the change in timestep size does not
+    introduce an alignment ambiguity.
+    """
+
+    from .excitation_evolution import (
+        iter_stitched_trajectory,
+        read_stitched_log,
+    )
+
+    max_time = float(max_time)
+    if max_time < 0:
+        raise ValueError("max_time must be nonnegative")
+
+    log = read_stitched_log(result)
+    stitched = log["stitched"]
+    elapsed_time = np.asarray(stitched["elapsed_time"], dtype=np.float64)
+    timesteps = np.asarray(stitched["timestep"], dtype=np.int64)
+    segment_indices = np.asarray(
+        stitched["segment_index"],
+        dtype=np.int8,
+    )
+
+    selected = elapsed_time <= max_time
+    elapsed_time = elapsed_time[selected]
+    timesteps = timesteps[selected]
+    segment_indices = segment_indices[selected]
+    if elapsed_time.size == 0:
+        raise ValueError(f"No log points were found through t={max_time:g}")
+
+    thermo = (
+        log["hoomd-data"]["md"]
+           ["compute"]
+           ["ThermodynamicQuantities"]
+    )
+    kinetic_energy = np.asarray(
+        thermo["kinetic_energy"],
+        dtype=np.float64,
+    )[selected]
+
+    metadata = (
+        log.get("metadata", {})
+           .get("state", {})
+           .get("attrs", {})
+    )
+    if "N" not in metadata:
+        metadata = log.get("metadata", {}).get("attrs", {})
+    particle_count = int(metadata["N"])
+    ke_per_particle = kinetic_energy / particle_count
+
+    requested_keys = [
+        (int(segment_index), int(timestep))
+        for segment_index, timestep in zip(segment_indices, timesteps)
+    ]
+    needed_keys = set(requested_keys)
+    speed_by_key = {}
+    fastest_index_by_key = {}
+
+    for item in iter_stitched_trajectory(result):
+        if item["elapsed_time"] > max_time:
+            break
+        key = (int(item["segment_index"]), int(item["timestep"]))
+        if key not in needed_keys:
+            continue
+
+        velocities = np.asarray(
+            item["frame"].particles.velocity,
+            dtype=np.float64,
+        )
+        speed_squared = np.einsum(
+            "ij,ij->i",
+            velocities,
+            velocities,
+        )
+        fastest_index = int(np.argmax(speed_squared))
+        fastest_index_by_key[key] = fastest_index
+        speed_by_key[key] = float(np.sqrt(speed_squared[fastest_index]))
+
+    missing_keys = [key for key in requested_keys if key not in speed_by_key]
+    if missing_keys:
+        preview = ", ".join(map(str, missing_keys[:5]))
+        raise ValueError(
+            "No matching trajectory frame was found for "
+            f"{len(missing_keys)} log point(s): {preview}. "
+            "The log_period and trajectory_period may differ."
+        )
+
+    fastest_speeds = np.asarray(
+        [speed_by_key[key] for key in requested_keys],
+        dtype=np.float64,
+    )
+    fastest_indices = np.asarray(
+        [fastest_index_by_key[key] for key in requested_keys],
+        dtype=np.int64,
+    )
+
+    fig, ke_axis = plt.subplots(figsize=figsize)
+    speed_axis = ke_axis.twinx()
+
+    ke_line = ke_axis.plot(
+        elapsed_time,
+        ke_per_particle,
+        color="tab:blue",
+        label="KE/N",
+    )[0]
+    speed_line = speed_axis.plot(
+        elapsed_time,
+        fastest_speeds,
+        color="tab:orange",
+        label="Fastest particle speed",
+    )[0]
+
+    legend_artists = [ke_line, speed_line]
+    if show_segment_boundary:
+        boundary_time = float(stitched["segment_boundary_time"])
+        boundary_line = ke_axis.axvline(
+            boundary_time,
+            color="tab:red",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Segment boundary (t={boundary_time:g})",
+        )
+        legend_artists.append(boundary_line)
+
+    ke_axis.set_xlim(0, max_time)
+    ke_axis.set_xlabel("Elapsed Physical Time")
+    ke_axis.set_ylabel("KE/N", color="tab:blue")
+    speed_axis.set_ylabel("Fastest Particle Speed", color="tab:orange")
+    ke_axis.tick_params(axis="y", labelcolor="tab:blue")
+    speed_axis.tick_params(axis="y", labelcolor="tab:orange")
+    ke_axis.set_title(
+        "KE/N and Fastest Particle Speed vs Elapsed Physical Time"
+    )
+    ke_axis.grid(alpha=0.3)
+    ke_axis.legend(
+        legend_artists,
+        [artist.get_label() for artist in legend_artists],
+        loc="best",
+    )
+    fig.tight_layout()
+    plt.show()
+
+    return {
+        "figure": fig,
+        "ke_axis": ke_axis,
+        "speed_axis": speed_axis,
+        "elapsed_time": elapsed_time,
+        "timestep": timesteps,
+        "segment_index": segment_indices,
+        "ke_per_particle": ke_per_particle,
+        "fastest_particle_speed": fastest_speeds,
+        "fastest_particle_index": fastest_indices,
+        "segment_boundary_time": float(stitched["segment_boundary_time"]),
+    }
