@@ -36,6 +36,7 @@ class TestCavitationCreationMetadataCleanup(unittest.TestCase):
             creation.attrs["radius"] = 2.5
             creation.attrs["random_location"] = random_location
             creation.attrs["rho_after"] = 0.75
+            creation.attrs["unexpected_future_field"] = "remove me"
             creation.create_dataset(
                 "removed_particle_indices",
                 data=[1, 2, 3],
@@ -82,6 +83,7 @@ class TestCavitationCreationMetadataCleanup(unittest.TestCase):
                     },
                 )
                 self.assertNotIn("removed_particle_indices", creation)
+                self.assertNotIn("unexpected_future_field", creation.attrs)
                 self.assertNotIn("metadata/paths", hdf)
                 self.assertEqual(
                     set(hdf["metadata/state"].attrs),

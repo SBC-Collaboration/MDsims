@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -32,30 +33,14 @@ THERMALIZED_METADATA_REMOVALS = {
     },
 }
 
-CAVITATION_CREATION_ATTRIBUTE_REMOVALS = {
-    "BoxLength",
-    "N_after",
-    "N_before",
-    "bubble_center_x",
-    "bubble_center_y",
-    "bubble_center_z",
-    "bubble_radius",
-    "copied_particle_fields",
-    "particle_fraction_removed",
-    "radius_definition",
-    "rho_after",
-    "rho_before",
-    "volume",
-}
-
-CAVITATION_CREATION_DATASET_REMOVALS = {
-    "removed_particle_indices",
-    "removed_particle_positions",
-}
-
-CAVITATION_CREATION_PATH_ATTRIBUTE_REMOVALS = {
-    "creation_metadata_path",
-    "state_path",
+CAVITATION_CREATION_ATTRIBUTES = {
+    "bubble_center",
+    "bubble_method",
+    "bubble_seed",
+    "particles_removed",
+    "periodic_distance",
+    "radius",
+    "random_location",
 }
 
 CAVITATION_CREATION_SOURCE_ATTRIBUTES = {
@@ -393,7 +378,7 @@ def cleanup_thermalized_metadata_tree(root=None, dry_run=True):
 
 
 def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
-    """Remove retired creation metadata from one cavitation initial state."""
+    """Make one cavitation initial-state file match the current schema."""
 
     hdf5_path = Path(hdf5_path)
     mode = "r" if dry_run else "a"
@@ -410,6 +395,15 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
                 f"state_kind is {state_kind!r}, not 'cavitation_initial'"
             )
         state = hdf["metadata/state"]
+        missing_state_attrs = sorted(
+            CAVITATION_CREATION_STATE_ATTRIBUTES - set(state.attrs)
+        )
+        if missing_state_attrs:
+            raise KeyError(
+                "metadata/state is missing required attributes: "
+                f"{missing_state_attrs}"
+            )
+
         found_state_attrs = sorted(
             set(state.attrs) - CAVITATION_CREATION_STATE_ATTRIBUTES
         )
@@ -419,19 +413,33 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
             raise KeyError("missing metadata/creation")
 
         creation = hdf[creation_path]
-        attr_names = set(CAVITATION_CREATION_ATTRIBUTE_REMOVALS)
-        if not bool(creation.attrs.get("random_location", False)):
-            attr_names.add("bubble_seed")
+        random_location = bool(
+            clean_read_value(
+                creation.attrs.get("random_location", False)
+            )
+        )
+        allowed_creation_attrs = set(CAVITATION_CREATION_ATTRIBUTES)
+        if not random_location:
+            allowed_creation_attrs.remove("bubble_seed")
 
-        found_attrs = [
-            attr_name
-            for attr_name in sorted(attr_names)
-            if attr_name in creation.attrs
-        ]
-        found_datasets = [
-            dataset_name
-            for dataset_name in sorted(CAVITATION_CREATION_DATASET_REMOVALS)
-            if dataset_name in creation
+        missing_creation_attrs = sorted(
+            allowed_creation_attrs - set(creation.attrs)
+        )
+        if missing_creation_attrs:
+            raise KeyError(
+                "metadata/creation is missing required attributes: "
+                f"{missing_creation_attrs}"
+            )
+
+        found_attrs = sorted(
+            set(creation.attrs) - allowed_creation_attrs
+        )
+        found_creation_children = [
+            {
+                "name": child_name,
+                "storage": type(creation[child_name]).__name__.lower(),
+            }
+            for child_name in sorted(creation.keys())
         ]
 
         paths_path = "metadata/paths"
@@ -439,16 +447,6 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
         found_path_attrs = []
         if remove_paths_group:
             paths_group = hdf[paths_path]
-            unexpected_attrs = (
-                set(paths_group.attrs)
-                - CAVITATION_CREATION_PATH_ATTRIBUTE_REMOVALS
-            )
-            if unexpected_attrs or len(paths_group) != 0:
-                raise ValueError(
-                    "metadata/paths contains unexpected content: "
-                    f"attributes={sorted(unexpected_attrs)}, "
-                    f"children={sorted(paths_group.keys())}"
-                )
             found_path_attrs = sorted(paths_group.attrs)
 
         source_path = "metadata/source"
@@ -456,6 +454,15 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
             raise KeyError("missing metadata/source")
 
         source = hdf[source_path]
+        missing_source_attrs = sorted(
+            CAVITATION_CREATION_SOURCE_ATTRIBUTES - set(source.attrs)
+        )
+        if missing_source_attrs:
+            raise KeyError(
+                "metadata/source is missing required attributes: "
+                f"{missing_source_attrs}"
+            )
+
         found_source_attrs = sorted(
             set(source.attrs) - CAVITATION_CREATION_SOURCE_ATTRIBUTES
         )
@@ -465,8 +472,8 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
                 del state.attrs[attr_name]
             for attr_name in found_attrs:
                 del creation.attrs[attr_name]
-            for dataset_name in found_datasets:
-                del creation[dataset_name]
+            for item in found_creation_children:
+                del creation[item["name"]]
             if remove_paths_group:
                 del hdf[paths_path]
             for attr_name in found_source_attrs:
@@ -488,10 +495,10 @@ def cleanup_cavitation_creation_metadata_file(hdf5_path, dry_run=True):
     )
     removed.extend(
         {
-            "path": f"{creation_path}/{dataset_name}",
-            "storage": "dataset",
+            "path": f"{creation_path}/{item['name']}",
+            "storage": item["storage"],
         }
-        for dataset_name in found_datasets
+        for item in found_creation_children
     )
     removed.extend(
         {
@@ -558,6 +565,141 @@ def cleanup_cavitation_creation_metadata_tree(root=None, dry_run=True):
             })
 
     return reports
+
+
+def run_cavitation_creation_metadata_cleanup(
+    root=None,
+    apply_changes=False,
+    show_changed_files=False,
+):
+    """
+    Preview or apply the complete cavitation initial-state metadata cleanup.
+
+    This is the notebook-facing entry point. It prints an aggregate report,
+    prints every error, and performs a second dry-run verification after an
+    applied cleanup.
+    """
+
+    if root is None:
+        from .paths import CAVITATION_STATES_V3_ROOT
+
+        root = CAVITATION_STATES_V3_ROOT
+
+    root = Path(root)
+    reports = cleanup_cavitation_creation_metadata_tree(
+        root=root,
+        dry_run=not apply_changes,
+    )
+
+    if not reports:
+        raise RuntimeError(
+            f"No cavitation_creation.hdf5 files were found under {root}"
+        )
+
+    counts = Counter(report["status"] for report in reports)
+    errors = [
+        report
+        for report in reports
+        if report["status"] == "error"
+    ]
+    changed = [
+        report
+        for report in reports
+        if report["status"] in {"would_clean", "cleaned"}
+    ]
+
+    removed_counts = Counter(
+        (item["path"], item["storage"])
+        for report in changed
+        for item in report["removed"]
+    )
+
+    print("=" * 100)
+    print("CAVITATION INITIAL-STATE METADATA CLEANUP")
+    print("=" * 100)
+    print(f"Root:           {root}")
+    print(
+        "Mode:           "
+        f"{'APPLY CHANGES' if apply_changes else 'DRY RUN'}"
+    )
+    print(f"Files checked:  {len(reports)}")
+
+    print("\nSTATUS")
+    for status, count in sorted(counts.items()):
+        print(f"{status:15} {count}")
+
+    print("\nFIELDS")
+    print("=" * 100)
+    if removed_counts:
+        for (path, storage), count in sorted(removed_counts.items()):
+            print(f"/{path:<72} {count:>6} files  [{storage}]")
+    else:
+        print("No fields need cleanup.")
+
+    if show_changed_files and changed:
+        print("\nFILES WITH CHANGES")
+        print("=" * 100)
+        for report in changed:
+            print(f"\n{report['status'].upper()}: {report['hdf5_path']}")
+            for item in report["removed"]:
+                print(f"  - /{item['path']} [{item['storage']}]")
+
+    print("\nERRORS")
+    print("=" * 100)
+    if errors:
+        for report in errors:
+            print(f"\nERROR: {report['hdf5_path']}")
+            print(f"       {report['error']}")
+    else:
+        print("No errors found.")
+
+    verification = []
+    remaining = []
+    verification_errors = []
+
+    if not apply_changes:
+        print("\nDRY RUN ONLY: no files were modified.")
+        print("Set APPLY_CHANGES = True and rerun to perform the cleanup.")
+    else:
+        verification = cleanup_cavitation_creation_metadata_tree(
+            root=root,
+            dry_run=True,
+        )
+        remaining = [
+            report
+            for report in verification
+            if report["status"] == "would_clean"
+        ]
+        verification_errors = [
+            report
+            for report in verification
+            if report["status"] == "error"
+        ]
+
+        print("\nVERIFICATION")
+        print("=" * 100)
+        print(f"Files still needing cleanup: {len(remaining)}")
+        print(f"Files with errors:           {len(verification_errors)}")
+
+        if verification_errors:
+            for report in verification_errors:
+                print(f"\nERROR: {report['hdf5_path']}")
+                print(f"       {report['error']}")
+
+        if not remaining and not verification_errors:
+            print("\nCleanup applied and verified.")
+        else:
+            print("\nCleanup ran, but verification did not pass.")
+
+    return {
+        "root": str(root),
+        "apply_changes": bool(apply_changes),
+        "reports": reports,
+        "errors": errors,
+        "verification": verification,
+        "remaining": remaining,
+        "verification_errors": verification_errors,
+    }
 
 
 def write_datasets(hdf5_path, datasets, mode="a", overwrite=True):

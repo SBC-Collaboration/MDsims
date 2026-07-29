@@ -488,20 +488,10 @@ def _build_source_metadata(
 def _build_creation_metadata(
     info,
 ):
-    stored_keys = {
-        "bubble_center",
-        "bubble_method",
-        "bubble_seed",
-        "particles_removed",
-        "periodic_distance",
-        "radius",
-        "random_location",
-    }
-
     creation = {
         key: value
         for key, value in info.items()
-        if key in stored_keys
+        if key in metadata_helpers.CAVITATION_CREATION_ATTRIBUTES
     }
 
     if not creation.get("random_location", False):
