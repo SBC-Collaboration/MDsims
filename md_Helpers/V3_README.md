@@ -147,6 +147,23 @@ from md_Helpers.visualization import (
 animate_hot_spike_xy_slice_trajectory(result)
 ```
 
+Create or refresh the lightweight excitation-evolution inventory from one
+notebook cell:
+
+```python
+from md_Helpers import master_csv
+
+excitation_runs = master_csv.build_excitation_evolved_master_csv()
+excitation_runs
+```
+
+The CSV is written to
+the dataset's `Master_CSVs_v3/excitation_evolved_master.csv` and mirrored as
+`excitation_evolved_master.csv` in the repository root. It contains one row
+per current two-segment evolution (plus archived single-timestep evolutions),
+keeps the main physical inputs and voxel outcome first, and preserves the
+`checked`, `notes`, and any hand-added columns when refreshed.
+
 ## NPH Comparison Runs
 
 NVE remains the default. To run the same two-segment hot-spike evolution with

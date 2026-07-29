@@ -1156,6 +1156,124 @@ class VisualizationTests(unittest.TestCase):
 
 
 class MasterCsvTests(unittest.TestCase):
+    def test_builds_lightweight_excitation_evolved_master_csv(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Excitation_Evolved_v3"
+            run_folder = root / "FCC" / "run_1"
+            segment_1 = run_folder / "segment_1"
+            segment_2 = run_folder / "segment_2"
+            segment_1.mkdir(parents=True)
+            segment_2.mkdir(parents=True)
+
+            path_attrs = {}
+            for segment_index, folder in [(1, segment_1), (2, segment_2)]:
+                for role, filename in [
+                    ("log", "excitation_log.hdf5"),
+                    ("trajectory", "excitation_trajectory.gsd"),
+                    ("final_state", "excitation_final.gsd"),
+                ]:
+                    path = folder / filename
+                    path.touch()
+                    path_attrs[
+                        f"segment_{segment_index}_{role}_path"
+                    ] = str(path)
+
+            final_log_path = Path(path_attrs["segment_2_log_path"])
+            with h5py.File(final_log_path, mode="w") as hdf:
+                voxel = hdf.require_group(
+                    "metadata/classification/phase_separation/voxel"
+                )
+                voxel.attrs["phase_separated"] = True
+                voxel.attrs["low_density_fraction"] = 0.125
+
+            manifest_path = run_folder / "evolution_manifest.hdf5"
+            with h5py.File(manifest_path, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["n_fcc_cells"] = 60
+                state.attrs["kT"] = 0.8
+                state.attrs["source_rho"] = 0.72
+
+                source = hdf.require_group("metadata/source")
+                source.attrs["source_kT"] = 0.8
+                source.attrs["source_rho"] = 0.72
+                source.attrs["source_nsteps"] = 1_000_000
+                source.attrs["source_seed"] = 1
+
+                creation = hdf.require_group("metadata/creation")
+                creation.attrs["radius"] = 3.0
+                creation.attrs["requested_injected_energy"] = 1000.0
+                creation.attrs["actual_injected_energy"] = 1000.0
+                creation.attrs["energy_dump_method"] = (
+                    "velocity_rescale_com"
+                )
+
+                run = hdf.require_group("metadata/run")
+                run.attrs["status"] = "complete"
+                run.attrs["evolution_format"] = "two_segment_dt_v1"
+                run.attrs["ensemble"] = "NVE"
+                run.attrs["seed"] = 1
+                run.attrs["dt1"] = 0.0005
+                run.attrs["nsteps1"] = 200_000
+                run.attrs["dt2"] = 0.005
+                run.attrs["nsteps2"] = 990_000
+                run.attrs["total_physical_time"] = 5050.0
+
+                paths_group = hdf.require_group("metadata/paths")
+                for key, value in path_attrs.items():
+                    paths_group.attrs[key] = value
+
+            output_path = Path(tmp) / "excitation_master.csv"
+            local_output_path = Path(tmp) / "local_excitation_master.csv"
+            table = master_csv.build_excitation_evolved_master_csv(
+                root=root,
+                output_path=output_path,
+                local_output_path=local_output_path,
+                include_legacy=False,
+            )
+
+            self.assertEqual(
+                list(table.columns[:6]),
+                [
+                    "n_fcc_cells",
+                    "temp",
+                    "density",
+                    "radius",
+                    "energy_deposition",
+                    "voxel_phase",
+                ],
+            )
+            self.assertEqual(len(table), 1)
+            self.assertEqual(table.loc[0, "voxel_phase"], "phase_separated")
+            self.assertTrue(bool(table.loc[0, "files_complete"]))
+            self.assertAlmostEqual(
+                table.loc[0, "total_physical_time"],
+                5050.0,
+            )
+            self.assertTrue(output_path.exists())
+            self.assertTrue(local_output_path.exists())
+
+            saved = pd.read_csv(local_output_path)
+            saved.loc[0, "checked"] = "yes"
+            saved.loc[0, "notes"] = "inspect trajectory"
+            saved.to_csv(local_output_path, index=False)
+
+            refreshed = master_csv.build_excitation_evolved_master_csv(
+                root=root,
+                output_path=output_path,
+                local_output_path=local_output_path,
+                include_legacy=False,
+            )
+            self.assertEqual(refreshed.loc[0, "checked"], "yes")
+            self.assertEqual(
+                refreshed.loc[0, "notes"],
+                "inspect trajectory",
+            )
+
     def test_builds_thermalization_master_csv_from_hdf5_logs(self):
         try:
             import h5py

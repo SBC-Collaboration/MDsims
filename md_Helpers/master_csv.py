@@ -7,6 +7,7 @@ from .paths import (
     CAVITATION_EVOLVED_V3_ROOT,
     CAVITATION_STATES_V3_ROOT,
     EXCITATION_EVOLVED_V3_ROOT,
+    EXCITATION_EVOLVED_V3_LEGACY_ROOT,
     EXCITATION_STATES_V3_ROOT,
     MASTER_CSVS_V3_ROOT,
     SIMPLE_LATTICES_V3_ROOT,
@@ -34,6 +35,36 @@ DEFAULT_RESULTS_INVENTORY_ROOTS = {
     "excitation_evolved": EXCITATION_EVOLVED_V3_ROOT,
     "master_csv": MASTER_CSVS_V3_ROOT,
 }
+
+
+EXCITATION_EVOLVED_MASTER_COLUMNS = [
+    "n_fcc_cells",
+    "temp",
+    "density",
+    "radius",
+    "energy_deposition",
+    "voxel_phase",
+    "actual_energy_deposition",
+    "excitation_method",
+    "evolution_format",
+    "ensemble",
+    "pressure",
+    "dt1",
+    "nsteps1",
+    "dt2",
+    "nsteps2",
+    "total_physical_time",
+    "source_nsteps",
+    "source_seed",
+    "evolve_seed",
+    "voxel_low_density_fraction",
+    "status",
+    "files_complete",
+    "last_updated",
+    "run_path",
+    "checked",
+    "notes",
+]
 
 
 def _clean_value(value):
@@ -741,6 +772,388 @@ def _default_master_csv_path(output_path=None, output_name=None):
         output_name = "thermalization_master.csv"
 
     return Path(MASTER_CSVS_V3_ROOT) / output_name
+
+
+def _voxel_phase_summary(log_path):
+    """Return compact voxel-classifier fields without recomputing it."""
+
+    import h5py
+
+    if not log_path or not Path(log_path).exists():
+        return "not_classified", np.nan
+
+    with h5py.File(Path(log_path), mode="r") as hdf:
+        voxel = _read_attrs(
+            hdf,
+            "metadata/classification/phase_separation/voxel",
+        )
+
+    if "phase_separated" not in voxel:
+        return "not_classified", np.nan
+
+    phase = (
+        "phase_separated"
+        if bool(voxel["phase_separated"])
+        else "not_phase_separated"
+    )
+    return phase, voxel.get("low_density_fraction", np.nan)
+
+
+def _paths_exist(path_attrs, required_keys):
+    return bool(required_keys) and all(
+        path_attrs.get(key) and Path(path_attrs[key]).exists()
+        for key in required_keys
+    )
+
+
+def summarize_excitation_evolution_manifest(manifest_path):
+    """Summarize one two-segment excitation evolution as one compact row."""
+
+    import h5py
+
+    manifest_path = Path(manifest_path)
+    row = {
+        "run_path": str(manifest_path.parent),
+        "evolution_format": "two_segment_dt_v1",
+        "status": "summary_failed",
+        "files_complete": False,
+        "last_updated": pd.Timestamp.fromtimestamp(
+            manifest_path.stat().st_mtime
+        ).isoformat(),
+    }
+
+    try:
+        with h5py.File(manifest_path, mode="r") as hdf:
+            state = _read_attrs(hdf, "metadata/state")
+            run = _read_attrs(hdf, "metadata/run")
+            source = _read_attrs(hdf, "metadata/source")
+            creation = _read_attrs(hdf, "metadata/creation")
+            paths = _read_attrs(hdf, "metadata/paths")
+
+        final_log_path = paths.get("segment_2_log_path", "")
+        if final_log_path and Path(final_log_path).exists():
+            with h5py.File(Path(final_log_path), mode="r") as hdf:
+                state = {
+                    **_read_attrs(hdf, "metadata/state"),
+                    **state,
+                }
+                source = {
+                    **_read_attrs(hdf, "metadata/source"),
+                    **source,
+                }
+                creation = {
+                    **_read_attrs(hdf, "metadata/creation"),
+                    **creation,
+                }
+        voxel_phase, low_density_fraction = _voxel_phase_summary(
+            final_log_path
+        )
+        required_path_keys = [
+            f"segment_{segment}_{role}_path"
+            for segment in [1, 2]
+            for role in ["log", "trajectory", "final_state"]
+        ]
+
+        row.update({
+            "n_fcc_cells": _first_nonmissing(
+                state.get("n_fcc_cells"),
+                source.get("n_fcc_cells"),
+            ),
+            "temp": _first_nonmissing(
+                source.get("source_kT"),
+                state.get("kT"),
+            ),
+            "density": _first_nonmissing(
+                source.get("source_rho"),
+                state.get("source_rho"),
+                state.get("actual_rho"),
+            ),
+            "radius": creation.get("radius", np.nan),
+            "energy_deposition": creation.get(
+                "requested_injected_energy",
+                np.nan,
+            ),
+            "voxel_phase": voxel_phase,
+            "actual_energy_deposition": creation.get(
+                "actual_injected_energy",
+                np.nan,
+            ),
+            "excitation_method": creation.get(
+                "energy_dump_method",
+                "",
+            ),
+            "evolution_format": run.get(
+                "evolution_format",
+                "two_segment_dt_v1",
+            ),
+            "ensemble": run.get("ensemble", "NVE"),
+            "pressure": run.get("pressure", np.nan),
+            "dt1": run.get("dt1", np.nan),
+            "nsteps1": run.get("nsteps1", np.nan),
+            "dt2": run.get("dt2", np.nan),
+            "nsteps2": run.get("nsteps2", np.nan),
+            "total_physical_time": run.get(
+                "total_physical_time",
+                np.nan,
+            ),
+            "source_nsteps": source.get("source_nsteps", np.nan),
+            "source_seed": source.get("source_seed", np.nan),
+            "evolve_seed": run.get("seed", np.nan),
+            "voxel_low_density_fraction": low_density_fraction,
+            "status": run.get("status", "unknown"),
+            "files_complete": _paths_exist(
+                paths,
+                required_path_keys,
+            ),
+        })
+    except Exception as error:
+        row["summary_error"] = repr(error)
+
+    return row
+
+
+def summarize_legacy_excitation_log(log_path):
+    """Summarize one archived single-timestep excitation evolution."""
+
+    import h5py
+
+    log_path = Path(log_path)
+    row = {
+        "run_path": str(log_path.parent),
+        "evolution_format": "legacy_single_dt",
+        "status": "summary_failed",
+        "files_complete": False,
+        "last_updated": pd.Timestamp.fromtimestamp(
+            log_path.stat().st_mtime
+        ).isoformat(),
+    }
+
+    try:
+        with h5py.File(log_path, mode="r") as hdf:
+            state = _read_attrs(hdf, "metadata/state")
+            run = _read_attrs(hdf, "metadata/run")
+            source = _read_attrs(hdf, "metadata/source")
+            creation = _read_attrs(hdf, "metadata/creation")
+            paths = _read_attrs(hdf, "metadata/paths")
+
+        voxel_phase, low_density_fraction = _voxel_phase_summary(log_path)
+        dt = run.get("dt", np.nan)
+        nsteps = run.get("nsteps", np.nan)
+        total_physical_time = (
+            float(dt) * int(nsteps)
+            if not pd.isna(dt) and not pd.isna(nsteps)
+            else np.nan
+        )
+        required_paths = [
+            Path(path)
+            for path in [
+                paths.get("trajectory_path"),
+                paths.get("final_state_path"),
+            ]
+            if path
+        ]
+        files_complete = (
+            len(required_paths) == 2
+            and all(path.exists() for path in required_paths)
+        )
+
+        row.update({
+            "n_fcc_cells": state.get("n_fcc_cells", np.nan),
+            "temp": _first_nonmissing(
+                source.get("source_kT"),
+                state.get("kT"),
+            ),
+            "density": _first_nonmissing(
+                source.get("source_rho"),
+                state.get("source_rho"),
+                state.get("actual_rho"),
+            ),
+            "radius": creation.get("radius", np.nan),
+            "energy_deposition": creation.get(
+                "requested_injected_energy",
+                np.nan,
+            ),
+            "voxel_phase": voxel_phase,
+            "actual_energy_deposition": creation.get(
+                "actual_injected_energy",
+                np.nan,
+            ),
+            "excitation_method": creation.get(
+                "energy_dump_method",
+                "",
+            ),
+            "ensemble": run.get("ensemble", "NVE"),
+            "pressure": run.get("pressure", np.nan),
+            "dt1": dt,
+            "nsteps1": nsteps,
+            "dt2": np.nan,
+            "nsteps2": np.nan,
+            "total_physical_time": total_physical_time,
+            "source_nsteps": source.get("source_nsteps", np.nan),
+            "source_seed": source.get("source_seed", np.nan),
+            "evolve_seed": run.get("seed", np.nan),
+            "voxel_low_density_fraction": low_density_fraction,
+            "status": "complete" if files_complete else "incomplete",
+            "files_complete": files_complete,
+        })
+    except Exception as error:
+        row["summary_error"] = repr(error)
+
+    return row
+
+
+def build_excitation_evolved_master_csv(
+    root=EXCITATION_EVOLVED_V3_ROOT,
+    legacy_root=EXCITATION_EVOLVED_V3_LEGACY_ROOT,
+    output_path=None,
+    output_name="excitation_evolved_master.csv",
+    local_output_path=None,
+    write_local_copy=True,
+    include_legacy=True,
+    preserve_user_columns=True,
+):
+    """
+    Rebuild a lightweight inventory of every excitation evolution found.
+
+    Current two-segment runs are discovered from their authoritative
+    manifests. Archived single-timestep runs may be included as well. Existing
+    ``checked``, ``notes``, and hand-added columns are preserved by ``run_path``
+    when the CSV is refreshed. By default, the table is written both to the
+    dataset master-CSV folder and to the repository root for convenient local
+    access.
+    """
+
+    root = Path(root)
+    legacy_root = Path(legacy_root) if legacy_root is not None else None
+    output_path = _default_master_csv_path(output_path, output_name)
+    if write_local_copy:
+        local_output_path = Path(
+            local_output_path
+            if local_output_path is not None
+            else Path(__file__).resolve().parents[1] / output_name
+        )
+    else:
+        local_output_path = None
+
+    available_roots = [root.exists()]
+    if include_legacy and legacy_root is not None:
+        available_roots.append(legacy_root.exists())
+    if not any(available_roots):
+        raise FileNotFoundError(
+            "No excitation evolution roots exist: "
+            f"{root}"
+            + (
+                f", {legacy_root}"
+                if include_legacy and legacy_root is not None
+                else ""
+            )
+        )
+
+    rows = []
+    if root.exists():
+        for manifest_path in sorted(
+            root.rglob("evolution_manifest.hdf5")
+        ):
+            rows.append(
+                summarize_excitation_evolution_manifest(manifest_path)
+            )
+
+    if include_legacy and legacy_root is not None and legacy_root.exists():
+        for log_path in sorted(legacy_root.rglob("excitation_log.hdf5")):
+            rows.append(summarize_legacy_excitation_log(log_path))
+
+    table = pd.DataFrame(rows)
+    if table.empty:
+        table = pd.DataFrame(columns=EXCITATION_EVOLVED_MASTER_COLUMNS)
+    else:
+        table = (
+            table.drop_duplicates("run_path", keep="last")
+            .sort_values([
+                column for column in [
+                    "n_fcc_cells",
+                    "temp",
+                    "density",
+                    "radius",
+                    "energy_deposition",
+                    "ensemble",
+                    "evolve_seed",
+                    "run_path",
+                ]
+                if column in table.columns
+            ])
+            .reset_index(drop=True)
+        )
+
+    generated_columns = set(EXCITATION_EVOLVED_MASTER_COLUMNS)
+    generated_columns.add("summary_error")
+    old = None
+    if preserve_user_columns and "run_path" in table.columns:
+        preservation_paths = [output_path]
+        if (
+            local_output_path is not None
+            and local_output_path.resolve() != output_path.resolve()
+        ):
+            preservation_paths.append(local_output_path)
+
+        for preservation_path in preservation_paths:
+            if not preservation_path.exists():
+                continue
+            candidate = pd.read_csv(preservation_path)
+            if "run_path" not in candidate.columns:
+                continue
+            candidate = candidate.set_index("run_path")
+            old = (
+                candidate
+                if old is None
+                else candidate.combine_first(old)
+            )
+
+    if old is not None:
+        old = old.reset_index()
+        if "run_path" in old.columns:
+            preserved_columns = [
+                column
+                for column in old.columns
+                if (
+                    column in {"checked", "notes"}
+                    or column not in generated_columns
+                )
+                and column != "run_path"
+            ]
+            if preserved_columns:
+                table = table.merge(
+                    old[["run_path", *preserved_columns]],
+                    on="run_path",
+                    how="left",
+                )
+
+    for column in EXCITATION_EVOLVED_MASTER_COLUMNS:
+        if column not in table.columns:
+            table[column] = "" if column in {"checked", "notes"} else np.nan
+
+    extra_columns = [
+        column
+        for column in table.columns
+        if column not in EXCITATION_EVOLVED_MASTER_COLUMNS
+    ]
+    table = table[[*EXCITATION_EVOLVED_MASTER_COLUMNS, *extra_columns]]
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output_path, index=False)
+    table.attrs["csv_path"] = str(output_path)
+    if (
+        local_output_path is not None
+        and local_output_path.resolve() != output_path.resolve()
+    ):
+        local_output_path.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(local_output_path, index=False)
+        table.attrs["local_csv_path"] = str(local_output_path)
+
+    print(f"Wrote {len(table)} excitation evolution rows:")
+    print(output_path)
+    if "local_csv_path" in table.attrs:
+        print(table.attrs["local_csv_path"])
+    return table
 
 
 def build_thermalization_master_csv(
