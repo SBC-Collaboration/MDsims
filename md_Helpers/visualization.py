@@ -1085,13 +1085,12 @@ def animate_hot_spike_xy_slice_trajectory(
     frames = []
 
     if _is_two_segment_trajectory(result):
-        from .excitation_evolution import load_stitched_trajectory_frames
+        from .excitation_evolution import iter_stitched_trajectory
 
-        frame_items = load_stitched_trajectory_frames(
+        frame_items = iter_stitched_trajectory(
             result,
             stride=stride,
             max_frames=max_frames,
-            sample_by_physical_time=True,
         )
     else:
         trajectory_path = _get_trajectory_path(result)

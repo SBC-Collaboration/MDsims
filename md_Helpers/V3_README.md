@@ -135,9 +135,10 @@ segment's own `dt`. Both stitched readers remove the duplicated segment
 boundary. The optional materialized files are derivatives; the two raw
 segments and manifest remain authoritative.
 
-The hot-spike animation accepts the result directly, samples across the full
-run at uniform physical-time spacing, and shows segment number, raw timestep,
-and continuous physical time:
+The hot-spike animation accepts the result directly. It applies `stride` to
+the complete ordered sequence and then takes the first `max_frames`, crossing
+from segment 1 into segment 2 only when the selected sequence reaches that
+boundary. It shows segment number, raw timestep, and continuous physical time:
 
 ```python
 from md_Helpers.visualization import (
