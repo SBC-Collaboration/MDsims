@@ -252,9 +252,9 @@ class PathTests(unittest.TestCase):
         self.assertIn("ensemble_NPH", path_text)
         self.assertIn("Excitation_Evolved_NPH_v3", path_text)
         self.assertIn("pressure_0.050", path_text)
-        self.assertIn("tauS_5.000", path_text)
-        self.assertEqual(evolved["segment_1"]["tauS"], 5.0)
-        self.assertEqual(evolved["segment_2"]["tauS"], 5.0)
+        self.assertIn("tauS_50.000", path_text)
+        self.assertEqual(evolved["segment_1"]["tauS"], 50.0)
+        self.assertEqual(evolved["segment_2"]["tauS"], 50.0)
         self.assertEqual(evolved["ensemble"], "NPH")
 
     def test_nph_excitation_paths_allow_automatic_source_pressure(self):

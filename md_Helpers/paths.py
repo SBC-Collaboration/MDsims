@@ -286,7 +286,7 @@ def excitation_evolved_paths(
         raise ValueError("ensemble must be 'NVE' or 'NPH'")
     if ensemble == "NPH":
         if tauS is None:
-            tauS = 1000.0 * float(dt2)
+            tauS = 10000.0 * float(dt2)
         if float(tauS) <= 0:
             raise ValueError("tauS must be positive")
         if (

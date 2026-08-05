@@ -591,7 +591,7 @@ def get_or_create_two_segment_hot_spike(
 
     ``ensemble='NVE'`` preserves the standard fixed-volume evolution.
     ``ensemble='NPH'`` applies an isotropic constant-pressure barostat with
-    no thermostat. When omitted, ``tauS`` defaults to ``1000 * dt2`` and is
+    no thermostat. When omitted, ``tauS`` defaults to ``10000 * dt2`` and is
     held constant across both segments. The outer mask is diagnostic by
     default; set ``nph_mask_controls_box=True`` only to reproduce the
     experimental split-integrator construction.
@@ -948,6 +948,12 @@ def get_or_create_two_segment_hot_spike(
                 metadata_groups=metadata_groups,
                 classify_final=(segment_index == 2),
                 classification_kwargs=None,
+                box_volume_ratio_bounds=(
+                    (0.75, 1.5)
+                    if str(ensemble).upper() == "NPH"
+                    else None
+                ),
+                safety_check_period=100,
             )
 
         barostat_dof_path = segment_paths.get("barostat_dof_path")

@@ -1,5 +1,6 @@
 # runs.py
 
+import math
 from pathlib import Path
 
 import hoomd
@@ -719,6 +720,8 @@ def run_logged_trajectory_phase(
     classify_final=True,
     classification_kwargs=None,
     include_initial=True,
+    box_volume_ratio_bounds=None,
+    safety_check_period=100,
 ):
     """
     Run any evolved phase with one shared pattern:
@@ -753,7 +756,39 @@ def run_logged_trajectory_phase(
             mode="wb",
         )
         simulation.run(0, write_at_start=include_initial)
-        simulation.run(int(nsteps))
+        if box_volume_ratio_bounds is None:
+            simulation.run(int(nsteps))
+        else:
+            lower_ratio, upper_ratio = map(float, box_volume_ratio_bounds)
+            if not 0.0 < lower_ratio < 1.0 < upper_ratio:
+                raise ValueError(
+                    "box_volume_ratio_bounds must bracket 1.0"
+                )
+            check_period = int(safety_check_period)
+            if check_period <= 0:
+                raise ValueError("safety_check_period must be positive")
+
+            initial_volume = float(simulation.state.box.volume)
+            remaining = int(nsteps)
+            while remaining:
+                chunk = min(check_period, remaining)
+                simulation.run(chunk)
+                remaining -= chunk
+                current_volume = float(simulation.state.box.volume)
+                volume_ratio = current_volume / initial_volume
+                if (
+                    not math.isfinite(volume_ratio)
+                    or volume_ratio < lower_ratio
+                    or volume_ratio > upper_ratio
+                ):
+                    raise RuntimeError(
+                        "NPH safety stop before excessive memory growth: "
+                        f"box volume ratio={volume_ratio:.6g} at timestep "
+                        f"{int(simulation.timestep)}; allowed interval is "
+                        f"[{lower_ratio:.6g}, {upper_ratio:.6g}]. "
+                        "Increase tauS or inspect the pressure response "
+                        "before continuing."
+                    )
     finally:
         if trajectory_handle is not None:
             stop_gsd_trajectory_writer(

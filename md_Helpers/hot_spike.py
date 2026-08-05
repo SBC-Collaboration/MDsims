@@ -1083,8 +1083,8 @@ def get_or_create_hot_spike(
     pressure mask. When ``pressure`` is
     omitted, the helper uses the tail mean of the homogeneous thermalized
     source log before applying the excitation.
-    When omitted, ``tauS`` follows HOOMD's recommended starting point of
-    ``1000 * dt2`` and remains constant across both segments.
+    When omitted, the conservative ``tauS`` default is ``10000 * dt2`` and
+    remains constant across both segments.
     All particles control the box by default. The earlier split-integrator
     behavior is available only with ``nph_mask_controls_box=True``.
     """

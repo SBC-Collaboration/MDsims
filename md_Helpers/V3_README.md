@@ -199,11 +199,15 @@ complementary tags on `ConstantVolume`, and `rescale_all=True`) is retained
 only for controlled experiments via `nph_mask_controls_box=True`; it is not a
 standard NPH ensemble.
 
-NPH uses no thermostat. The default sets `tauS = 1000 * dt2`, giving
-`tauS=5.0` when `dt2=0.005`. This physical
+NPH uses no thermostat. The conservative default sets `tauS = 10000 * dt2`,
+giving `tauS=50.0` when `dt2=0.005`. This physical
 barostat time is held constant across both segments even though their
 integration timesteps differ. Override `tauS` only as part of a
 barostat-sensitivity check.
+
+The NPH runner checks the box every 100 steps and stops cleanly if its volume
+leaves 0.75--1.5 times the segment's starting volume. This guard prevents a
+runaway pressure response from exhausting host or GPU memory.
 
 NPH results are saved under the separate `Excitation_Evolved_NPH_v3` root,
 with `ensemble_NPH/pressure_.../tauS_...` below it. They cannot collide with
