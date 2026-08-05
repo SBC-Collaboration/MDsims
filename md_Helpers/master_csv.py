@@ -6,6 +6,7 @@ import pandas as pd
 from .paths import (
     CAVITATION_EVOLVED_V3_ROOT,
     CAVITATION_STATES_V3_ROOT,
+    EXCITATION_EVOLVED_NPH_V3_ROOT,
     EXCITATION_EVOLVED_V3_ROOT,
     EXCITATION_EVOLVED_V3_LEGACY_ROOT,
     EXCITATION_STATES_V3_ROOT,
@@ -33,6 +34,7 @@ DEFAULT_RESULTS_INVENTORY_ROOTS = {
     "cavitation_evolved": CAVITATION_EVOLVED_V3_ROOT,
     "excitation_initial": EXCITATION_STATES_V3_ROOT,
     "excitation_evolved": EXCITATION_EVOLVED_V3_ROOT,
+    "excitation_evolved_nph": EXCITATION_EVOLVED_NPH_V3_ROOT,
     "master_csv": MASTER_CSVS_V3_ROOT,
 }
 
@@ -49,6 +51,7 @@ EXCITATION_EVOLVED_MASTER_COLUMNS = [
     "evolution_format",
     "ensemble",
     "pressure",
+    "tauS",
     "dt1",
     "nsteps1",
     "dt2",
@@ -888,6 +891,7 @@ def summarize_excitation_evolution_manifest(manifest_path):
             ),
             "ensemble": run.get("ensemble", "NVE"),
             "pressure": run.get("pressure", np.nan),
+            "tauS": run.get("tauS", np.nan),
             "dt1": run.get("dt1", np.nan),
             "nsteps1": run.get("nsteps1", np.nan),
             "dt2": run.get("dt2", np.nan),
@@ -1003,7 +1007,10 @@ def summarize_legacy_excitation_log(log_path):
 
 
 def build_excitation_evolved_master_csv(
-    root=EXCITATION_EVOLVED_V3_ROOT,
+    root=(
+        EXCITATION_EVOLVED_V3_ROOT,
+        EXCITATION_EVOLVED_NPH_V3_ROOT,
+    ),
     legacy_root=EXCITATION_EVOLVED_V3_LEGACY_ROOT,
     output_path=None,
     output_name="excitation_evolved_master.csv",
@@ -1015,15 +1022,20 @@ def build_excitation_evolved_master_csv(
     """
     Rebuild a lightweight inventory of every excitation evolution found.
 
-    Current two-segment runs are discovered from their authoritative
-    manifests. Archived single-timestep runs may be included as well. Existing
+    Current NVE and NPH two-segment runs are discovered from their separate
+    roots and authoritative manifests. Pass one path or an iterable of paths
+    as ``root`` to override the defaults. Archived single-timestep runs may be
+    included as well. Existing
     ``checked``, ``notes``, and hand-added columns are preserved by ``run_path``
     when the CSV is refreshed. By default, the table is written both to the
     dataset master-CSV folder and to the repository root for convenient local
     access.
     """
 
-    root = Path(root)
+    if isinstance(root, (str, Path)):
+        roots = [Path(root)]
+    else:
+        roots = [Path(item) for item in root]
     legacy_root = Path(legacy_root) if legacy_root is not None else None
     output_path = _default_master_csv_path(output_path, output_name)
     if write_local_copy:
@@ -1035,13 +1047,13 @@ def build_excitation_evolved_master_csv(
     else:
         local_output_path = None
 
-    available_roots = [root.exists()]
+    available_roots = [root_path.exists() for root_path in roots]
     if include_legacy and legacy_root is not None:
         available_roots.append(legacy_root.exists())
     if not any(available_roots):
         raise FileNotFoundError(
             "No excitation evolution roots exist: "
-            f"{root}"
+            + ", ".join(map(str, roots))
             + (
                 f", {legacy_root}"
                 if include_legacy and legacy_root is not None
@@ -1050,13 +1062,14 @@ def build_excitation_evolved_master_csv(
         )
 
     rows = []
-    if root.exists():
-        for manifest_path in sorted(
-            root.rglob("evolution_manifest.hdf5")
-        ):
-            rows.append(
-                summarize_excitation_evolution_manifest(manifest_path)
-            )
+    for root_path in roots:
+        if root_path.exists():
+            for manifest_path in sorted(
+                root_path.rglob("evolution_manifest.hdf5")
+            ):
+                rows.append(
+                    summarize_excitation_evolution_manifest(manifest_path)
+                )
 
     if include_legacy and legacy_root is not None and legacy_root.exists():
         for log_path in sorted(legacy_root.rglob("excitation_log.hdf5")):
