@@ -51,6 +51,7 @@ def make_simulation(
     barostat_gamma=0.0,
     nph_outer_tags=None,
     nph_inner_tags=None,
+    nph_mask_controls_box=False,
     epsilon_LJ=1.0,
     sigma_LJ=1.0,
     r_cut_LJ=2.5,
@@ -101,10 +102,14 @@ def make_simulation(
     # ============================================================
     integrator = hoomd.md.Integrator(dt=dt)
 
-    cell = hoomd.md.nlist.Cell(buffer=buffer_LJ)
+    ensemble = str(ensemble).upper()
+    if ensemble == "NPH":
+        neighbor_list = hoomd.md.nlist.Tree(buffer=buffer_LJ)
+    else:
+        neighbor_list = hoomd.md.nlist.Cell(buffer=buffer_LJ)
 
     lj = hoomd.md.pair.LJ(
-        nlist=cell,
+        nlist=neighbor_list,
         mode=lj_mode,
     )
 
@@ -119,8 +124,6 @@ def make_simulation(
         lj.r_on[("A", "A")] = r_on_LJ
 
     integrator.forces.append(lj)
-
-    ensemble = str(ensemble).upper()
 
     if ensemble == "NVT":
         method = hoomd.md.methods.ConstantVolume(
@@ -139,11 +142,13 @@ def make_simulation(
                 "a positive tauS is required when ensemble='NPH'"
             )
         masked_nph = nph_outer_tags is not None
-        pressure_filter = (
+        outer_filter = (
             hoomd.filter.Tags(np.asarray(nph_outer_tags, dtype=np.uint64).tolist())
             if masked_nph
-            else hoomd.filter.All()
+            else None
         )
+        mask_controls_box = bool(masked_nph and nph_mask_controls_box)
+        pressure_filter = outer_filter if mask_controls_box else hoomd.filter.All()
         method = hoomd.md.methods.ConstantPressure(
             filter=pressure_filter,
             S=float(pressure),
@@ -151,11 +156,11 @@ def make_simulation(
             couple=str(pressure_couple),
             thermostat=None,
             gamma=float(barostat_gamma),
-            rescale_all=bool(masked_nph),
+            rescale_all=mask_controls_box,
         )
         integrator.methods.append(method)
 
-        if masked_nph:
+        if mask_controls_box:
             if nph_inner_tags is None:
                 raise ValueError(
                     "nph_inner_tags is required with nph_outer_tags"
@@ -224,8 +229,21 @@ def make_simulation(
         "tauS": tauS,
         "pressure_couple": pressure_couple,
         "barostat_gamma": barostat_gamma,
+        "neighbor_list": type(neighbor_list).__name__,
         "nph_masked": bool(
             ensemble == "NPH" and nph_outer_tags is not None
+        ),
+        "nph_mask_controls_box": bool(
+            ensemble == "NPH"
+            and nph_outer_tags is not None
+            and nph_mask_controls_box
+        ),
+        "nph_pressure_filter": (
+            "outer_mask"
+            if ensemble == "NPH"
+            and nph_outer_tags is not None
+            and nph_mask_controls_box
+            else "all_particles"
         ),
         "nph_outer_particle_count": (
             int(len(nph_outer_tags)) if nph_outer_tags is not None else N
@@ -245,7 +263,7 @@ def make_simulation(
     }
 
     simulation.nph_outer_filter = (
-        pressure_filter
+        outer_filter
         if ensemble == "NPH" and nph_outer_tags is not None
         else None
     )

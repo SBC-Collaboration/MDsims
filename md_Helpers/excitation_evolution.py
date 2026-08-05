@@ -190,6 +190,9 @@ def _as_paths(result_or_paths):
             "outer_mask_diameter_fraction": run.get(
                 "outer_mask_diameter_fraction"
             ),
+            "nph_mask_controls_box": bool(
+                run.get("nph_mask_controls_box", False)
+            ),
             "pressure_source": str(run.get("pressure_source", "unknown")),
         }
 
@@ -315,6 +318,9 @@ def _manifest_groups(
         run["outer_mask_diameter_fraction"] = float(
             paths["outer_mask_diameter_fraction"]
         )
+    run["nph_mask_controls_box"] = bool(
+        paths.get("nph_mask_controls_box", False)
+    )
     for key in [
         "pressure_source",
         "pressure_source_log_path",
@@ -578,6 +584,7 @@ def get_or_create_two_segment_hot_spike(
     barostat_gamma=0.0,
     outer_mask_diameter_fraction=0.75,
     pressure_tail_samples=100,
+    nph_mask_controls_box=False,
 ):
     """
     Run or load a two-segment hot-spike evolution.
@@ -585,7 +592,9 @@ def get_or_create_two_segment_hot_spike(
     ``ensemble='NVE'`` preserves the standard fixed-volume evolution.
     ``ensemble='NPH'`` applies an isotropic constant-pressure barostat with
     no thermostat. When omitted, ``tauS`` defaults to ``1000 * dt2`` and is
-    held constant across both segments.
+    held constant across both segments. The outer mask is diagnostic by
+    default; set ``nph_mask_controls_box=True`` only to reproduce the
+    experimental split-integrator construction.
     """
 
     # Local import avoids a module cycle while keeping initial-state ownership
@@ -667,6 +676,16 @@ def get_or_create_two_segment_hot_spike(
             f"({mask_info['outer_particle_fraction']:.3%}), "
             f"radius={mask_info['radius']:.6g}"
         )
+        if nph_mask_controls_box:
+            print(
+                "NPH box pressure control: experimental outer-mask "
+                "split integrator"
+            )
+        else:
+            print(
+                "NPH box pressure control: all particles "
+                "(outer mask is diagnostic only)"
+            )
 
     paths = excitation_evolved_paths(
         n_fcc_cells=n_fcc_cells,
@@ -692,6 +711,7 @@ def get_or_create_two_segment_hot_spike(
         pressure_couple=pressure_couple,
         barostat_gamma=barostat_gamma,
         outer_mask_diameter_fraction=outer_mask_diameter_fraction,
+        nph_mask_controls_box=nph_mask_controls_box,
     )
     if pressure_info is not None:
         paths["pressure_source"] = "thermalized_source_log_tail_mean"
@@ -824,6 +844,7 @@ def get_or_create_two_segment_hot_spike(
                 nph_inner_tags=(
                     None if mask_info is None else mask_info["inner_tags"]
                 ),
+                nph_mask_controls_box=nph_mask_controls_box,
                 starting_state_path=(
                     str(initial_result["paths"]["state_path"])
                     if segment_index == 1
@@ -847,6 +868,7 @@ def get_or_create_two_segment_hot_spike(
                         "outer_particle_fraction"
                     ],
                     "nph_mask_membership": mask_info["membership"],
+                    "nph_mask_controls_box": bool(nph_mask_controls_box),
                 })
             if str(ensemble).upper() == "NPH" and segment_index == 2:
                 prior_dof_path = paths["segment_1"].get(

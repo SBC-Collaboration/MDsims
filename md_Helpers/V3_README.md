@@ -189,12 +189,15 @@ nph_result = get_or_create_hot_spike(
 The helper first loads the homogeneous thermalized source and uses the mean of
 its last 100 logged pressure samples as the pressure set point. It then applies
 the excitation and makes a fixed particle-tag mask outside a sphere centered
-on the spike with diameter `0.75` times the thermalized box length. The outer
-tags use `ConstantPressure`; the complementary inner tags use
-`ConstantVolume`; and `rescale_all=True` scales every particle with the box.
-This is a masked hybrid NPH construction, not the standard all-particle NPH
-ensemble. Set `pressure` explicitly to override the source-tail mean, or set
-`outer_mask_diameter_fraction=None` to recover all-particle NPH.
+on the spike with diameter `0.75` times the thermalized box length. The mask is
+diagnostic by default: its pressure is logged separately and its particles are
+colored in the animation, while standard all-particle `ConstantPressure`
+controls and scales the box. This makes the thermalized all-particle pressure
+a consistent set point. Set `pressure` explicitly to override the source-tail
+mean. The earlier hybrid construction (outer tags on `ConstantPressure`,
+complementary tags on `ConstantVolume`, and `rescale_all=True`) is retained
+only for controlled experiments via `nph_mask_controls_box=True`; it is not a
+standard NPH ensemble.
 
 NPH uses no thermostat. The default sets `tauS = 1000 * dt2`, giving
 `tauS=5.0` when `dt2=0.005`. This physical

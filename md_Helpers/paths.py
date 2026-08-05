@@ -255,6 +255,7 @@ def excitation_evolved_paths(
     pressure_couple="xyz",
     barostat_gamma=0.0,
     outer_mask_diameter_fraction=0.75,
+    nph_mask_controls_box=False,
 ):
     """
     Build paths for the two-segment V3 excitation evolution format.
@@ -339,6 +340,11 @@ def excitation_evolved_paths(
                 "outer_mask_diameter_"
                 f"{format_float(outer_mask_diameter_fraction)}L"
             )
+            evolution_root = evolution_root / (
+                "pressure_control_outer_mask_experimental"
+                if nph_mask_controls_box
+                else "pressure_control_all_particles"
+            )
 
     folder = (
         evolution_root
@@ -418,6 +424,7 @@ def excitation_evolved_paths(
             if outer_mask_diameter_fraction is None
             else float(outer_mask_diameter_fraction)
         ),
+        "nph_mask_controls_box": bool(nph_mask_controls_box),
     }
 
 

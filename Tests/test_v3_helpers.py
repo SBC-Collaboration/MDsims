@@ -274,6 +274,30 @@ class PathTests(unittest.TestCase):
         )
         self.assertIn("pressure_auto_from_thermalized", str(evolved["folder"]))
         self.assertIn("outer_mask_diameter_0.750L", str(evolved["folder"]))
+        self.assertIn("pressure_control_all_particles", str(evolved["folder"]))
+        self.assertFalse(evolved["nph_mask_controls_box"])
+
+    def test_experimental_mask_pressure_control_has_separate_path(self):
+        evolved = paths.excitation_evolved_paths(
+            n_fcc_cells=30,
+            source_rho=0.71,
+            kT=0.8,
+            source_nsteps=1_000_000,
+            source_seed=1,
+            method="velocity_rescale_com",
+            radius=3.0,
+            energy=4000.0,
+            evolve_seed=1,
+            dt2=0.005,
+            nsteps2=100_000,
+            ensemble="NPH",
+            nph_mask_controls_box=True,
+        )
+        self.assertIn(
+            "pressure_control_outer_mask_experimental",
+            str(evolved["folder"]),
+        )
+        self.assertTrue(evolved["nph_mask_controls_box"])
 
 
 class ExcitationEvolutionTests(unittest.TestCase):

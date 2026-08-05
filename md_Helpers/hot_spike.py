@@ -733,7 +733,13 @@ def infer_integrator_metadata(simulation):
             simulation_metadata.get("nph_inner_particle_count", 0)
         )
         metadata["nph_rescale_all"] = bool(
-            simulation_metadata.get("nph_masked", False)
+            simulation_metadata.get("nph_mask_controls_box", False)
+        )
+        metadata["nph_mask_controls_box"] = bool(
+            simulation_metadata.get("nph_mask_controls_box", False)
+        )
+        metadata["nph_pressure_filter"] = str(
+            simulation_metadata.get("nph_pressure_filter", "all_particles")
         )
         for key in [
             "nph_mask_diameter_fraction",
@@ -1065,6 +1071,7 @@ def get_or_create_hot_spike(
     base_folder=None,
     outer_mask_diameter_fraction=0.75,
     pressure_tail_samples=100,
+    nph_mask_controls_box=False,
 ):
     """
     Load or run the standard two-segment hot-spike evolution.
@@ -1072,11 +1079,14 @@ def get_or_create_hot_spike(
     Segment 1 defaults to ``dt1=0.0005`` for ``nsteps1=200_000``.
     Supply ``dt2`` and ``nsteps2`` for segment 2. The old ``dt`` and
     ``evolve_nsteps`` keywords are accepted as aliases during migration.
-    Set ``ensemble='NPH'`` for a masked NPH comparison. When ``pressure`` is
+    Set ``ensemble='NPH'`` for an NPH comparison with a diagnostic outer
+    pressure mask. When ``pressure`` is
     omitted, the helper uses the tail mean of the homogeneous thermalized
     source log before applying the excitation.
     When omitted, ``tauS`` follows HOOMD's recommended starting point of
     ``1000 * dt2`` and remains constant across both segments.
+    All particles control the box by default. The earlier split-integrator
+    behavior is available only with ``nph_mask_controls_box=True``.
     """
 
     if dt2 is None:
@@ -1121,4 +1131,5 @@ def get_or_create_hot_spike(
         base_folder=base_folder,
         outer_mask_diameter_fraction=outer_mask_diameter_fraction,
         pressure_tail_samples=pressure_tail_samples,
+        nph_mask_controls_box=nph_mask_controls_box,
     )
