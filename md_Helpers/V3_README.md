@@ -214,6 +214,9 @@ barostat-sensitivity check.
 The NPH runner checks the box every 100 steps and stops cleanly if its volume
 leaves 0.75--1.5 times the segment's starting volume. This guard prevents a
 runaway pressure response from exhausting host or GPU memory.
+Set `nph_box_volume_ratio_bounds=(lower, upper)` to change the permitted range
+or `nph_safety_check_period` to change the check frequency. The selected
+bounds are stored in the manifest and segment-log run metadata.
 
 NPH results are saved under the separate `Excitation_Evolved_NPH_v3` root,
 with `ensemble_NPH/pressure_.../tauS_...` below it. They cannot collide with

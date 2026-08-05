@@ -1072,6 +1072,8 @@ def get_or_create_hot_spike(
     outer_mask_diameter_fraction=0.75,
     pressure_tail_samples=100,
     nph_mask_controls_box=False,
+    nph_box_volume_ratio_bounds=(0.75, 1.5),
+    nph_safety_check_period=100,
 ):
     """
     Load or run the standard two-segment hot-spike evolution.
@@ -1132,4 +1134,6 @@ def get_or_create_hot_spike(
         outer_mask_diameter_fraction=outer_mask_diameter_fraction,
         pressure_tail_samples=pressure_tail_samples,
         nph_mask_controls_box=nph_mask_controls_box,
+        nph_box_volume_ratio_bounds=nph_box_volume_ratio_bounds,
+        nph_safety_check_period=nph_safety_check_period,
     )

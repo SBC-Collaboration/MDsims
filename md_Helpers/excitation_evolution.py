@@ -329,6 +329,13 @@ def _manifest_groups(
         paths.get("nph_mask_controls_box", False)
     )
     for key in [
+        "nph_safety_check_period",
+        "nph_min_volume_ratio",
+        "nph_max_volume_ratio",
+    ]:
+        if paths.get(key) is not None:
+            run[key] = paths[key]
+    for key in [
         "pressure_source",
         "pressure_source_log_path",
         "pressure_source_std",
@@ -595,6 +602,8 @@ def get_or_create_two_segment_hot_spike(
     outer_mask_diameter_fraction=0.75,
     pressure_tail_samples=100,
     nph_mask_controls_box=False,
+    nph_box_volume_ratio_bounds=(0.75, 1.5),
+    nph_safety_check_period=100,
 ):
     """
     Run or load a two-segment hot-spike evolution.
@@ -613,6 +622,21 @@ def get_or_create_two_segment_hot_spike(
     from . import classification as classification_helpers
 
     ensemble = str(ensemble).upper()
+    if nph_box_volume_ratio_bounds is not None:
+        lower_volume_ratio, upper_volume_ratio = map(
+            float,
+            nph_box_volume_ratio_bounds,
+        )
+        if not 0.0 < lower_volume_ratio < 1.0 < upper_volume_ratio:
+            raise ValueError(
+                "nph_box_volume_ratio_bounds must bracket 1.0"
+            )
+        nph_box_volume_ratio_bounds = (
+            lower_volume_ratio,
+            upper_volume_ratio,
+        )
+    if int(nph_safety_check_period) <= 0:
+        raise ValueError("nph_safety_check_period must be positive")
     if base_folder is None:
         base_folder = (
             EXCITATION_EVOLVED_NPH_V3_ROOT
@@ -764,6 +788,16 @@ def get_or_create_two_segment_hot_spike(
             ) * float(mask_info["outer_particle_fraction"])
     elif ensemble == "NPH":
         paths["pressure_source"] = "explicit_input"
+
+    if ensemble == "NPH":
+        paths["nph_safety_check_period"] = int(nph_safety_check_period)
+        if nph_box_volume_ratio_bounds is not None:
+            paths["nph_min_volume_ratio"] = float(
+                nph_box_volume_ratio_bounds[0]
+            )
+            paths["nph_max_volume_ratio"] = float(
+                nph_box_volume_ratio_bounds[1]
+            )
 
     if initial_result["frame"] is None:
         return {
@@ -962,6 +996,20 @@ def get_or_create_two_segment_hot_spike(
                 else "created_from_saved_or_initial_frame"
             )
         )
+        if str(ensemble).upper() == "NPH":
+            metadata_groups["metadata/run"].update({
+                "nph_safety_check_period": int(nph_safety_check_period),
+                "nph_min_volume_ratio": (
+                    np.nan
+                    if nph_box_volume_ratio_bounds is None
+                    else float(nph_box_volume_ratio_bounds[0])
+                ),
+                "nph_max_volume_ratio": (
+                    np.nan
+                    if nph_box_volume_ratio_bounds is None
+                    else float(nph_box_volume_ratio_bounds[1])
+                ),
+            })
         if not common_metadata:
             common_metadata = {
                 key: value
@@ -993,11 +1041,11 @@ def get_or_create_two_segment_hot_spike(
                 classify_final=(segment_index == 2),
                 classification_kwargs=None,
                 box_volume_ratio_bounds=(
-                    (0.75, 1.5)
+                    nph_box_volume_ratio_bounds
                     if str(ensemble).upper() == "NPH"
                     else None
                 ),
-                safety_check_period=100,
+                safety_check_period=nph_safety_check_period,
             )
 
         barostat_dof_path = segment_paths.get("barostat_dof_path")
