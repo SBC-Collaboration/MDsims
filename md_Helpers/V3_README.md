@@ -199,6 +199,12 @@ complementary tags on `ConstantVolume`, and `rescale_all=True`) is retained
 only for controlled experiments via `nph_mask_controls_box=True`; it is not a
 standard NPH ensemble.
 
+For that masked controller, an automatically loaded thermalized pressure is
+multiplied by the outer particle fraction before it is used as the subset
+pressure target. This is necessary because HOOMD's filtered pressure
+contribution is normalized by the full box volume. An explicitly supplied
+`pressure` is treated as the intended subset target and is not rescaled.
+
 NPH uses no thermostat. The conservative default sets `tauS = 10000 * dt2`,
 giving `tauS=50.0` when `dt2=0.005`. This physical
 barostat time is held constant across both segments even though their

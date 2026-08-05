@@ -1861,6 +1861,7 @@ def plot_log_quantity(
     Special behavior:
     - "kinetic_energy" plots KE/N
     - "potential_energy" plots PE/N
+    - "volume_change" plots percent change from the first logged volume
     - stitched two-segment logs mark the segment boundary
 
     The calling keys stay the same:
@@ -1869,6 +1870,7 @@ def plot_log_quantity(
         vh.plot_log_quantity(log, "kinetic_temperature")
         vh.plot_log_quantity(log, "potential_energy")
         vh.plot_log_quantity(log, "kinetic_energy")
+        vh.plot_log_quantity(log, "volume_change")
     """
 
     # ============================================================
@@ -1889,15 +1891,26 @@ def plot_log_quantity(
            ["ThermodynamicQuantities"]
     )
 
+    logged_quantity = "volume" if quantity == "volume_change" else quantity
     values = np.asarray(
-        thermo[quantity],
+        thermo[logged_quantity],
         dtype=float,
     )
 
     # ============================================================
     # Convert total energies to per-particle energies
     # ============================================================
-    if quantity in ["kinetic_energy", "potential_energy"]:
+    if quantity == "volume_change":
+        if values.size == 0:
+            raise ValueError("The stitched log contains no volume samples")
+        initial_volume = float(values[0])
+        if initial_volume == 0:
+            raise ValueError("The initial logged volume is zero")
+        values = 100.0 * (values / initial_volume - 1.0)
+        y_label = "Volume Change (%)"
+        title = f"Volume Change vs {x_name}"
+
+    elif quantity in ["kinetic_energy", "potential_energy"]:
         metadata = (
             log.get("metadata", {})
                .get("state", {})

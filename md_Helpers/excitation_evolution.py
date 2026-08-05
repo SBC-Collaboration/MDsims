@@ -194,6 +194,13 @@ def _as_paths(result_or_paths):
                 run.get("nph_mask_controls_box", False)
             ),
             "pressure_source": str(run.get("pressure_source", "unknown")),
+            "thermalized_global_pressure": run.get(
+                "thermalized_global_pressure"
+            ),
+            "thermalized_global_pressure_std": run.get(
+                "thermalized_global_pressure_std"
+            ),
+            "pressure_scale_fraction": run.get("pressure_scale_fraction"),
         }
 
     if not isinstance(result_or_paths, dict):
@@ -326,6 +333,9 @@ def _manifest_groups(
         "pressure_source_log_path",
         "pressure_source_std",
         "pressure_source_samples",
+        "thermalized_global_pressure",
+        "thermalized_global_pressure_std",
+        "pressure_scale_fraction",
     ]:
         if paths.get(key) is not None:
             run[key] = paths[key]
@@ -613,6 +623,7 @@ def get_or_create_two_segment_hot_spike(
     ensure_two_segment_root(base_folder)
 
     pressure_info = None
+    pressure_was_explicit = pressure is not None
     if ensemble == "NPH":
         source_result = cavitation_helpers.get_source_randomization_result(
             n_fcc_cells=n_fcc_cells,
@@ -687,6 +698,22 @@ def get_or_create_two_segment_hot_spike(
                 "(outer mask is diagnostic only)"
             )
 
+        if (
+            nph_mask_controls_box
+            and not pressure_was_explicit
+            and pressure_info is not None
+        ):
+            thermalized_global_pressure = float(pressure)
+            pressure_scale_fraction = float(
+                mask_info["outer_particle_fraction"]
+            )
+            pressure = thermalized_global_pressure * pressure_scale_fraction
+            print(
+                "NPH outer-mask pressure target: "
+                f"{pressure:.8g} = {thermalized_global_pressure:.8g} "
+                f"x {pressure_scale_fraction:.6g}"
+            )
+
     paths = excitation_evolved_paths(
         n_fcc_cells=n_fcc_cells,
         source_rho=target_rho,
@@ -714,10 +741,27 @@ def get_or_create_two_segment_hot_spike(
         nph_mask_controls_box=nph_mask_controls_box,
     )
     if pressure_info is not None:
-        paths["pressure_source"] = "thermalized_source_log_tail_mean"
+        paths["pressure_source"] = (
+            "thermalized_source_tail_scaled_by_outer_fraction"
+            if nph_mask_controls_box
+            else "thermalized_source_log_tail_mean"
+        )
         paths["pressure_source_log_path"] = pressure_info["log_path"]
         paths["pressure_source_std"] = pressure_info["pressure_std"]
         paths["pressure_source_samples"] = pressure_info["n_samples"]
+        if nph_mask_controls_box and mask_info is not None:
+            paths["thermalized_global_pressure"] = float(
+                pressure_info["pressure"]
+            )
+            paths["thermalized_global_pressure_std"] = float(
+                pressure_info["pressure_std"]
+            )
+            paths["pressure_scale_fraction"] = float(
+                mask_info["outer_particle_fraction"]
+            )
+            paths["pressure_source_std"] = float(
+                pressure_info["pressure_std"]
+            ) * float(mask_info["outer_particle_fraction"])
     elif ensemble == "NPH":
         paths["pressure_source"] = "explicit_input"
 
