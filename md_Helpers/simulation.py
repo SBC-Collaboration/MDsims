@@ -2,6 +2,7 @@
 
 import hoomd
 import gsd.hoomd
+import numpy as np
 
 from . import runs as lh
 from . import lattices as cl
@@ -48,6 +49,8 @@ def make_simulation(
     tauS=None,
     pressure_couple="xyz",
     barostat_gamma=0.0,
+    nph_outer_tags=None,
+    nph_inner_tags=None,
     epsilon_LJ=1.0,
     sigma_LJ=1.0,
     r_cut_LJ=2.5,
@@ -135,18 +138,40 @@ def make_simulation(
             raise ValueError(
                 "a positive tauS is required when ensemble='NPH'"
             )
+        masked_nph = nph_outer_tags is not None
+        pressure_filter = (
+            hoomd.filter.Tags(np.asarray(nph_outer_tags, dtype=np.uint64).tolist())
+            if masked_nph
+            else hoomd.filter.All()
+        )
         method = hoomd.md.methods.ConstantPressure(
-            filter=hoomd.filter.All(),
+            filter=pressure_filter,
             S=float(pressure),
             tauS=float(tauS),
             couple=str(pressure_couple),
             thermostat=None,
             gamma=float(barostat_gamma),
+            rescale_all=bool(masked_nph),
         )
+        integrator.methods.append(method)
+
+        if masked_nph:
+            if nph_inner_tags is None:
+                raise ValueError(
+                    "nph_inner_tags is required with nph_outer_tags"
+                )
+            inner_tags = np.asarray(nph_inner_tags, dtype=np.uint64).tolist()
+            if inner_tags:
+                integrator.methods.append(
+                    hoomd.md.methods.ConstantVolume(
+                        filter=hoomd.filter.Tags(inner_tags),
+                    )
+                )
     else:
         raise ValueError("ensemble must be 'NVT', 'NVE', or 'NPH'")
 
-    integrator.methods.append(method)
+    if ensemble != "NPH":
+        integrator.methods.append(method)
 
     simulation.operations.integrator = integrator
 
@@ -199,6 +224,15 @@ def make_simulation(
         "tauS": tauS,
         "pressure_couple": pressure_couple,
         "barostat_gamma": barostat_gamma,
+        "nph_masked": bool(
+            ensemble == "NPH" and nph_outer_tags is not None
+        ),
+        "nph_outer_particle_count": (
+            int(len(nph_outer_tags)) if nph_outer_tags is not None else N
+        ),
+        "nph_inner_particle_count": (
+            int(len(nph_inner_tags)) if nph_inner_tags is not None else 0
+        ),
 
         "epsilon_LJ": epsilon_LJ,
         "sigma_LJ": sigma_LJ,
@@ -209,6 +243,12 @@ def make_simulation(
 
         "starting_state_path": starting_state_path,
     }
+
+    simulation.nph_outer_filter = (
+        pressure_filter
+        if ensemble == "NPH" and nph_outer_tags is not None
+        else None
+    )
 
     return simulation
 

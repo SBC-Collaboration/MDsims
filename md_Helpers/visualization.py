@@ -1204,6 +1204,253 @@ def animate_hot_spike_xy_slice_trajectory(
     return IPython.display.HTML(anim.to_jshtml())
 
 
+def animate_masked_nph_hot_spike_xy_slice_trajectory(
+    result,
+    fraction=0.10,
+    stride=1,
+    max_frames=100,
+    point_size=1,
+    alpha=0.7,
+    interval=120,
+    particle_stride=1,
+    masked_color="tab:orange",
+    inner_color="tab:blue",
+    show_mask_boundary=True,
+    show_radius=True,
+    show_box=True,
+):
+    """
+    Animate a masked NPH hot-spike trajectory with its changing box.
+
+    The particle mask is a fixed set of tags selected after excitation. The
+    box, mask boundary, spike center, and spike radius are scaled using each
+    frame's box lengths. ``stride`` and ``max_frames`` behave identically to
+    :func:`animate_hot_spike_xy_slice_trajectory`. ``particle_stride`` can
+    reduce rendering cost without changing which trajectory frames are used.
+    """
+
+    if fraction <= 0 or fraction > 1:
+        raise ValueError("fraction must satisfy 0 < fraction <= 1")
+    if int(stride) <= 0:
+        raise ValueError("stride must be positive")
+    if int(particle_stride) <= 0:
+        raise ValueError("particle_stride must be positive")
+    if not isinstance(result, dict) or "initial_result" not in result:
+        raise ValueError(
+            "Expected the result returned by get_or_create_hot_spike()."
+        )
+
+    from .excitation_evolution import (
+        build_outer_pressure_mask,
+        iter_stitched_trajectory,
+    )
+
+    paths = result.get("paths", {})
+    diameter_fraction = paths.get("outer_mask_diameter_fraction", 0.75)
+    if diameter_fraction is None:
+        raise ValueError(
+            "This result does not use an outer NPH particle mask."
+        )
+
+    mask_info = build_outer_pressure_mask(
+        result["initial_result"],
+        diameter_fraction=diameter_fraction,
+    )
+    creation_info = _hot_spike_creation_info(result)
+    reference_box = np.asarray(
+        result["initial_result"]["source_result"]["frame"]
+              .configuration.box[:3],
+        dtype=np.float64,
+    )
+    reference_center = np.asarray(mask_info["center"], dtype=np.float64)
+    reference_mask_radius = float(mask_info["radius"])
+    reference_spike_radius = creation_info.get("radius")
+
+    particle_count = int(result["initial_result"]["frame"].particles.N)
+    outer_membership = np.zeros(particle_count, dtype=bool)
+    outer_membership[mask_info["outer_tags"].astype(np.int64)] = True
+    displayed_particles = (
+        np.arange(particle_count, dtype=np.int64) % int(particle_stride) == 0
+    )
+
+    frames = []
+    for item in iter_stitched_trajectory(
+        result,
+        stride=stride,
+        max_frames=max_frames,
+    ):
+        frame = item["frame"]
+        positions = np.asarray(frame.particles.position, dtype=np.float64)
+        if positions.shape[0] != particle_count:
+            raise ValueError(
+                "Particle count changed, so fixed mask tags cannot be applied."
+            )
+
+        box_lengths = np.asarray(
+            frame.configuration.box[:3],
+            dtype=np.float64,
+        )
+        positions = (
+            (positions + 0.5 * box_lengths) % box_lengths
+            - 0.5 * box_lengths
+        )
+
+        scale = box_lengths / reference_box
+        center = reference_center * scale
+        dz = positions[:, 2] - center[2]
+        dz -= box_lengths[2] * np.round(dz / box_lengths[2])
+        slice_mask = (
+            np.abs(dz) <= 0.5 * float(fraction) * box_lengths[2]
+        )
+        outer_visible = slice_mask & outer_membership & displayed_particles
+        inner_visible = slice_mask & ~outer_membership & displayed_particles
+        isotropic_scale = float(np.min(scale))
+
+        frames.append({
+            "frame_index": int(item["frame_index"]),
+            "step": int(item["timestep"]),
+            "segment_index": int(item["segment_index"]),
+            "elapsed_time": float(item["elapsed_time"]),
+            "outer_xy": positions[outer_visible, :2],
+            "inner_xy": positions[inner_visible, :2],
+            "box_lengths": box_lengths,
+            "center_xy": center[:2],
+            "mask_radius": reference_mask_radius * isotropic_scale,
+            "spike_radius": (
+                None
+                if reference_spike_radius is None
+                else float(reference_spike_radius) * isotropic_scale
+            ),
+            "volume": float(np.prod(box_lengths)),
+            "density": float(particle_count / np.prod(box_lengths)),
+        })
+
+    if not frames:
+        raise ValueError("No frames found in the masked NPH trajectory.")
+
+    max_lx = max(frame["box_lengths"][0] for frame in frames)
+    max_ly = max(frame["box_lengths"][1] for frame in frames)
+    axis_half_width = 0.525 * max(max_lx, max_ly)
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    inner_scatter = ax.scatter(
+        [],
+        [],
+        s=point_size,
+        alpha=alpha,
+        color=inner_color,
+        label="Inner / unmasked",
+        rasterized=True,
+    )
+    outer_scatter = ax.scatter(
+        [],
+        [],
+        s=point_size,
+        alpha=alpha,
+        color=masked_color,
+        label="Outer pressure mask",
+        rasterized=True,
+    )
+    artists = [inner_scatter, outer_scatter]
+
+    box_patch = None
+    if show_box:
+        box_patch = plt.Rectangle(
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            fill=False,
+            linewidth=2,
+            color="black",
+            label="Simulation box",
+        )
+        ax.add_patch(box_patch)
+        artists.append(box_patch)
+
+    mask_circle = None
+    if show_mask_boundary:
+        mask_circle = plt.Circle(
+            (0.0, 0.0),
+            1.0,
+            fill=False,
+            linewidth=2,
+            linestyle="--",
+            color=masked_color,
+            label="Scaled mask boundary",
+        )
+        ax.add_patch(mask_circle)
+        artists.append(mask_circle)
+
+    spike_circle = None
+    if show_radius and reference_spike_radius is not None:
+        spike_circle = plt.Circle(
+            (0.0, 0.0),
+            1.0,
+            fill=False,
+            linewidth=2,
+            linestyle=":",
+            color="red",
+            label="Excitation radius",
+        )
+        ax.add_patch(spike_circle)
+        artists.append(spike_circle)
+
+    title = ax.set_title("")
+    artists.append(title)
+    ax.set_xlim(-axis_half_width, axis_half_width)
+    ax.set_ylim(-axis_half_width, axis_half_width)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal")
+    ax.legend(loc="upper right", markerscale=4)
+
+    initial_volume = frames[0]["volume"]
+
+    def update(frame_data):
+        inner_scatter.set_offsets(frame_data["inner_xy"])
+        outer_scatter.set_offsets(frame_data["outer_xy"])
+        lx, ly = frame_data["box_lengths"][:2]
+
+        if box_patch is not None:
+            box_patch.set_xy((-0.5 * lx, -0.5 * ly))
+            box_patch.set_width(lx)
+            box_patch.set_height(ly)
+        if mask_circle is not None:
+            mask_circle.center = frame_data["center_xy"]
+            mask_circle.set_radius(frame_data["mask_radius"])
+        if spike_circle is not None:
+            spike_circle.center = frame_data["center_xy"]
+            spike_circle.set_radius(frame_data["spike_radius"])
+
+        volume_change = 100.0 * (
+            frame_data["volume"] / initial_volume - 1.0
+        )
+        time_label = (
+            f" | time {frame_data['elapsed_time']:.4f}"
+            if np.isfinite(frame_data["elapsed_time"])
+            else ""
+        )
+        title.set_text(
+            f"Masked NPH | frame {frame_data['frame_index']}"
+            f" | segment {frame_data['segment_index']}"
+            f" | step {frame_data['step']}{time_label}\n"
+            f"Lx={lx:.4f}, Ly={ly:.4f}"
+            f" | volume change={volume_change:+.3f}%"
+            f" | density={frame_data['density']:.5f}"
+        )
+        return tuple(artists)
+
+    anim = animation.FuncAnimation(
+        fig,
+        update,
+        frames=frames,
+        interval=interval,
+        blit=True,
+    )
+    plt.close(fig)
+    return IPython.display.HTML(anim.to_jshtml())
+
+
 def _periodic_weighted_center(points, weights, box_lengths):
     """Return a weighted center for periodic coordinates in [-L/2, L/2)."""
 

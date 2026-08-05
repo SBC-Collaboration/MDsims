@@ -250,31 +250,55 @@ class PathTests(unittest.TestCase):
         )
         path_text = str(evolved["final_state_path"])
         self.assertIn("ensemble_NPH", path_text)
+        self.assertIn("Excitation_Evolved_NPH_v3", path_text)
         self.assertIn("pressure_0.050", path_text)
         self.assertIn("tauS_5.000", path_text)
         self.assertEqual(evolved["segment_1"]["tauS"], 5.0)
         self.assertEqual(evolved["segment_2"]["tauS"], 5.0)
         self.assertEqual(evolved["ensemble"], "NPH")
 
-    def test_nph_excitation_paths_require_pressure(self):
-        with self.assertRaisesRegex(ValueError, "pressure is required"):
-            paths.excitation_evolved_paths(
-                n_fcc_cells=30,
-                source_rho=0.71,
-                kT=0.8,
-                source_nsteps=1_000_000,
-                source_seed=1,
-                method="velocity_rescale_com",
-                radius=3.0,
-                energy=4000.0,
-                evolve_seed=1,
-                dt2=0.005,
-                nsteps2=100_000,
-                ensemble="NPH",
-            )
+    def test_nph_excitation_paths_allow_automatic_source_pressure(self):
+        evolved = paths.excitation_evolved_paths(
+            n_fcc_cells=30,
+            source_rho=0.71,
+            kT=0.8,
+            source_nsteps=1_000_000,
+            source_seed=1,
+            method="velocity_rescale_com",
+            radius=3.0,
+            energy=4000.0,
+            evolve_seed=1,
+            dt2=0.005,
+            nsteps2=100_000,
+            ensemble="NPH",
+        )
+        self.assertIn("pressure_auto_from_thermalized", str(evolved["folder"]))
+        self.assertIn("outer_mask_diameter_0.750L", str(evolved["folder"]))
 
 
 class ExcitationEvolutionTests(unittest.TestCase):
+    def test_outer_pressure_mask_uses_thermalized_box_and_spike_center(self):
+        source_frame = make_frame(
+            positions=[[0, 0, 0], [3.1, 0, 0], [-3.9, 0, 0]],
+            box_lengths=[8, 8, 8],
+        )
+        initial_result = {
+            "frame": source_frame,
+            "source_result": {"frame": source_frame},
+            "creation_info": {
+                "spike_center_x": 0.0,
+                "spike_center_y": 0.0,
+                "spike_center_z": 0.0,
+            },
+        }
+        mask = excitation_evolution.build_outer_pressure_mask(
+            initial_result,
+            diameter_fraction=0.75,
+        )
+        self.assertEqual(mask["radius"], 3.0)
+        np.testing.assert_array_equal(mask["inner_tags"], [0])
+        np.testing.assert_array_equal(mask["outer_tags"], [1, 2])
+
     def _paths(self, root):
         return paths.excitation_evolved_paths(
             n_fcc_cells=10,

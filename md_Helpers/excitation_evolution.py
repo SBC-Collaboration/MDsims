@@ -10,12 +10,15 @@ import numpy as np
 from . import metadata as metadata_helpers
 from . import runs as run_helpers
 from . import simulation as simulation_helpers
+from . import cavitation as cavitation_helpers
 from .paths import (
+    EXCITATION_EVOLVED_NPH_V3_ROOT,
     EXCITATION_EVOLVED_V3_LEGACY_ROOT,
     EXCITATION_EVOLVED_V3_ROOT,
     excitation_evolved_paths,
 )
 from .run_logs import simulation_progress
+from .spatial import periodic_distances
 
 
 DEFAULT_DT1 = 0.0005
@@ -24,6 +27,78 @@ EVOLUTION_FORMAT = "two_segment_dt_v1"
 TIMESTEP_DATASET = "hoomd-data/Simulation/timestep"
 FORMAT_MARKER_NAME = ".two_segment_dt_v1"
 _VALIDATED_ROOTS = set()
+
+
+def thermalized_source_pressure(source_result, n_last=100):
+    """Return the tail-mean pressure from the homogeneous source log."""
+
+    log_path = Path(source_result["paths"]["log_path"])
+    log = run_helpers.read_hdf5_log(log_path)
+    pressure = np.asarray(
+        log["hoomd-data"]["md"]["compute"]
+           ["ThermodynamicQuantities"]["pressure"],
+        dtype=float,
+    )
+    pressure = pressure[np.isfinite(pressure)]
+    if pressure.size == 0:
+        raise ValueError(
+            f"Thermalized source log has no finite pressure values: {log_path}"
+        )
+    n_used = min(int(n_last), int(pressure.size))
+    tail = pressure[-n_used:]
+    return {
+        "pressure": float(np.mean(tail)),
+        "pressure_std": (
+            float(np.std(tail, ddof=1)) if n_used > 1 else 0.0
+        ),
+        "n_samples": n_used,
+        "log_path": str(log_path),
+    }
+
+
+def build_outer_pressure_mask(initial_result, diameter_fraction=0.75):
+    """Build fixed outer/inner tag sets from the post-excitation state."""
+
+    diameter_fraction = float(diameter_fraction)
+    if not 0.0 < diameter_fraction < 1.0:
+        raise ValueError("diameter_fraction must be between 0 and 1")
+
+    frame = initial_result["frame"]
+    source_frame = initial_result["source_result"]["frame"]
+    reference_box = np.asarray(
+        source_frame.configuration.box[:3],
+        dtype=float,
+    )
+    creation = initial_result["creation_info"]
+    center = np.asarray(
+        [
+            creation["spike_center_x"],
+            creation["spike_center_y"],
+            creation["spike_center_z"],
+        ],
+        dtype=float,
+    )
+    mask_radius = 0.5 * diameter_fraction * float(np.min(reference_box))
+    positions = np.asarray(frame.particles.position, dtype=float)
+    distances = periodic_distances(positions, center, reference_box)
+    outer = distances > mask_radius
+    outer_tags = np.flatnonzero(outer).astype(np.uint64)
+    inner_tags = np.flatnonzero(~outer).astype(np.uint64)
+    if outer_tags.size == 0 or inner_tags.size == 0:
+        raise RuntimeError("Outer pressure mask produced an empty tag group")
+
+    return {
+        "outer_tags": outer_tags,
+        "inner_tags": inner_tags,
+        "diameter_fraction": diameter_fraction,
+        "radius": float(mask_radius),
+        "reference_box_length": float(np.min(reference_box)),
+        "center": center,
+        "outer_particle_count": int(outer_tags.size),
+        "inner_particle_count": int(inner_tags.size),
+        "outer_particle_fraction": float(outer_tags.size / positions.shape[0]),
+        "membership": "fixed_tags_selected_after_excitation",
+    }
 
 
 def _as_paths(result_or_paths):
@@ -112,6 +187,10 @@ def _as_paths(result_or_paths):
             "tauS": run.get("tauS"),
             "pressure_couple": str(run.get("pressure_couple", "xyz")),
             "barostat_gamma": float(run.get("barostat_gamma", 0.0)),
+            "outer_mask_diameter_fraction": run.get(
+                "outer_mask_diameter_fraction"
+            ),
+            "pressure_source": str(run.get("pressure_source", "unknown")),
         }
 
     if not isinstance(result_or_paths, dict):
@@ -232,6 +311,18 @@ def _manifest_groups(
         run["pressure"] = float(paths["pressure"])
     if paths.get("tauS") is not None:
         run["tauS"] = float(paths["tauS"])
+    if paths.get("outer_mask_diameter_fraction") is not None:
+        run["outer_mask_diameter_fraction"] = float(
+            paths["outer_mask_diameter_fraction"]
+        )
+    for key in [
+        "pressure_source",
+        "pressure_source_log_path",
+        "pressure_source_std",
+        "pressure_source_samples",
+    ]:
+        if paths.get(key) is not None:
+            run[key] = paths[key]
 
     path_attrs = {
         "manifest_path": str(paths["manifest_path"]),
@@ -479,12 +570,14 @@ def get_or_create_two_segment_hot_spike(
     overwrite_source=False,
     create_source_if_missing=True,
     reject_phase_separated_source=True,
-    base_folder=EXCITATION_EVOLVED_V3_ROOT,
+    base_folder=None,
     ensemble="NVE",
     pressure=None,
     tauS=None,
     pressure_couple="xyz",
     barostat_gamma=0.0,
+    outer_mask_diameter_fraction=0.75,
+    pressure_tail_samples=100,
 ):
     """
     Run or load a two-segment hot-spike evolution.
@@ -500,7 +593,39 @@ def get_or_create_two_segment_hot_spike(
     from . import hot_spike as hot_spike_helpers
     from . import classification as classification_helpers
 
+    ensemble = str(ensemble).upper()
+    if base_folder is None:
+        base_folder = (
+            EXCITATION_EVOLVED_NPH_V3_ROOT
+            if ensemble == "NPH"
+            else EXCITATION_EVOLVED_V3_ROOT
+        )
+
     ensure_two_segment_root(base_folder)
+
+    pressure_info = None
+    if ensemble == "NPH":
+        source_result = cavitation_helpers.get_source_randomization_result(
+            n_fcc_cells=n_fcc_cells,
+            target_rho=target_rho,
+            kT=kT,
+            source_nsteps=source_nsteps,
+            source_seed=source_seed,
+            source_log_period=source_log_period,
+            overwrite_source=overwrite_source,
+            create_source_if_missing=create_source_if_missing,
+        )
+        if pressure is None and source_result["frame"] is not None:
+            pressure_info = thermalized_source_pressure(
+                source_result,
+                n_last=pressure_tail_samples,
+            )
+            pressure = pressure_info["pressure"]
+            print(
+                "NPH pressure from thermalized source tail: "
+                f"{pressure:.8g} +/- {pressure_info['pressure_std']:.3g} "
+                f"({pressure_info['n_samples']} samples)"
+            )
 
     initial_result = hot_spike_helpers.get_or_create_hot_spike_state(
         n_fcc_cells=n_fcc_cells,
@@ -514,7 +639,7 @@ def get_or_create_two_segment_hot_spike(
         source_log_period=source_log_period,
         random_location=random_location,
         overwrite=overwrite_initial,
-        overwrite_source=overwrite_source,
+        overwrite_source=(False if ensemble == "NPH" else overwrite_source),
         create_source_if_missing=create_source_if_missing,
         reject_phase_separated_source=reject_phase_separated_source,
     )
@@ -524,6 +649,23 @@ def get_or_create_two_segment_hot_spike(
         source_metadata_seed = hot_spike_helpers._source_seed_from_metadata(
             source_result=initial_result["source_result"],
             fallback_seed=source_seed,
+        )
+
+    mask_info = None
+    if (
+        ensemble == "NPH"
+        and outer_mask_diameter_fraction is not None
+        and initial_result["frame"] is not None
+    ):
+        mask_info = build_outer_pressure_mask(
+            initial_result,
+            diameter_fraction=outer_mask_diameter_fraction,
+        )
+        print(
+            "NPH outer mask: "
+            f"{mask_info['outer_particle_count']} particles "
+            f"({mask_info['outer_particle_fraction']:.3%}), "
+            f"radius={mask_info['radius']:.6g}"
         )
 
     paths = excitation_evolved_paths(
@@ -549,7 +691,15 @@ def get_or_create_two_segment_hot_spike(
         tauS=tauS,
         pressure_couple=pressure_couple,
         barostat_gamma=barostat_gamma,
+        outer_mask_diameter_fraction=outer_mask_diameter_fraction,
     )
+    if pressure_info is not None:
+        paths["pressure_source"] = "thermalized_source_log_tail_mean"
+        paths["pressure_source_log_path"] = pressure_info["log_path"]
+        paths["pressure_source_std"] = pressure_info["pressure_std"]
+        paths["pressure_source_samples"] = pressure_info["n_samples"]
+    elif ensemble == "NPH":
+        paths["pressure_source"] = "explicit_input"
 
     if initial_result["frame"] is None:
         return {
@@ -668,6 +818,12 @@ def get_or_create_two_segment_hot_spike(
                 tauS=segment_paths.get("tauS"),
                 pressure_couple=pressure_couple,
                 barostat_gamma=barostat_gamma,
+                nph_outer_tags=(
+                    None if mask_info is None else mask_info["outer_tags"]
+                ),
+                nph_inner_tags=(
+                    None if mask_info is None else mask_info["inner_tags"]
+                ),
                 starting_state_path=(
                     str(initial_result["paths"]["state_path"])
                     if segment_index == 1
@@ -675,6 +831,23 @@ def get_or_create_two_segment_hot_spike(
                 ),
                 **lj_kwargs,
             )
+            if mask_info is not None:
+                simulation.metadata.update({
+                    "nph_mask_diameter_fraction": mask_info[
+                        "diameter_fraction"
+                    ],
+                    "nph_mask_radius": mask_info["radius"],
+                    "nph_mask_reference_box_length": mask_info[
+                        "reference_box_length"
+                    ],
+                    "nph_mask_center_x": float(mask_info["center"][0]),
+                    "nph_mask_center_y": float(mask_info["center"][1]),
+                    "nph_mask_center_z": float(mask_info["center"][2]),
+                    "nph_mask_outer_fraction": mask_info[
+                        "outer_particle_fraction"
+                    ],
+                    "nph_mask_membership": mask_info["membership"],
+                })
             if str(ensemble).upper() == "NPH" and segment_index == 2:
                 prior_dof_path = paths["segment_1"].get(
                     "barostat_dof_path"

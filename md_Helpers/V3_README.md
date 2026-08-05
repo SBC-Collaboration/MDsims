@@ -23,6 +23,7 @@ Cavitation_States_v3/
 Cavitation_Evolved_v3/
 Excitation_States_v3/
 Excitation_Evolved_v3/
+Excitation_Evolved_NPH_v3/
 Master_CSVs_v3/
 ```
 
@@ -168,8 +169,8 @@ keeps the main physical inputs and voxel outcome first, and preserves the
 ## NPH Comparison Runs
 
 NVE remains the default. To run the same two-segment hot-spike evolution with
-an isotropic NPH barostat, keep the physical and numerical inputs unchanged
-and add the ensemble and pressure set point:
+an isotropic masked NPH barostat, keep the physical and numerical inputs
+unchanged and set the ensemble:
 
 ```python
 nph_result = get_or_create_hot_spike(
@@ -182,23 +183,53 @@ nph_result = get_or_create_hot_spike(
     dt2=0.005,
     nsteps2=100_000,
     ensemble="NPH",
-    pressure=P0,
 )
 ```
 
-Use the equilibrated homogeneous source pressure (for example, the tail mean
-from the matching EOS or source log) for `P0`, not the instantaneous pressure
-immediately after the hot spike. NPH uses no thermostat. The default
-sets `tauS = 1000 * dt2`, giving `tauS=5.0` when `dt2=0.005`. This physical
+The helper first loads the homogeneous thermalized source and uses the mean of
+its last 100 logged pressure samples as the pressure set point. It then applies
+the excitation and makes a fixed particle-tag mask outside a sphere centered
+on the spike with diameter `0.75` times the thermalized box length. The outer
+tags use `ConstantPressure`; the complementary inner tags use
+`ConstantVolume`; and `rescale_all=True` scales every particle with the box.
+This is a masked hybrid NPH construction, not the standard all-particle NPH
+ensemble. Set `pressure` explicitly to override the source-tail mean, or set
+`outer_mask_diameter_fraction=None` to recover all-particle NPH.
+
+NPH uses no thermostat. The default sets `tauS = 1000 * dt2`, giving
+`tauS=5.0` when `dt2=0.005`. This physical
 barostat time is held constant across both segments even though their
 integration timesteps differ. Override `tauS` only as part of a
 barostat-sensitivity check.
 
-NPH results are saved below an `ensemble_NPH/pressure_.../tauS_...` branch, so
-they cannot collide with existing NVE results. HDF5 logs include the changing
+NPH results are saved under the separate `Excitation_Evolved_NPH_v3` root,
+with `ensemble_NPH/pressure_.../tauS_...` below it. They cannot collide with
+existing NVE results in `Excitation_Evolved_v3`. HDF5 logs include the changing
 box volume and barostat energy in addition to pressure, temperature, and
 particle energies. Each segment also saves the barostat degrees of freedom so
 a resumed second segment keeps the same extended NPH state.
+
+Watch the box and fixed mask evolve with the same sampling controls as the NVE
+animation:
+
+```python
+from IPython.display import display
+from md_Helpers import visualization as vh
+
+display(vh.animate_masked_nph_hot_spike_xy_slice_trajectory(
+    nph_result,
+    fraction=0.03,
+    stride=1,
+    max_frames=100,
+    particle_stride=10,
+    point_size=1,
+    interval=100,
+))
+```
+
+The box outline follows the instantaneous GSD box. Outer masked tags and inner
+tags use different colors, while the mask boundary and excitation radius scale
+with the box.
 
 Before producing new results, preview and then archive the old root:
 

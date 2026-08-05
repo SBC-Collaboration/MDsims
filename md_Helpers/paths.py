@@ -16,6 +16,7 @@ CAVITATION_EVOLVED_V3_ROOT = PROJECT_ROOT / "Cavitation_Evolved_v3"
 
 EXCITATION_STATES_V3_ROOT = PROJECT_ROOT / "Excitation_States_v3"
 EXCITATION_EVOLVED_V3_ROOT = PROJECT_ROOT / "Excitation_Evolved_v3"
+EXCITATION_EVOLVED_NPH_V3_ROOT = PROJECT_ROOT / "Excitation_Evolved_NPH_v3"
 EXCITATION_EVOLVED_V3_LEGACY_ROOT = (
     PROJECT_ROOT / "Excitation_Evolved_v3_legacy_single_dt"
 )
@@ -244,7 +245,7 @@ def excitation_evolved_paths(
     center=None,
     random_location=False,
     excitation_seed=None,
-    base_folder=EXCITATION_EVOLVED_V3_ROOT,
+    base_folder=None,
     evolve_kT=None,
     evolve_nsteps=None,
     dt=None,
@@ -253,6 +254,7 @@ def excitation_evolved_paths(
     tauS=None,
     pressure_couple="xyz",
     barostat_gamma=0.0,
+    outer_mask_diameter_fraction=0.75,
 ):
     """
     Build paths for the two-segment V3 excitation evolution format.
@@ -282,12 +284,24 @@ def excitation_evolved_paths(
     if ensemble not in {"NVE", "NPH"}:
         raise ValueError("ensemble must be 'NVE' or 'NPH'")
     if ensemble == "NPH":
-        if pressure is None:
-            raise ValueError("pressure is required when ensemble='NPH'")
         if tauS is None:
             tauS = 1000.0 * float(dt2)
         if float(tauS) <= 0:
             raise ValueError("tauS must be positive")
+        if (
+            outer_mask_diameter_fraction is not None
+            and not 0.0 < float(outer_mask_diameter_fraction) < 1.0
+        ):
+            raise ValueError(
+                "outer_mask_diameter_fraction must be between 0 and 1"
+            )
+
+    if base_folder is None:
+        base_folder = (
+            EXCITATION_EVOLVED_NPH_V3_ROOT
+            if ensemble == "NPH"
+            else EXCITATION_EVOLVED_V3_ROOT
+        )
 
     state_paths = excitation_state_paths(
         n_fcc_cells=n_fcc_cells,
@@ -307,14 +321,24 @@ def excitation_evolved_paths(
 
     evolution_root = state_paths["folder"]
     if ensemble == "NPH":
+        pressure_label = (
+            "auto_from_thermalized"
+            if pressure is None
+            else format_float(pressure)
+        )
         evolution_root = (
             evolution_root
             / "ensemble_NPH"
-            / f"pressure_{format_float(pressure)}"
+            / f"pressure_{pressure_label}"
             / f"tauS_{format_float(tauS)}"
             / f"couple_{pressure_couple}"
             / f"gamma_{format_float(barostat_gamma)}"
         )
+        if outer_mask_diameter_fraction is not None:
+            evolution_root = evolution_root / (
+                "outer_mask_diameter_"
+                f"{format_float(outer_mask_diameter_fraction)}L"
+            )
 
     folder = (
         evolution_root
@@ -389,6 +413,11 @@ def excitation_evolved_paths(
         "tauS": None if tauS is None else float(tauS),
         "pressure_couple": str(pressure_couple),
         "barostat_gamma": float(barostat_gamma),
+        "outer_mask_diameter_fraction": (
+            None
+            if outer_mask_diameter_fraction is None
+            else float(outer_mask_diameter_fraction)
+        ),
     }
 
 

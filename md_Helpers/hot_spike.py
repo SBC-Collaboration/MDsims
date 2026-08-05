@@ -692,7 +692,13 @@ def infer_integrator_metadata(simulation):
         ensemble = "NVE"
     elif method_classes == ["ConstantVolume"] and thermostat_classes:
         ensemble = "NVT"
-    elif method_classes == ["ConstantPressure"] and not thermostat_classes:
+    elif (
+        method_classes in [
+            ["ConstantPressure"],
+            ["ConstantPressure", "ConstantVolume"],
+        ]
+        and not thermostat_classes
+    ):
         ensemble = "NPH"
     elif method_classes == ["ConstantPressure"] and thermostat_classes:
         ensemble = "NPT"
@@ -717,6 +723,30 @@ def infer_integrator_metadata(simulation):
         metadata["barostat_gamma"] = float(
             simulation_metadata.get("barostat_gamma", 0.0)
         )
+        metadata["nph_masked"] = bool(
+            simulation_metadata.get("nph_masked", False)
+        )
+        metadata["nph_outer_particle_count"] = int(
+            simulation_metadata.get("nph_outer_particle_count", 0)
+        )
+        metadata["nph_inner_particle_count"] = int(
+            simulation_metadata.get("nph_inner_particle_count", 0)
+        )
+        metadata["nph_rescale_all"] = bool(
+            simulation_metadata.get("nph_masked", False)
+        )
+        for key in [
+            "nph_mask_diameter_fraction",
+            "nph_mask_radius",
+            "nph_mask_reference_box_length",
+            "nph_mask_center_x",
+            "nph_mask_center_y",
+            "nph_mask_center_z",
+            "nph_mask_outer_fraction",
+            "nph_mask_membership",
+        ]:
+            if key in simulation_metadata:
+                metadata[key] = simulation_metadata[key]
     return metadata
 
 
@@ -1032,6 +1062,9 @@ def get_or_create_hot_spike(
     tauS=None,
     pressure_couple="xyz",
     barostat_gamma=0.0,
+    base_folder=None,
+    outer_mask_diameter_fraction=0.75,
+    pressure_tail_samples=100,
 ):
     """
     Load or run the standard two-segment hot-spike evolution.
@@ -1039,7 +1072,9 @@ def get_or_create_hot_spike(
     Segment 1 defaults to ``dt1=0.0005`` for ``nsteps1=200_000``.
     Supply ``dt2`` and ``nsteps2`` for segment 2. The old ``dt`` and
     ``evolve_nsteps`` keywords are accepted as aliases during migration.
-    Set ``ensemble='NPH'`` and supply ``pressure`` for an NPH comparison.
+    Set ``ensemble='NPH'`` for a masked NPH comparison. When ``pressure`` is
+    omitted, the helper uses the tail mean of the homogeneous thermalized
+    source log before applying the excitation.
     When omitted, ``tauS`` follows HOOMD's recommended starting point of
     ``1000 * dt2`` and remains constant across both segments.
     """
@@ -1083,4 +1118,7 @@ def get_or_create_hot_spike(
         tauS=tauS,
         pressure_couple=pressure_couple,
         barostat_gamma=barostat_gamma,
+        base_folder=base_folder,
+        outer_mask_diameter_fraction=outer_mask_diameter_fraction,
+        pressure_tail_samples=pressure_tail_samples,
     )

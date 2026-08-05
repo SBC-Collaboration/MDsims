@@ -50,6 +50,14 @@ def start_hdf5_logger(
 
     simulation.operations.computes.append(thermo)
 
+    outer_thermo = None
+    outer_filter = getattr(simulation, "nph_outer_filter", None)
+    if outer_filter is not None:
+        outer_thermo = hoomd.md.compute.ThermodynamicQuantities(
+            filter=outer_filter
+        )
+        simulation.operations.computes.append(outer_thermo)
+
     # ============================================================
     # Logger
     # ============================================================
@@ -77,6 +85,21 @@ def start_hdf5_logger(
         ],
     )
 
+    if outer_thermo is not None:
+        logger.add(
+            outer_thermo,
+            quantities=[
+                "kinetic_temperature",
+                "pressure",
+                "pressure_tensor",
+                "potential_energy",
+                "kinetic_energy",
+                "num_particles",
+                "volume",
+            ],
+            user_name="OuterRegionThermodynamicQuantities",
+        )
+
     for method in simulation.operations.integrator.methods:
         if type(method).__name__ == "ConstantPressure":
             logger.add(
@@ -101,6 +124,7 @@ def start_hdf5_logger(
     # ============================================================
     logger_objects = {
         "thermo": thermo,
+        "outer_thermo": outer_thermo,
         "logger": logger,
         "writer": hdf5_writer,
         "log_path": log_path,
@@ -130,6 +154,7 @@ def stop_hdf5_logger(
     # Get logger objects
     # ============================================================
     thermo = logger_objects["thermo"]
+    outer_thermo = logger_objects.get("outer_thermo")
     hdf5_writer = logger_objects["writer"]
 
     # ============================================================
@@ -143,6 +168,11 @@ def stop_hdf5_logger(
     # ============================================================
     if thermo in simulation.operations.computes:
         simulation.operations.computes.remove(thermo)
+    if (
+        outer_thermo is not None
+        and outer_thermo in simulation.operations.computes
+    ):
+        simulation.operations.computes.remove(outer_thermo)
 
     print("Stopped HDF5 logger")
 
