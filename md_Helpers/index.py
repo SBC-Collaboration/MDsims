@@ -7,6 +7,7 @@ import pandas as pd
 from .paths import (
     CAVITATION_EVOLVED_V3_ROOT,
     CAVITATION_STATES_V3_ROOT,
+    EXCITATION_EVOLVED_NPH_V3_ROOT,
     EXCITATION_EVOLVED_V3_ROOT,
     EXCITATION_STATES_V3_ROOT,
     SIMPLE_LATTICES_V3_ROOT,
@@ -22,6 +23,7 @@ DEFAULT_INDEX_ROOTS = {
     "cavitation_evolved": CAVITATION_EVOLVED_V3_ROOT,
     "excitation_initial": EXCITATION_STATES_V3_ROOT,
     "excitation_evolved": EXCITATION_EVOLVED_V3_ROOT,
+    "excitation_evolved_nph": EXCITATION_EVOLVED_NPH_V3_ROOT,
 }
 
 

@@ -70,6 +70,29 @@ EXCITATION_EVOLVED_MASTER_COLUMNS = [
 ]
 
 
+CAVITATION_EVOLVED_MASTER_COLUMNS = [
+    "n_fcc_cells",
+    "temp",
+    "density",
+    "radius",
+    "evolve_kT",
+    "evolve_nsteps",
+    "dt",
+    "source_nsteps",
+    "source_seed",
+    "bubble_seed",
+    "evolve_seed",
+    "data_version",
+    "status",
+    "files_complete",
+    "last_updated",
+    "run_path",
+    "log_path",
+    "checked",
+    "notes",
+]
+
+
 def _clean_value(value):
     if isinstance(value, bytes):
         return value.decode()
@@ -573,8 +596,12 @@ def build_seitz_master_csv(
     classification_kwargs=None,
     seitz_kwargs=None,
     preserve_extra_columns=True,
+    include_legacy=False,
 ):
-    """Build/update the barebones Seitz master CSV for found cavitation runs."""
+    """Build/update the barebones Seitz master CSV for found cavitation runs.
+
+    Legacy or unrecognized cavitation logs are skipped by default.
+    """
 
     root = Path(root)
     output_path = _default_master_csv_path(output_path, output_name)
@@ -582,6 +609,8 @@ def build_seitz_master_csv(
     rows = []
     if root.exists():
         for log_path in sorted(root.rglob("cavitation_log.hdf5")):
+            if not include_legacy and not _is_current_cavitation_log(log_path):
+                continue
             rows.append(summarize_seitz_cavitation_log(
                 log_path=log_path,
                 eos_table=eos_table,
@@ -809,6 +838,164 @@ def _paths_exist(path_attrs, required_keys):
     )
 
 
+def _is_current_cavitation_log(log_path):
+    """Return whether a log declares the current V3 cavitation schema."""
+
+    import h5py
+
+    try:
+        with h5py.File(Path(log_path), mode="r") as hdf:
+            state = _read_attrs(hdf, "metadata/state")
+            run = _read_attrs(hdf, "metadata/run")
+        return (
+            state.get("state_kind") == "cavitation_evolved"
+            and str(state.get("data_version", "")).lower() == "v3"
+            and run.get("run_kind") == "cavitation_evolution"
+        )
+    except Exception:
+        return False
+
+
+def summarize_cavitation_evolution_log(log_path):
+    """Summarize one current V3 cavitation evolution without recomputing it."""
+
+    import h5py
+
+    log_path = Path(log_path)
+    row = {
+        "run_path": str(log_path.parent),
+        "log_path": str(log_path),
+        "status": "summary_failed",
+        "files_complete": False,
+        "last_updated": pd.Timestamp.fromtimestamp(
+            log_path.stat().st_mtime
+        ).isoformat(),
+    }
+
+    try:
+        with h5py.File(log_path, mode="r") as hdf:
+            state = _read_attrs(hdf, "metadata/state")
+            run = _read_attrs(hdf, "metadata/run")
+            source = _read_attrs(hdf, "metadata/source")
+            creation = _read_attrs(hdf, "metadata/creation")
+            saved_paths = _read_attrs(hdf, "metadata/paths")
+
+        required = ["log_path", "trajectory_path", "final_state_path"]
+        files_complete = _paths_exist(saved_paths, required)
+        row.update({
+            "n_fcc_cells": _first_nonmissing(
+                state.get("n_fcc_cells"), source.get("n_fcc_cells")
+            ),
+            "temp": _first_nonmissing(
+                source.get("source_kT"), state.get("kT")
+            ),
+            "density": _first_nonmissing(
+                source.get("source_rho"), state.get("source_rho")
+            ),
+            "radius": _first_nonmissing(
+                creation.get("radius"), creation.get("bubble_radius")
+            ),
+            "evolve_kT": _first_nonmissing(
+                run.get("kT"), state.get("kT")
+            ),
+            "evolve_nsteps": run.get("nsteps", np.nan),
+            "dt": run.get("dt", np.nan),
+            "source_nsteps": source.get("source_nsteps", np.nan),
+            "source_seed": source.get("source_seed", np.nan),
+            "bubble_seed": creation.get("bubble_seed", np.nan),
+            "evolve_seed": run.get("seed", np.nan),
+            "data_version": state.get("data_version", ""),
+            "status": "complete" if files_complete else "incomplete",
+            "files_complete": files_complete,
+        })
+    except Exception as error:
+        row["summary_error"] = repr(error)
+
+    return row
+
+
+def build_cavitation_evolved_master_csv(
+    root=CAVITATION_EVOLVED_V3_ROOT,
+    output_path=None,
+    output_name="cavitation_evolved_master.csv",
+    include_legacy=False,
+    preserve_user_columns=True,
+):
+    """Rebuild a lightweight inventory of saved cavitation evolutions.
+
+    By default, only logs that explicitly declare the current V3 cavitation
+    schema are included. Set ``include_legacy=True`` only for an audit.
+    """
+
+    root = Path(root)
+    output_path = _default_master_csv_path(output_path, output_name)
+    if not root.exists():
+        raise FileNotFoundError(
+            f"Cavitation evolution root does not exist: {root}"
+        )
+
+    rows = []
+    for log_path in sorted(root.rglob("cavitation_log.hdf5")):
+        if include_legacy or _is_current_cavitation_log(log_path):
+            rows.append(summarize_cavitation_evolution_log(log_path))
+
+    table = pd.DataFrame(rows)
+    if table.empty:
+        table = pd.DataFrame(columns=CAVITATION_EVOLVED_MASTER_COLUMNS)
+    else:
+        table = (
+            table.drop_duplicates("run_path", keep="last")
+            .sort_values([
+                column for column in [
+                    "n_fcc_cells",
+                    "temp",
+                    "density",
+                    "radius",
+                    "evolve_nsteps",
+                    "evolve_seed",
+                    "run_path",
+                ]
+                if column in table.columns
+            ])
+            .reset_index(drop=True)
+        )
+
+    generated = set(CAVITATION_EVOLVED_MASTER_COLUMNS) | {"summary_error"}
+    if preserve_user_columns and output_path.exists():
+        old = pd.read_csv(output_path)
+        if "run_path" in old.columns:
+            preserved = [
+                column for column in old.columns
+                if (
+                    column in {"checked", "notes"}
+                    or column not in generated
+                )
+                and column != "run_path"
+            ]
+            if preserved:
+                table = table.merge(
+                    old[["run_path", *preserved]],
+                    on="run_path",
+                    how="left",
+                )
+
+    for column in CAVITATION_EVOLVED_MASTER_COLUMNS:
+        if column not in table.columns:
+            table[column] = "" if column in {"checked", "notes"} else np.nan
+    extras = [
+        column for column in table.columns
+        if column not in CAVITATION_EVOLVED_MASTER_COLUMNS
+    ]
+    table = table[[*CAVITATION_EVOLVED_MASTER_COLUMNS, *extras]]
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output_path, index=False)
+    table.attrs["csv_path"] = str(output_path)
+    print(f"Wrote {len(table)} cavitation evolution rows:")
+    print(output_path)
+    return table
+
+
 def summarize_excitation_evolution_manifest(manifest_path):
     """Summarize one two-segment excitation evolution as one compact row."""
 
@@ -1016,7 +1203,7 @@ def build_excitation_evolved_master_csv(
     output_name="excitation_evolved_master.csv",
     local_output_path=None,
     write_local_copy=True,
-    include_legacy=True,
+    include_legacy=False,
     preserve_user_columns=True,
 ):
     """
@@ -1024,8 +1211,8 @@ def build_excitation_evolved_master_csv(
 
     Current NVE and NPH two-segment runs are discovered from their separate
     roots and authoritative manifests. Pass one path or an iterable of paths
-    as ``root`` to override the defaults. Archived single-timestep runs may be
-    included as well. Existing
+    as ``root`` to override the defaults. Archived single-timestep runs are
+    excluded by default; pass ``include_legacy=True`` for an audit. Existing
     ``checked``, ``notes``, and hand-added columns are preserved by ``run_path``
     when the CSV is refreshed. By default, the table is written both to the
     dataset master-CSV folder and to the repository root for convenient local

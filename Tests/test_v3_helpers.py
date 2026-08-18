@@ -1429,6 +1429,50 @@ class MasterCsvTests(unittest.TestCase):
             self.assertEqual(int(summary["n_files"].sum()), 2)
             self.assertIn("trajectory", set(summary["file_role"]))
 
+    def test_cavitation_master_excludes_legacy_logs_by_default(self):
+        try:
+            import h5py
+        except ImportError as error:
+            raise unittest.SkipTest("h5py is not installed") from error
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Cavitation_Evolved_v3"
+            current = root / "FCC" / "current"
+            legacy = root / "FCC" / "legacy"
+            current.mkdir(parents=True)
+            legacy.mkdir(parents=True)
+
+            current_log = current / "cavitation_log.hdf5"
+            trajectory = current / "cavitation_trajectory.gsd"
+            final_state = current / "cavitation_final.gsd"
+            trajectory.touch()
+            final_state.touch()
+            with h5py.File(current_log, mode="w") as hdf:
+                state = hdf.require_group("metadata/state")
+                state.attrs["state_kind"] = "cavitation_evolved"
+                state.attrs["data_version"] = "v3"
+                state.attrs["n_fcc_cells"] = 30
+                run = hdf.require_group("metadata/run")
+                run.attrs["run_kind"] = "cavitation_evolution"
+                paths_group = hdf.require_group("metadata/paths")
+                paths_group.attrs["log_path"] = str(current_log)
+                paths_group.attrs["trajectory_path"] = str(trajectory)
+                paths_group.attrs["final_state_path"] = str(final_state)
+
+            with h5py.File(
+                legacy / "cavitation_log.hdf5", mode="w"
+            ) as hdf:
+                hdf.require_group("metadata")
+
+            table = master_csv.build_cavitation_evolved_master_csv(
+                root=root,
+                output_path=Path(tmp) / "cavitation_master.csv",
+            )
+
+            self.assertEqual(len(table), 1)
+            self.assertEqual(table.loc[0, "run_path"], str(current))
+            self.assertTrue(bool(table.loc[0, "files_complete"]))
+
     def test_seitz_master_leaves_terms_empty_for_rethermalized_run(self):
         try:
             import h5py
@@ -1443,11 +1487,14 @@ class MasterCsvTests(unittest.TestCase):
 
             with h5py.File(log_path, mode="w") as hdf:
                 state = hdf.require_group("metadata/state")
+                state.attrs["state_kind"] = "cavitation_evolved"
+                state.attrs["data_version"] = "v3"
                 state.attrs["n_fcc_cells"] = 30
                 state.attrs["source_rho"] = 0.6
                 state.attrs["kT"] = 1.0
 
                 run_group = hdf.require_group("metadata/run")
+                run_group.attrs["run_kind"] = "cavitation_evolution"
                 run_group.attrs["nsteps"] = 100_000
                 run_group.attrs["seed"] = 1
 
@@ -1497,11 +1544,14 @@ class MasterCsvTests(unittest.TestCase):
 
             with h5py.File(log_path, mode="w") as hdf:
                 state = hdf.require_group("metadata/state")
+                state.attrs["state_kind"] = "cavitation_evolved"
+                state.attrs["data_version"] = "v3"
                 state.attrs["n_fcc_cells"] = 30
                 state.attrs["source_rho"] = 0.6
                 state.attrs["kT"] = 1.0
 
                 run_group = hdf.require_group("metadata/run")
+                run_group.attrs["run_kind"] = "cavitation_evolution"
                 run_group.attrs["nsteps"] = 100_000
                 run_group.attrs["seed"] = 2
 

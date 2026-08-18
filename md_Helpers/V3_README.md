@@ -155,16 +155,30 @@ notebook cell:
 ```python
 from md_Helpers import master_csv
 
-excitation_runs = master_csv.build_excitation_evolved_master_csv()
+excitation_runs = master_csv.build_excitation_evolved_master_csv(
+    include_legacy=False,
+)
 excitation_runs
 ```
 
 The CSV is written to
 the dataset's `Master_CSVs_v3/excitation_evolved_master.csv` and mirrored as
 `excitation_evolved_master.csv` in the repository root. It contains one row
-per current two-segment evolution (plus archived single-timestep evolutions),
-keeps the main physical inputs and voxel outcome first, and preserves the
+per current two-segment evolution, keeps the main physical inputs and voxel
+outcome first, and preserves the
 `checked`, `notes`, and any hand-added columns when refreshed.
+
+Create the lightweight cavitation-evolution inventory separately from the
+more expensive Seitz analysis:
+
+```python
+cavitation_runs = master_csv.build_cavitation_evolved_master_csv(
+    include_legacy=False,
+)
+cavitation_runs
+```
+
+Both evolution master builders exclude legacy data by default.
 
 ## NPH Comparison Runs
 
