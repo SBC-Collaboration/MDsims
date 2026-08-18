@@ -232,6 +232,17 @@ Set `nph_box_volume_ratio_bounds=(lower, upper)` to change the permitted range
 or `nph_safety_check_period` to change the check frequency. The selected
 bounds are stored in the manifest and segment-log run metadata.
 
+Crossing the upper volume bound is a terminal bubble outcome, including in
+segment 1. The manifest records `bubble_detected_segment_1` or
+`bubble_detected_segment_2` with `outcome="bubble"`, and the runner returns
+normally so a parameter sweep continues. Reusing the same inputs loads that
+terminal outcome instead of rerunning it. Lower-volume stops and unrelated
+exceptions are recorded as failures and remain errors.
+
+For a historical manifest known to be an upper-volume stop but left marked
+`running`, use `mark_evolution_manifest_as_terminal_bubble(manifest_path,
+segment_index=1)` once; this does not rerun the simulation.
+
 NPH results are saved under the separate `Excitation_Evolved_NPH_v3` root,
 with `ensemble_NPH/pressure_.../tauS_...` below it. They cannot collide with
 existing NVE results in `Excitation_Evolved_v3`. HDF5 logs include the changing

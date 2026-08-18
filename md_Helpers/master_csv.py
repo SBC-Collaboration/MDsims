@@ -46,6 +46,10 @@ EXCITATION_EVOLVED_MASTER_COLUMNS = [
     "radius",
     "energy_deposition",
     "voxel_phase",
+    "outcome",
+    "outcome_source",
+    "terminal",
+    "stopped_segment",
     "actual_energy_deposition",
     "excitation_method",
     "evolution_format",
@@ -1019,6 +1023,7 @@ def summarize_excitation_evolution_manifest(manifest_path):
             source = _read_attrs(hdf, "metadata/source")
             creation = _read_attrs(hdf, "metadata/creation")
             paths = _read_attrs(hdf, "metadata/paths")
+            outcome = _read_attrs(hdf, "metadata/outcome")
 
         final_log_path = paths.get("segment_2_log_path", "")
         if final_log_path and Path(final_log_path).exists():
@@ -1038,6 +1043,8 @@ def summarize_excitation_evolution_manifest(manifest_path):
         voxel_phase, low_density_fraction = _voxel_phase_summary(
             final_log_path
         )
+        if outcome.get("outcome") == "bubble":
+            voxel_phase = "phase_separated"
         required_path_keys = [
             f"segment_{segment}_{role}_path"
             for segment in [1, 2]
@@ -1064,6 +1071,10 @@ def summarize_excitation_evolution_manifest(manifest_path):
                 np.nan,
             ),
             "voxel_phase": voxel_phase,
+            "outcome": outcome.get("outcome", ""),
+            "outcome_source": outcome.get("outcome_source", ""),
+            "terminal": bool(outcome.get("terminal", False)),
+            "stopped_segment": outcome.get("segment_index", np.nan),
             "actual_energy_deposition": creation.get(
                 "actual_injected_energy",
                 np.nan,

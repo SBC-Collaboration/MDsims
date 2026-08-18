@@ -401,6 +401,45 @@ class ExcitationEvolutionTests(unittest.TestCase):
                 stitched["stitched"]["boundary_duplicate_removed"]
             )
 
+    def test_terminal_bubble_outcome_is_persisted_in_manifest(self):
+        with TemporaryDirectory() as tmp:
+            evolved = self._paths(tmp)
+            excitation_evolution._write_terminal_outcome(
+                evolved,
+                status="bubble_detected_segment_1",
+                outcome="bubble",
+                outcome_source="nph_upper_volume_safety_stop",
+                segment_index=1,
+                evolve_seed=1,
+                segment_timing={
+                    1: {
+                        "start_timestep": 0,
+                        "final_timestep": 100,
+                        "status": "bubble_detected",
+                    },
+                },
+                common_metadata={},
+            )
+
+            manifest = excitation_evolution.read_evolution_manifest(evolved)
+            self.assertEqual(
+                manifest["metadata/run"]["status"],
+                "bubble_detected_segment_1",
+            )
+            self.assertEqual(
+                manifest["metadata/outcome"]["outcome"],
+                "bubble",
+            )
+            self.assertTrue(
+                manifest["metadata/outcome"]["terminal"]
+            )
+            self.assertEqual(
+                excitation_evolution._read_terminal_outcome(evolved)[
+                    "outcome_source"
+                ],
+                "nph_upper_volume_safety_stop",
+            )
+
     def test_legacy_archive_is_dry_run_then_collision_safe_move(self):
         with TemporaryDirectory() as tmp:
             source = Path(tmp) / "Excitation_Evolved_v3"

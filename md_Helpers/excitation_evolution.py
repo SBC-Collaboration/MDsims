@@ -433,6 +433,122 @@ def write_evolution_manifest(
     return Path(paths["manifest_path"])
 
 
+def _write_terminal_outcome(
+    paths,
+    *,
+    status,
+    outcome,
+    outcome_source,
+    segment_index,
+    evolve_seed,
+    segment_timing,
+    common_metadata,
+    error=None,
+):
+    """Persist a terminal segment outcome in the authoritative manifest."""
+
+    write_evolution_manifest(
+        paths=paths,
+        status=status,
+        evolve_seed=evolve_seed,
+        segment_timing=segment_timing,
+        common_metadata=common_metadata,
+    )
+    outcome_metadata = {
+        "terminal": True,
+        "outcome": str(outcome),
+        "outcome_source": str(outcome_source),
+        "segment_index": int(segment_index),
+    }
+    if error is not None:
+        outcome_metadata.update({
+            "failure_type": type(error).__name__,
+            "failure_message": str(error),
+        })
+        for key in [
+            "reason",
+            "volume_ratio",
+            "timestep",
+            "lower_ratio",
+            "upper_ratio",
+        ]:
+            if hasattr(error, key):
+                outcome_metadata[key] = getattr(error, key)
+    metadata_helpers.write_metadata_groups(
+        paths["manifest_path"],
+        {"metadata/outcome": outcome_metadata},
+        mode="a",
+        overwrite=True,
+    )
+
+
+def _read_terminal_outcome(paths):
+    manifest_path = Path(paths["manifest_path"])
+    if not manifest_path.exists():
+        return {}
+    groups = read_evolution_manifest(manifest_path)
+    outcome = groups.get("metadata/outcome", {})
+    if bool(outcome.get("terminal", False)):
+        return outcome
+    return {}
+
+
+def mark_evolution_manifest_as_terminal_bubble(
+    manifest_or_result,
+    segment_index=1,
+    outcome_source="manually_confirmed_nph_upper_volume_safety_stop",
+):
+    """Mark a known historical NPH safety stop as a terminal bubble.
+
+    This is intended only for old manifests left as ``running`` or
+    ``segment_1_complete`` before safety-stop outcomes were persisted.
+    """
+
+    paths = _as_paths(manifest_or_result)
+    groups = read_evolution_manifest(paths["manifest_path"])
+    run = groups.get("metadata/run", {})
+    if str(run.get("ensemble", "")).upper() != "NPH":
+        raise ValueError("Only NPH evolutions can be marked this way")
+    if run.get("status") == "complete":
+        raise ValueError(
+            "A complete evolution cannot be replaced by a bubble stop"
+        )
+    segment_index = int(segment_index)
+    if segment_index not in {1, 2}:
+        raise ValueError("segment_index must be 1 or 2")
+
+    segment_timing = {}
+    for index in [1, 2]:
+        attrs = groups.get(f"metadata/segments/segment_{index}", {})
+        timing = {
+            key: attrs[key]
+            for key in [
+                "start_timestep",
+                "final_timestep",
+                "status",
+                "continuation_mode",
+            ]
+            if key in attrs
+        }
+        if timing:
+            segment_timing[index] = timing
+    segment_timing.setdefault(segment_index, {})["status"] = (
+        "bubble_detected"
+    )
+
+    _write_terminal_outcome(
+        paths,
+        status=f"bubble_detected_segment_{segment_index}",
+        outcome="bubble",
+        outcome_source=outcome_source,
+        segment_index=segment_index,
+        evolve_seed=int(run["seed"]),
+        segment_timing=segment_timing,
+        common_metadata={},
+    )
+    return _read_terminal_outcome(paths)
+
+
 def read_evolution_manifest(manifest_or_result):
     """Read the manifest into a dictionary keyed by metadata group."""
 
@@ -808,6 +924,26 @@ def get_or_create_two_segment_hot_spike(
             "status": initial_result.get("status", "missing_source"),
         }
 
+    terminal_outcome = _read_terminal_outcome(paths)
+    if (
+        terminal_outcome.get("outcome") == "bubble"
+        and not overwrite
+    ):
+        return {
+            "frame": None,
+            "paths": paths,
+            "initial_result": initial_result,
+            "classification_result": {
+                "phase_separated": True,
+                "method": terminal_outcome.get("outcome_source"),
+            },
+            "outcome": "bubble",
+            "outcome_source": terminal_outcome.get("outcome_source"),
+            "terminal": True,
+            "created_new": False,
+            "status": "loaded_terminal_bubble",
+        }
+
     if _all_outputs_complete(paths) and not overwrite:
         continuity = validate_segment_continuity(paths)
         segment_timing = {}
@@ -826,6 +962,9 @@ def get_or_create_two_segment_hot_spike(
             status="complete",
             evolve_seed=evolve_seed,
             segment_timing=segment_timing,
+        )
+        metadata_helpers.clear_attrs(
+            paths["manifest_path"], "metadata/outcome"
         )
         metadata_helpers.write_metadata_groups(
             paths["manifest_path"],
@@ -863,6 +1002,7 @@ def get_or_create_two_segment_hot_spike(
         status="running",
         evolve_seed=evolve_seed,
     )
+    metadata_helpers.clear_attrs(paths["manifest_path"], "metadata/outcome")
 
     for segment_index in [1, 2]:
         segment_paths = paths[f"segment_{segment_index}"]
@@ -1022,31 +1162,107 @@ def get_or_create_two_segment_hot_spike(
                 }
             }
 
-        with simulation_progress(
-            f"Excitation segment {segment_index}",
-            ncells=n_fcc_cells,
-            rho=target_rho,
-            Source_kT=kT,
-            nsteps=segment_paths["nsteps"],
-        ):
-            run_result = run_helpers.run_logged_trajectory_phase(
-                simulation=simulation,
+        try:
+            with simulation_progress(
+                f"Excitation segment {segment_index}",
+                ncells=n_fcc_cells,
+                rho=target_rho,
+                Source_kT=kT,
                 nsteps=segment_paths["nsteps"],
-                log_path=segment_paths["log_path"],
-                trajectory_path=segment_paths["trajectory_path"],
-                final_state_path=segment_paths["final_state_path"],
-                log_period=log_period,
-                trajectory_period=trajectory_period,
-                metadata_groups=metadata_groups,
-                classify_final=(segment_index == 2),
-                classification_kwargs=None,
-                box_volume_ratio_bounds=(
-                    nph_box_volume_ratio_bounds
-                    if str(ensemble).upper() == "NPH"
-                    else None
+            ):
+                run_result = run_helpers.run_logged_trajectory_phase(
+                    simulation=simulation,
+                    nsteps=segment_paths["nsteps"],
+                    log_path=segment_paths["log_path"],
+                    trajectory_path=segment_paths["trajectory_path"],
+                    final_state_path=segment_paths["final_state_path"],
+                    log_period=log_period,
+                    trajectory_period=trajectory_period,
+                    metadata_groups=metadata_groups,
+                    classify_final=(segment_index == 2),
+                    classification_kwargs=None,
+                    box_volume_ratio_bounds=(
+                        nph_box_volume_ratio_bounds
+                        if str(ensemble).upper() == "NPH"
+                        else None
+                    ),
+                    safety_check_period=nph_safety_check_period,
+                )
+        except run_helpers.NPHVolumeSafetyStop as error:
+            segment_timing[segment_index] = {
+                "start_timestep": start_timestep,
+                "final_timestep": int(error.timestep),
+                "status": (
+                    "bubble_detected"
+                    if error.reason == "upper_volume_limit"
+                    else "failed"
                 ),
-                safety_check_period=nph_safety_check_period,
+                "continuation_mode": metadata_groups["metadata/run"][
+                    "continuation_mode"
+                ],
+            }
+            if error.reason == "upper_volume_limit":
+                outcome_source = "nph_upper_volume_safety_stop"
+                _write_terminal_outcome(
+                    paths,
+                    status=f"bubble_detected_segment_{segment_index}",
+                    outcome="bubble",
+                    outcome_source=outcome_source,
+                    segment_index=segment_index,
+                    evolve_seed=evolve_seed,
+                    segment_timing=segment_timing,
+                    common_metadata=common_metadata,
+                    error=error,
+                )
+                return {
+                    "frame": None,
+                    "paths": paths,
+                    "initial_result": initial_result,
+                    "segment_results": segment_results,
+                    "classification_result": {
+                        "phase_separated": True,
+                        "method": outcome_source,
+                    },
+                    "outcome": "bubble",
+                    "outcome_source": outcome_source,
+                    "terminal": True,
+                    "created_new": True,
+                    "status": f"bubble_detected_segment_{segment_index}",
+                }
+
+            _write_terminal_outcome(
+                paths,
+                status=f"failed_segment_{segment_index}",
+                outcome="failed",
+                outcome_source=f"nph_{error.reason}",
+                segment_index=segment_index,
+                evolve_seed=evolve_seed,
+                segment_timing=segment_timing,
+                common_metadata=common_metadata,
+                error=error,
             )
+            raise
+        except BaseException as error:
+            segment_timing[segment_index] = {
+                "start_timestep": start_timestep,
+                "final_timestep": int(simulation.timestep),
+                "status": "failed",
+                "continuation_mode": metadata_groups["metadata/run"][
+                    "continuation_mode"
+                ],
+            }
+            _write_terminal_outcome(
+                paths,
+                status=f"failed_segment_{segment_index}",
+                outcome="failed",
+                outcome_source="simulation_exception",
+                segment_index=segment_index,
+                evolve_seed=evolve_seed,
+                segment_timing=segment_timing,
+                common_metadata=common_metadata,
+                error=error,
+            )
+            raise
 
         barostat_dof_path = segment_paths.get("barostat_dof_path")
         if barostat_dof_path is not None:
@@ -1090,6 +1306,7 @@ def get_or_create_two_segment_hot_spike(
         segment_timing=segment_timing,
         common_metadata=common_metadata,
     )
+    metadata_helpers.clear_attrs(paths["manifest_path"], "metadata/outcome")
     metadata_helpers.write_metadata_groups(
         paths["manifest_path"],
         {"metadata/continuity": continuity},

@@ -21,8 +21,30 @@ DEFAULT_PHASE_SEP_DENSITY_THRESHOLD = ps.DEFAULT_PHASE_SEP_DENSITY_THRESHOLD
 DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD = ps.DEFAULT_PHASE_SEP_VOXEL_FRACTION_THRESHOLD
 
 
+class NPHVolumeSafetyStop(RuntimeError):
+    """Raised when an NPH box leaves its configured safe volume interval."""
 
-
+    def __init__(
+        self,
+        *,
+        reason,
+        volume_ratio,
+        timestep,
+        lower_ratio,
+        upper_ratio,
+    ):
+        self.reason = str(reason)
+        self.volume_ratio = float(volume_ratio)
+        self.timestep = int(timestep)
+        self.lower_ratio = float(lower_ratio)
+        self.upper_ratio = float(upper_ratio)
+        super().__init__(
+            "NPH safety stop before excessive memory growth: "
+            f"reason={self.reason}, box volume ratio={self.volume_ratio:.6g} "
+            f"at timestep {self.timestep}; allowed interval is "
+            f"[{self.lower_ratio:.6g}, {self.upper_ratio:.6g}]. "
+            "Increase tauS or inspect the pressure response before continuing."
+        )
 # ============================================================
 # Start HDF5 logger
 # ============================================================
@@ -776,18 +798,21 @@ def run_logged_trajectory_phase(
                 remaining -= chunk
                 current_volume = float(simulation.state.box.volume)
                 volume_ratio = current_volume / initial_volume
-                if (
-                    not math.isfinite(volume_ratio)
-                    or volume_ratio < lower_ratio
-                    or volume_ratio > upper_ratio
-                ):
-                    raise RuntimeError(
-                        "NPH safety stop before excessive memory growth: "
-                        f"box volume ratio={volume_ratio:.6g} at timestep "
-                        f"{int(simulation.timestep)}; allowed interval is "
-                        f"[{lower_ratio:.6g}, {upper_ratio:.6g}]. "
-                        "Increase tauS or inspect the pressure response "
-                        "before continuing."
+                if not math.isfinite(volume_ratio):
+                    stop_reason = "nonfinite_volume"
+                elif volume_ratio < lower_ratio:
+                    stop_reason = "lower_volume_limit"
+                elif volume_ratio > upper_ratio:
+                    stop_reason = "upper_volume_limit"
+                else:
+                    stop_reason = None
+                if stop_reason is not None:
+                    raise NPHVolumeSafetyStop(
+                        reason=stop_reason,
+                        volume_ratio=volume_ratio,
+                        timestep=simulation.timestep,
+                        lower_ratio=lower_ratio,
+                        upper_ratio=upper_ratio,
                     )
     finally:
         if trajectory_handle is not None:
