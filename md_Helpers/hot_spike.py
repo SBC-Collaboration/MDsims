@@ -18,6 +18,7 @@ from .spatial import periodic_distances
 
 
 SUPPORTED_METHODS = {
+    "maxwell_boltzmann_resample",
     "velocity_rescale_raw",
     "velocity_rescale_com",
 }
@@ -155,6 +156,18 @@ def _kinetic_energy(velocities, masses):
     )
 
 
+def _maxwell_boltzmann_velocities(masses, kT, seed):
+    """Draw zero-mean Maxwell-Boltzmann velocities for each particle."""
+
+    masses = np.asarray(masses, dtype=np.float64)
+    if np.any(masses <= 0):
+        raise ValueError("Particle masses must be positive")
+
+    rng = np.random.default_rng(int(seed))
+    standard_deviates = rng.normal(size=(masses.size, 3))
+    return standard_deviates * np.sqrt(float(kT) / masses)[:, None]
+
+
 def make_hot_spike_frame_from_frame(
     frame,
     radius,
@@ -162,6 +175,9 @@ def make_hot_spike_frame_from_frame(
     method="velocity_rescale_com",
     random_location=False,
     location_seed=1,
+    velocity_seed=None,
+    location_seed_source="source_thermalization_metadata_seed",
+    velocity_seed_source=None,
     return_info=False,
 ):
     """
@@ -169,7 +185,10 @@ def make_hot_spike_frame_from_frame(
 
     ``injected_energy`` is the total kinetic energy to add in reduced LJ units.
     ``velocity_rescale_com`` preserves the selected group's COM velocity;
-    ``velocity_rescale_raw`` rescales selected velocities directly.
+    ``velocity_rescale_raw`` rescales selected velocities directly; and
+    ``maxwell_boltzmann_resample`` redraws the selected velocities at the
+    temperature corresponding to the requested final kinetic energy, then
+    normalizes the draw so that energy is exact.
     """
 
     method = str(method)
@@ -240,30 +259,73 @@ def make_hot_spike_frame_from_frame(
     com_velocity = selected_momentum_before / total_mass
 
     momentum_conserving = method == "velocity_rescale_com"
+    target_selected_ke = selected_ke_before + injected_energy
+    target_kT = None
 
-    if momentum_conserving:
-        rescale_velocities = selected_velocities - com_velocity
-    else:
-        rescale_velocities = selected_velocities
-
-    rescale_ke_before = _kinetic_energy(
-        rescale_velocities,
-        selected_masses,
-    )
-    if rescale_ke_before <= 0:
-        raise RuntimeError(
-            "Selected particles have zero rescalable kinetic energy."
+    if method == "maxwell_boltzmann_resample":
+        if selected_indices.size < 2:
+            raise RuntimeError(
+                "Maxwell-Boltzmann resampling requires at least two "
+                "selected particles so center-of-mass drift can be removed."
+            )
+        if velocity_seed_source is None:
+            velocity_seed_source = (
+                "location_seed"
+                if velocity_seed is None
+                else "explicit_input"
+            )
+        if velocity_seed is None:
+            velocity_seed = location_seed
+        velocity_seed = int(velocity_seed)
+        degrees_of_freedom = 3 * int(selected_indices.size) - 3
+        target_kT = 2.0 * target_selected_ke / degrees_of_freedom
+        rescale_velocities = _maxwell_boltzmann_velocities(
+            masses=selected_masses,
+            kT=target_kT,
+            seed=velocity_seed,
         )
-
-    scale_factor = float(
-        np.sqrt((rescale_ke_before + injected_energy) / rescale_ke_before)
-    )
-    rescale_velocities_after = scale_factor * rescale_velocities
-
-    if momentum_conserving:
-        selected_velocities_after = rescale_velocities_after + com_velocity
-    else:
+        sampled_momentum = np.sum(
+            selected_masses[:, None] * rescale_velocities,
+            axis=0,
+        )
+        rescale_velocities -= sampled_momentum / total_mass
+        rescale_ke_before = _kinetic_energy(
+            rescale_velocities,
+            selected_masses,
+        )
+        if rescale_ke_before <= 0:
+            raise RuntimeError(
+                "Maxwell-Boltzmann velocity draw has zero kinetic energy."
+            )
+        scale_factor = float(
+            np.sqrt(target_selected_ke / rescale_ke_before)
+        )
+        rescale_velocities_after = scale_factor * rescale_velocities
         selected_velocities_after = rescale_velocities_after
+    else:
+        if momentum_conserving:
+            rescale_velocities = selected_velocities - com_velocity
+        else:
+            rescale_velocities = selected_velocities
+
+        rescale_ke_before = _kinetic_energy(
+            rescale_velocities,
+            selected_masses,
+        )
+        if rescale_ke_before <= 0:
+            raise RuntimeError(
+                "Selected particles have zero rescalable kinetic energy."
+            )
+
+        scale_factor = float(
+            np.sqrt((rescale_ke_before + injected_energy) / rescale_ke_before)
+        )
+        rescale_velocities_after = scale_factor * rescale_velocities
+
+        if momentum_conserving:
+            selected_velocities_after = rescale_velocities_after + com_velocity
+        else:
+            selected_velocities_after = rescale_velocities_after
 
     velocities[selected_mask] = selected_velocities_after
 
@@ -294,7 +356,7 @@ def make_hot_spike_frame_from_frame(
         "spike_center_y": float(center[1]),
         "spike_center_z": float(center[2]),
         "random_location": bool(random_location),
-        "location_seed_source": "source_thermalization_metadata_seed",
+        "location_seed_source": str(location_seed_source),
         "location_seed": int(location_seed),
         "periodic_distance": True,
         "requested_injected_energy": float(injected_energy),
@@ -310,6 +372,7 @@ def make_hot_spike_frame_from_frame(
         "selected_rescaled_ke_before": float(rescale_ke_before),
         "selected_rescaled_ke_after": float(rescale_ke_after),
         "velocity_scale_factor": float(scale_factor),
+        "target_selected_ke": float(target_selected_ke),
         "momentum_conserving": bool(momentum_conserving),
         "center_of_mass_velocity_preserved": bool(momentum_conserving),
         "selected_total_mass": float(total_mass),
@@ -325,6 +388,28 @@ def make_hot_spike_frame_from_frame(
         "selected_particle_indices": selected_indices,
         "selected_particle_positions": positions[selected_mask].copy(),
     }
+
+    if method == "maxwell_boltzmann_resample":
+        info.update(
+            {
+                "velocity_distribution": "maxwell_boltzmann_gaussian",
+                "velocity_distribution_constraint": (
+                    "zero_com_and_exact_total_kinetic_energy"
+                ),
+                "velocity_seed": int(velocity_seed),
+                "velocity_seed_source": str(velocity_seed_source),
+                "kinetic_temperature_degrees_of_freedom": (
+                    3 * int(selected_indices.size) - 3
+                ),
+                "sampled_center_of_mass_velocity_removed": True,
+                "target_kT": float(target_kT),
+                "achieved_kT": float(
+                    2.0
+                    * selected_ke_after
+                    / (3 * int(selected_indices.size) - 3)
+                ),
+            }
+        )
 
     if return_info:
         return new_frame, info
@@ -494,6 +579,7 @@ def get_or_create_hot_spike_state(
     source_seed=1,
     source_log_period=1_000,
     random_location=False,
+    location_seed=None,
     overwrite=False,
     overwrite_source=False,
     create_source_if_missing=True,
@@ -502,6 +588,9 @@ def get_or_create_hot_spike_state(
 ):
     """
     Load or create a localized kinetic-energy excitation initial state.
+
+    When ``random_location`` is true, ``location_seed`` controls only the
+    excitation center. If omitted, it defaults to the source metadata seed.
     """
 
     source_result = cavitation_helpers.get_source_randomization_result(
@@ -522,6 +611,17 @@ def get_or_create_hot_spike_state(
             fallback_seed=source_seed,
         )
 
+    effective_location_seed = (
+        source_metadata_seed
+        if location_seed is None
+        else int(location_seed)
+    )
+    location_seed_source = (
+        "source_thermalization_metadata_seed"
+        if location_seed is None
+        else "explicit_input"
+    )
+
     paths = excitation_state_paths(
         n_fcc_cells=n_fcc_cells,
         source_rho=target_rho,
@@ -533,7 +633,7 @@ def get_or_create_hot_spike_state(
         energy=injected_energy,
         center=None,
         random_location=random_location,
-        excitation_seed=source_metadata_seed,
+        excitation_seed=effective_location_seed,
         base_folder=base_folder,
     )
 
@@ -622,7 +722,10 @@ def get_or_create_hot_spike_state(
         injected_energy=injected_energy,
         method=method,
         random_location=random_location,
-        location_seed=source_metadata_seed,
+        location_seed=effective_location_seed,
+        velocity_seed=source_metadata_seed,
+        location_seed_source=location_seed_source,
+        velocity_seed_source="source_thermalization_metadata_seed",
         return_info=True,
     )
 
@@ -869,6 +972,7 @@ def get_or_create_hot_spike_single_dt(
     log_period=1_000,
     trajectory_period=1_000,
     random_location=False,
+    location_seed=None,
     overwrite=False,
     overwrite_initial=False,
     overwrite_source=False,
@@ -890,6 +994,7 @@ def get_or_create_hot_spike_single_dt(
         source_seed=source_seed,
         source_log_period=source_log_period,
         random_location=random_location,
+        location_seed=location_seed,
         overwrite=overwrite_initial,
         overwrite_source=overwrite_source,
         create_source_if_missing=create_source_if_missing,
@@ -902,6 +1007,11 @@ def get_or_create_hot_spike_single_dt(
             source_result=initial_result["source_result"],
             fallback_seed=source_seed,
         )
+    effective_location_seed = (
+        source_metadata_seed
+        if location_seed is None
+        else int(location_seed)
+    )
 
     evolved_paths = legacy_excitation_evolved_paths(
         n_fcc_cells=n_fcc_cells,
@@ -917,7 +1027,7 @@ def get_or_create_hot_spike_single_dt(
         dt=dt,
         center=None,
         random_location=random_location,
-        excitation_seed=source_metadata_seed,
+        excitation_seed=effective_location_seed,
     )
 
     if initial_result["frame"] is None:
@@ -1056,6 +1166,7 @@ def get_or_create_hot_spike(
     log_period=1_000,
     trajectory_period=1_000,
     random_location=False,
+    location_seed=None,
     overwrite=False,
     overwrite_initial=False,
     overwrite_source=False,
@@ -1089,6 +1200,8 @@ def get_or_create_hot_spike(
     remains constant across both segments.
     All particles control the box by default. The earlier split-integrator
     behavior is available only with ``nph_mask_controls_box=True``.
+    When ``random_location`` is true, set ``location_seed`` to vary the
+    excitation center independently of ``source_seed``.
     """
 
     if dt2 is None:
@@ -1120,6 +1233,7 @@ def get_or_create_hot_spike(
         log_period=log_period,
         trajectory_period=trajectory_period,
         random_location=random_location,
+        location_seed=location_seed,
         overwrite=overwrite,
         overwrite_initial=overwrite_initial,
         overwrite_source=overwrite_source,

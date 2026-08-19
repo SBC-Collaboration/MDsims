@@ -119,6 +119,40 @@ result = get_or_create_hot_spike(
 )
 ```
 
+To replace only the masked particles' velocities with a seeded
+Maxwell-Boltzmann draw, while making their final kinetic energy exactly equal
+to their original kinetic energy plus `injected_energy`, set:
+
+```python
+result = get_or_create_hot_spike(
+    # ...same state and evolution arguments...
+    method="maxwell_boltzmann_resample",
+)
+```
+
+This method uses the seed stored by the source thermalization. Its creation
+metadata records `target_kT`, `achieved_kT`, `velocity_seed`, and the kinetic
+energy before and after the redraw. It removes center-of-mass drift from the
+new masked velocities, following HOOMD's momentum-thermalization convention.
+The unmasked particles are unchanged.
+
+Random excitation locations can use an independent seed without changing the
+thermalized source:
+
+```python
+result = get_or_create_hot_spike(
+    # ...same state and evolution arguments...
+    source_seed=1,
+    random_location=True,
+    location_seed=7,
+)
+```
+
+The source remains under `source_seed_1`, while the excitation state and its
+evolution are stored under `random_center_seed_7`. If `location_seed` is
+omitted, it defaults to the source thermalization's stored seed for backward
+compatibility.
+
 Stitch the saved outputs only when needed:
 
 ```python

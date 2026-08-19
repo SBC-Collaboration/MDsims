@@ -17,7 +17,7 @@ from .paths import (
     EXCITATION_EVOLVED_V3_ROOT,
     excitation_evolved_paths,
 )
-from .run_logs import simulation_progress
+from .run_logs import progress_print, simulation_progress
 from .spatial import periodic_distances
 
 
@@ -704,6 +704,7 @@ def get_or_create_two_segment_hot_spike(
     log_period=1_000,
     trajectory_period=1_000,
     random_location=False,
+    location_seed=None,
     overwrite=False,
     overwrite_initial=False,
     overwrite_source=False,
@@ -730,6 +731,8 @@ def get_or_create_two_segment_hot_spike(
     held constant across both segments. The outer mask is diagnostic by
     default; set ``nph_mask_controls_box=True`` only to reproduce the
     experimental split-integrator construction.
+    ``location_seed`` independently controls a random excitation center; when
+    omitted, the source thermalization metadata seed is used.
     """
 
     # Local import avoids a module cycle while keeping initial-state ownership
@@ -798,6 +801,7 @@ def get_or_create_two_segment_hot_spike(
         source_seed=source_seed,
         source_log_period=source_log_period,
         random_location=random_location,
+        location_seed=location_seed,
         overwrite=overwrite_initial,
         overwrite_source=(False if ensemble == "NPH" else overwrite_source),
         create_source_if_missing=create_source_if_missing,
@@ -810,6 +814,11 @@ def get_or_create_two_segment_hot_spike(
             source_result=initial_result["source_result"],
             fallback_seed=source_seed,
         )
+    effective_location_seed = (
+        source_metadata_seed
+        if location_seed is None
+        else int(location_seed)
+    )
 
     mask_info = None
     if (
@@ -870,7 +879,7 @@ def get_or_create_two_segment_hot_spike(
         evolve_seed=evolve_seed,
         center=None,
         random_location=random_location,
-        excitation_seed=source_metadata_seed,
+        excitation_seed=effective_location_seed,
         base_folder=base_folder,
         ensemble=ensemble,
         pressure=pressure,
@@ -1213,6 +1222,10 @@ def get_or_create_two_segment_hot_spike(
                     segment_timing=segment_timing,
                     common_metadata=common_metadata,
                     error=error,
+                )
+                progress_print(
+                    "Recorded terminal bubble from NPH upper-volume stop "
+                    f"in segment {segment_index}; continuing the sweep."
                 )
                 return {
                     "frame": None,

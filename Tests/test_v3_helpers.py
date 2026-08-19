@@ -15,6 +15,7 @@ from md_Helpers import (
     dt_validation,
     eos_sweep,
     excitation_evolution,
+    hot_spike,
     master_csv,
     paths,
     run_logs,
@@ -298,6 +299,102 @@ class PathTests(unittest.TestCase):
             str(evolved["folder"]),
         )
         self.assertTrue(evolved["nph_mask_controls_box"])
+
+
+class HotSpikeCreationTests(unittest.TestCase):
+    @staticmethod
+    def _frame():
+        import gsd.hoomd
+
+        frame = gsd.hoomd.Frame()
+        frame.configuration.box = [10.0, 10.0, 10.0, 0.0, 0.0, 0.0]
+        frame.particles.N = 4
+        frame.particles.types = ["A"]
+        frame.particles.position = np.asarray([
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0],
+            [0.0, 0.5, 0.0],
+            [4.0, 0.0, 0.0],
+        ])
+        frame.particles.velocity = np.asarray([
+            [1.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 3.0],
+            [4.0, 5.0, 6.0],
+        ])
+        frame.particles.mass = np.asarray([1.0, 2.0, 3.0, 4.0])
+        return frame
+
+    def test_maxwell_boltzmann_resample_has_exact_energy_and_seed(self):
+        frame = self._frame()
+        deposited_energy = 7.5
+
+        result_a, info_a = hot_spike.make_hot_spike_frame_from_frame(
+            frame=frame,
+            radius=1.0,
+            injected_energy=deposited_energy,
+            method="maxwell_boltzmann_resample",
+            location_seed=23,
+            return_info=True,
+        )
+        result_b, info_b = hot_spike.make_hot_spike_frame_from_frame(
+            frame=frame,
+            radius=1.0,
+            injected_energy=deposited_energy,
+            method="maxwell_boltzmann_resample",
+            location_seed=23,
+            return_info=True,
+        )
+
+        expected_ke = info_a["selected_ke_before"] + deposited_energy
+        self.assertAlmostEqual(info_a["selected_ke_after"], expected_ke)
+        self.assertAlmostEqual(
+            info_a["actual_injected_energy"],
+            deposited_energy,
+        )
+        self.assertAlmostEqual(info_a["target_kT"], 2.0 * expected_ke / 6.0)
+        self.assertAlmostEqual(info_a["achieved_kT"], info_a["target_kT"])
+        self.assertEqual(info_a["velocity_seed"], 23)
+        np.testing.assert_allclose(
+            [
+                info_a["selected_momentum_after_x"],
+                info_a["selected_momentum_after_y"],
+                info_a["selected_momentum_after_z"],
+            ],
+            np.zeros(3),
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            result_a.particles.velocity[:3],
+            result_b.particles.velocity[:3],
+        )
+        np.testing.assert_allclose(
+            result_a.particles.velocity[3],
+            frame.particles.velocity[3],
+        )
+        self.assertEqual(info_a["target_kT"], info_b["target_kT"])
+
+    def test_explicit_location_seed_is_separate_from_source_seed(self):
+        with patch.object(
+            hot_spike.cavitation_helpers,
+            "get_source_randomization_result",
+            return_value={"frame": None},
+        ):
+            result = hot_spike.get_or_create_hot_spike_state(
+                n_fcc_cells=10,
+                target_rho=0.72,
+                kT=0.8,
+                source_nsteps=1_000_000,
+                radius=3.0,
+                injected_energy=600.0,
+                source_seed=1,
+                random_location=True,
+                location_seed=7,
+            )
+
+        path_text = str(result["paths"]["state_path"])
+        self.assertIn("source_seed_1", path_text)
+        self.assertIn("random_center_seed_7", path_text)
 
 
 class ExcitationEvolutionTests(unittest.TestCase):
