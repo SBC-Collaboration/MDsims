@@ -396,6 +396,85 @@ class HotSpikeCreationTests(unittest.TestCase):
         self.assertIn("source_seed_1", path_text)
         self.assertIn("random_center_seed_7", path_text)
 
+    def test_random_center_can_be_translated_to_origin_and_wrapped(self):
+        import gsd.hoomd
+
+        location_seed = 17
+        box_lengths = np.asarray([10.0, 10.0, 10.0])
+        template = self._frame()
+        sampled_center = hot_spike._choose_spike_center(
+            template,
+            random_location=True,
+            seed=location_seed,
+        )
+        offsets = np.asarray([
+            [0.1, 0.0, 0.0],
+            [-0.2, 0.1, 0.0],
+            [0.0, 0.2, -0.1],
+            [4.0, 0.0, 0.0],
+        ])
+
+        frame = gsd.hoomd.Frame()
+        frame.configuration.box = [*box_lengths, 0.0, 0.0, 0.0]
+        frame.particles.N = 4
+        frame.particles.types = ["A"]
+        frame.particles.position = spatial.wrap_positions(
+            sampled_center + offsets,
+            box_lengths,
+        )
+        frame.particles.image = np.zeros((4, 3), dtype=np.int32)
+        frame.particles.velocity = np.asarray([
+            [1.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 3.0],
+            [4.0, 5.0, 6.0],
+        ])
+        frame.particles.mass = np.ones(4)
+
+        result, info = hot_spike.make_hot_spike_frame_from_frame(
+            frame=frame,
+            radius=1.0,
+            injected_energy=5.0,
+            random_location=True,
+            location_seed=location_seed,
+            recenter_random_location=True,
+            return_info=True,
+        )
+
+        result_positions = np.asarray(result.particles.position)
+        np.testing.assert_allclose(
+            result_positions[:3],
+            offsets[:3],
+            atol=1e-12,
+        )
+        self.assertTrue(np.all(result_positions >= -0.5 * box_lengths))
+        self.assertTrue(np.all(result_positions < 0.5 * box_lengths))
+        np.testing.assert_allclose(info["spike_center"], np.zeros(3))
+        np.testing.assert_allclose(
+            info["sampled_spike_center"],
+            sampled_center,
+        )
+        np.testing.assert_allclose(
+            [
+                info["coordinate_shift_x"],
+                info["coordinate_shift_y"],
+                info["coordinate_shift_z"],
+            ],
+            -sampled_center,
+        )
+        self.assertTrue(info["coordinate_shift_applied"])
+        np.testing.assert_allclose(
+            info["selected_particle_positions"],
+            offsets[:3],
+            atol=1e-12,
+        )
+
+        translated = np.asarray(frame.particles.position) - sampled_center
+        crossings = np.floor(
+            (translated + 0.5 * box_lengths) / box_lengths
+        ).astype(np.int32)
+        np.testing.assert_array_equal(result.particles.image, crossings)
+
 
 class ExcitationEvolutionTests(unittest.TestCase):
     def test_outer_pressure_mask_uses_thermalized_box_and_spike_center(self):

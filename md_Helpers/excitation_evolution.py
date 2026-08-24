@@ -802,6 +802,9 @@ def get_or_create_two_segment_hot_spike(
         source_log_period=source_log_period,
         random_location=random_location,
         location_seed=location_seed,
+        recenter_random_location=(
+            ensemble == "NPH" and random_location
+        ),
         overwrite=overwrite_initial,
         overwrite_source=(False if ensemble == "NPH" else overwrite_source),
         create_source_if_missing=create_source_if_missing,

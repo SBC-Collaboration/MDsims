@@ -123,7 +123,12 @@ def _particle_masses(frame):
     return masses
 
 
-def _copy_frame_with_velocities(frame, velocities):
+def _copy_frame_with_velocities(
+    frame,
+    velocities,
+    positions=None,
+    images=None,
+):
     new_frame = gsd.hoomd.Frame()
     new_frame.configuration.step = int(frame.configuration.step)
     new_frame.configuration.box = list(frame.configuration.box)
@@ -144,6 +149,16 @@ def _copy_frame_with_velocities(frame, velocities):
         velocities,
         dtype=np.float64,
     ).copy()
+    if positions is not None:
+        new_frame.particles.position = np.asarray(
+            positions,
+            dtype=np.float64,
+        ).copy()
+    if images is not None:
+        new_frame.particles.image = np.asarray(
+            images,
+            dtype=np.int32,
+        ).copy()
 
     return new_frame
 
@@ -178,6 +193,7 @@ def make_hot_spike_frame_from_frame(
     velocity_seed=None,
     location_seed_source="source_thermalization_metadata_seed",
     velocity_seed_source=None,
+    recenter_random_location=False,
     return_info=False,
 ):
     """
@@ -342,19 +358,62 @@ def make_hot_spike_frame_from_frame(
         axis=0,
     )
 
+    sampled_center = center.copy()
+    saved_center = center.copy()
+    saved_positions = positions.copy()
+    saved_images = None
+    coordinate_shift = np.zeros(3, dtype=np.float64)
+    coordinate_shift_applied = bool(
+        random_location and recenter_random_location
+    )
+
+    if coordinate_shift_applied:
+        coordinate_shift = -sampled_center
+        translated_positions = positions + coordinate_shift
+        image_crossings = np.floor(
+            (translated_positions + 0.5 * box_lengths) / box_lengths
+        ).astype(np.int64)
+        saved_positions = (
+            translated_positions - image_crossings * box_lengths
+        )
+        saved_center = np.zeros(3, dtype=np.float64)
+
+        try:
+            source_images = np.asarray(frame.particles.image)
+        except Exception:
+            source_images = None
+        if (
+            source_images is not None
+            and source_images.shape == saved_positions.shape
+        ):
+            saved_images = source_images.astype(np.int64) + image_crossings
+        else:
+            saved_images = image_crossings
+
     new_frame = _copy_frame_with_velocities(
         frame=frame,
         velocities=velocities,
+        positions=saved_positions,
+        images=saved_images,
     )
 
     info = {
         "energy_dump_method": method,
         "radius": float(radius),
         "radius_definition": "absolute radius in simulation length units",
-        "spike_center": center.copy(),
-        "spike_center_x": float(center[0]),
-        "spike_center_y": float(center[1]),
-        "spike_center_z": float(center[2]),
+        "spike_center": saved_center.copy(),
+        "spike_center_x": float(saved_center[0]),
+        "spike_center_y": float(saved_center[1]),
+        "spike_center_z": float(saved_center[2]),
+        "sampled_spike_center": sampled_center.copy(),
+        "sampled_spike_center_x": float(sampled_center[0]),
+        "sampled_spike_center_y": float(sampled_center[1]),
+        "sampled_spike_center_z": float(sampled_center[2]),
+        "coordinate_shift_applied": coordinate_shift_applied,
+        "coordinate_shift_x": float(coordinate_shift[0]),
+        "coordinate_shift_y": float(coordinate_shift[1]),
+        "coordinate_shift_z": float(coordinate_shift[2]),
+        "positions_wrapped_after_shift": coordinate_shift_applied,
         "random_location": bool(random_location),
         "location_seed_source": str(location_seed_source),
         "location_seed": int(location_seed),
@@ -386,7 +445,7 @@ def make_hot_spike_frame_from_frame(
         "selected_momentum_after_y": float(selected_momentum_after[1]),
         "selected_momentum_after_z": float(selected_momentum_after[2]),
         "selected_particle_indices": selected_indices,
-        "selected_particle_positions": positions[selected_mask].copy(),
+        "selected_particle_positions": saved_positions[selected_mask].copy(),
     }
 
     if method == "maxwell_boltzmann_resample":
@@ -580,6 +639,7 @@ def get_or_create_hot_spike_state(
     source_log_period=1_000,
     random_location=False,
     location_seed=None,
+    recenter_random_location=False,
     overwrite=False,
     overwrite_source=False,
     create_source_if_missing=True,
@@ -591,6 +651,8 @@ def get_or_create_hot_spike_state(
 
     When ``random_location`` is true, ``location_seed`` controls only the
     excitation center. If omitted, it defaults to the source metadata seed.
+    ``recenter_random_location`` translates that sampled center to the box
+    origin and periodically wraps all particles before saving the state.
     """
 
     source_result = cavitation_helpers.get_source_randomization_result(
@@ -685,12 +747,6 @@ def get_or_create_hot_spike_state(
     )
 
     if state_path.exists() and not overwrite:
-        print()
-        print()
-        print("Loaded existing hot-spike initial state:")
-        print(state_path)
-
-        frame = _load_frame_from_gsd(state_path)
         creation_metadata = {}
         if metadata_path.exists():
             creation_metadata = metadata_helpers.read_attrs(
@@ -698,23 +754,41 @@ def get_or_create_hot_spike_state(
                 "metadata/creation",
             )
 
-        info = {
-            "created_new": False,
-            "state_path": str(state_path),
-            "creation_metadata_path": str(metadata_path),
-            "N": int(frame.particles.N),
-        }
-        info.update(creation_metadata)
+        needs_recentered_state = bool(
+            random_location and recenter_random_location
+        )
+        has_recentered_state = bool(
+            creation_metadata.get("coordinate_shift_applied", False)
+        )
+        if needs_recentered_state and not has_recentered_state:
+            print(
+                "Existing random-center excitation predates NPH recentering; "
+                "rebuilding its saved initial frame."
+            )
+        else:
+            print()
+            print()
+            print("Loaded existing hot-spike initial state:")
+            print(state_path)
 
-        return {
-            "frame": frame,
-            "paths": paths,
-            "source_result": source_result,
-            "source_phase_separation": source_phase_separation,
-            "creation_info": info,
-            "created_new": False,
-            "status": "loaded_initial",
-        }
+            frame = _load_frame_from_gsd(state_path)
+            info = {
+                "created_new": False,
+                "state_path": str(state_path),
+                "creation_metadata_path": str(metadata_path),
+                "N": int(frame.particles.N),
+            }
+            info.update(creation_metadata)
+
+            return {
+                "frame": frame,
+                "paths": paths,
+                "source_result": source_result,
+                "source_phase_separation": source_phase_separation,
+                "creation_info": info,
+                "created_new": False,
+                "status": "loaded_initial",
+            }
 
     frame, info = make_hot_spike_frame_from_frame(
         frame=source_result["frame"],
@@ -726,13 +800,14 @@ def get_or_create_hot_spike_state(
         velocity_seed=source_metadata_seed,
         location_seed_source=location_seed_source,
         velocity_seed_source="source_thermalization_metadata_seed",
+        recenter_random_location=recenter_random_location,
         return_info=True,
     )
 
     _save_frame_to_gsd(
         frame=frame,
         state_path=state_path,
-        overwrite=overwrite,
+        overwrite=(overwrite or state_path.exists()),
     )
     _write_hot_spike_creation_metadata(
         metadata_path=metadata_path,
