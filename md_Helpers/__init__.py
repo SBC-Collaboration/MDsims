@@ -9,6 +9,7 @@ Primary modules:
 - runs: logging, final-state saving, and trajectory runs
 - classification: phase-separation and PE-drop classifiers
 - voxel_fit: gas, liquid, and interface voxel-mixture fitting
+- phase_density: batch phase-separated thermalization density fits
 - cavitation: cavitated starting-state creation and evolution
 - hot_spike: localized kinetic-energy excitation and NVE evolution
 - excitation_evolution: two-segment dt changes, stitching, and migration
@@ -32,6 +33,7 @@ __all__ = [
     "runs",
     "classification",
     "voxel_fit",
+    "phase_density",
     "cavitation",
     "hot_spike",
     "excitation_evolution",
