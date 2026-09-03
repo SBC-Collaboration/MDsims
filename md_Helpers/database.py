@@ -18,7 +18,7 @@ from typing import Any, Iterator
 MASTER_TABLE = "MD_Master"
 THERMALIZATION_TABLE = "Thermalization"
 
-MASTER_COLUMNS = {
+MASTER_COLUMN_ORDER = (
     "Run_ID",
     "Run_Signature",
     "N_Cells",
@@ -33,7 +33,8 @@ MASTER_COLUMNS = {
     "Stop_Reason",
     "Status_Message",
     "Notes",
-}
+)
+MASTER_COLUMNS = set(MASTER_COLUMN_ORDER)
 
 THERMALIZATION_COLUMNS = {
     "Run_ID",
@@ -362,3 +363,79 @@ class SQLiteRunDatabase:
             if cursor.rowcount != 1:
                 raise KeyError(f"Run_ID was not found: {run_id}")
 
+
+def master_dataframe(database: SQLiteRunDatabase):
+    """Return every Master row as a pandas table in canonical column order."""
+
+    import pandas as pd
+
+    rows = database.query_runs()
+    return pd.DataFrame.from_records(
+        rows,
+        columns=MASTER_COLUMN_ORDER,
+    ).convert_dtypes()
+
+
+def display_master_table(
+    database: SQLiteRunDatabase | None = None,
+    project_paths=None,
+):
+    """Display the complete Master table cleanly in a Jupyter notebook.
+
+    The returned DataFrame can also be filtered or reused by the caller.
+    """
+
+    import pandas as pd
+    from IPython.display import display
+
+    if database is None:
+        from .paths import ProjectPaths
+
+        project_paths = project_paths or ProjectPaths()
+        database = SQLiteRunDatabase(project_paths.database)
+    database.initialize()
+    table = master_dataframe(database)
+
+    integer_columns = ["N_Cells", "Nsteps", "Current_Nstep"]
+    float_columns = ["ElapsedTime"]
+    numeric_columns = integer_columns + float_columns
+    text_columns = [
+        column for column in MASTER_COLUMN_ORDER if column not in numeric_columns
+    ]
+
+    formatters = {
+        **{column: "{:,.0f}" for column in integer_columns},
+        **{column: "{:,.3f}" for column in float_columns},
+    }
+    styled = (
+        table.style.hide(axis="index")
+        .format(formatters, na_rep="NULL")
+        .set_properties(
+            subset=numeric_columns,
+            **{"text-align": "right", "white-space": "nowrap"},
+        )
+        .set_properties(
+            subset=text_columns,
+            **{"text-align": "left", "white-space": "nowrap"},
+        )
+        .set_table_styles([
+            {
+                "selector": "th",
+                "props": [
+                    ("text-align", "left"),
+                    ("white-space", "nowrap"),
+                ],
+            }
+        ])
+    )
+
+    with pd.option_context(
+        "display.max_rows",
+        None,
+        "display.max_columns",
+        None,
+        "display.max_colwidth",
+        None,
+    ):
+        display(styled)
+    return table

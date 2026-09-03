@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from md_Helpers.database import SQLiteRunDatabase
+from md_Helpers.database import SQLiteRunDatabase, master_dataframe
 from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.signatures import create_run_signature
@@ -76,6 +76,10 @@ class DatabaseTests(unittest.TestCase):
         match = self.database.check_run_exists("a" * 64)
         self.assertEqual(match["Run_ID"], run_id)
 
+        table = master_dataframe(self.database)
+        self.assertEqual(table.loc[0, "Run_ID"], run_id)
+        self.assertEqual(len(table.columns), 14)
+
     def test_complete_thermalization_updates_both_tables(self):
         run_id = self.database.reserve_run_id()
         self.database.update_master(
@@ -127,4 +131,3 @@ class DatabaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
