@@ -3,12 +3,20 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from md_Helpers.database import SQLiteRunDatabase, master_dataframe
+import numpy as np
+
+from md_Helpers.database import (
+    SQLiteRunDatabase,
+    master_dataframe,
+    thermalization_dataframe,
+)
 from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.signatures import create_run_signature
 from md_Helpers.thermalization import ThermalizationConfig
+from md_Helpers.voxel_fit import conditional_phase_fit, phase_fit_sql_values
 
 
 class SignatureTests(unittest.TestCase):
@@ -30,6 +38,31 @@ class LatticeTests(unittest.TestCase):
         self.assertEqual(lattice.n_particles, 4 * 3**3)
         self.assertEqual(lattice.positions.shape, (4 * 3**3, 3))
         self.assertAlmostEqual(lattice.actual_density, 0.5)
+
+
+class PhaseFitPolicyTests(unittest.TestCase):
+    @patch("md_Helpers.voxel_fit.fit_final_frame_voxel_mixture")
+    def test_homogeneous_state_skips_fit_and_leaves_values_null(self, fit):
+        result = conditional_phase_fit(
+            {"phase_separated": False},
+            positions=np.zeros((1, 3)),
+            box=np.array([10, 10, 10, 0, 0, 0]),
+            n_cells=4,
+        )
+        fit.assert_not_called()
+        self.assertEqual(result["status"], "Skipped_Homogeneous")
+        sql_values = phase_fit_sql_values(result)
+        for column in [
+            "rho_liquid",
+            "rho_liquid_unc",
+            "rho_gas",
+            "rho_gas_unc",
+            "V_liquid",
+            "V_liquid_unc",
+            "V_gas",
+            "V_gas_unc",
+        ]:
+            self.assertIsNone(sql_values[column])
 
 
 class PathTests(unittest.TestCase):
@@ -127,6 +160,15 @@ class DatabaseTests(unittest.TestCase):
                 (run_id,),
             ).fetchone()[0]
         self.assertEqual(count, 1)
+
+        table = thermalization_dataframe(
+            self.database,
+            Therm_kT=(0.8, 1.0),
+            Nsteps=[100, 200],
+            Phase_Separation_Status="Not_Separated",
+        )
+        self.assertEqual(len(table), 1)
+        self.assertEqual(table.loc[0, "Run_ID"], run_id)
 
 
 if __name__ == "__main__":

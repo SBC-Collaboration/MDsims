@@ -20,6 +20,7 @@ from .lattices import FCC_METHOD_VERSION, build_fcc_lattice, make_gsd_frame
 from .paths import ProjectPaths, RunPaths
 from .signatures import canonical_json, create_run_signature
 from .storage import RunStorage, StateData, update_hdf5_metadata
+from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
 
 
 THERMALIZATION_METHOD_VERSION = "thermalization_v4_1"
@@ -53,6 +54,9 @@ class ThermalizationConfig:
     pe_drop_n_last: int = 100
     pe_drop_decision_rule: str = "either"
     summary_num_samples: int = 100
+    phase_fit_interface_void_fraction: float = 0.5
+    phase_fit_interface_points: int = 40
+    phase_fit_max_iterations: int = 500
     notes: str | None = None
 
     def validate(self) -> None:
@@ -63,6 +67,8 @@ class ThermalizationConfig:
             "progress_period": self.progress_period,
             "pe_drop_n_last": self.pe_drop_n_last,
             "summary_num_samples": self.summary_num_samples,
+            "phase_fit_interface_points": self.phase_fit_interface_points,
+            "phase_fit_max_iterations": self.phase_fit_max_iterations,
         }
         for name, value in positive_ints.items():
             if int(value) <= 0:
@@ -87,6 +93,10 @@ class ThermalizationConfig:
             raise ValueError("device must be auto, cpu, or gpu")
         if int(self.seed) < 0:
             raise ValueError("seed cannot be negative")
+        if not 0 <= float(self.phase_fit_interface_void_fraction) <= 1:
+            raise ValueError(
+                "phase_fit_interface_void_fraction must be between 0 and 1"
+            )
 
     def signature_parameters(self) -> dict[str, Any]:
         """Parameters that define dynamics or canonical saved output."""
@@ -431,6 +441,15 @@ def run_thermalization(
             z_limit=config.pe_drop_z_limit,
             decision_rule=config.pe_drop_decision_rule,
         )
+        phase_fit = conditional_phase_fit(
+            voxel,
+            state.positions,
+            state.box,
+            config.n_fcc_cells,
+            interface_void_fraction=config.phase_fit_interface_void_fraction,
+            interface_points=config.phase_fit_interface_points,
+            max_iterations=config.phase_fit_max_iterations,
+        )
         selected_phase = select_phase_classification(
             voxel,
             pe_drop,
@@ -466,7 +485,7 @@ def run_thermalization(
             "mdsims/analysis/phase_separation/PE_drop": pe_drop,
             "mdsims/analysis/phase_separation/selected": selected_phase,
             "mdsims/analysis/thermodynamics": summary,
-            "mdsims/analysis/phase_fit": {"Status": "Not_Run"},
+            "mdsims/analysis/phase_fit": phase_fit,
         })
         storage.close()
 
@@ -495,7 +514,7 @@ def run_thermalization(
             "Phase_Separation_Status": selected_phase["status"],
             "Phase_Separation_Method": selected_phase["method"],
             "Phase_Separation_Method_Version": selected_phase["method_version"],
-            "Phase_Fit_Status": "Not_Run",
+            **phase_fit_sql_values(phase_fit),
             **summary,
             "Num_Frames": storage.frame_count,
         }
@@ -522,6 +541,7 @@ def run_thermalization(
             "trajectory_path": run_paths.trajectory,
             "hdf5_path": run_paths.hdf5,
             "phase_separation": selected_phase,
+            "phase_fit": phase_fit,
             "thermodynamic_summary": summary,
         }
 
@@ -564,4 +584,3 @@ def run_thermalization(
         except Exception as database_error:
             error.add_note(f"The failure could not be written to SQL: {database_error}")
         raise
-

@@ -11,7 +11,10 @@ V4 currently contains the smallest complete thermalization workflow. It:
 6. writes exact initial, periodic, and final samples to `trajectory.gsd` and
    `run.hdf5`;
 7. records thermodynamic summaries and both voxel and PE-drop phase checks;
-8. inserts the Thermalization row and marks Master complete in one transaction.
+8. runs the final-frame voxel mixture fit only when the voxel classifier marks
+   the state phase separated, leaving all eight fit values SQL `NULL` for a
+   homogeneous state;
+9. inserts the Thermalization row and marks Master complete in one transaction.
 
 ## Output root
 
@@ -73,3 +76,28 @@ database.query_runs(Sim_Type="Thermalization", Status="Complete")
 # Render every Master row and column as a formatted pandas table.
 master = display_master_table(database)
 ```
+
+Display the complete Thermalization table:
+
+```python
+from md_Helpers import display_thermalization_table
+
+thermalizations = display_thermalization_table(database)
+```
+
+Filter it using equality, inclusive ranges, or lists of accepted values:
+
+```python
+thermalizations = display_thermalization_table(
+    database,
+    limit=100,                              # None returns every match
+    Therm_kT=(0.85, 0.95),                 # inclusive range
+    Density_End=(0.45, 0.55),              # inclusive range
+    Nsteps=[10_000, 100_000, 1_000_000],   # any listed value
+    Phase_Separation_Status="Separated",   # exact match
+)
+```
+
+All supplied filters are combined with `AND`. A scalar means equality, a list
+or set means SQL `IN`, a two-item tuple means an inclusive range, and `None`
+selects rows where that column is SQL `NULL`.

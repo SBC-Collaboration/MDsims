@@ -36,7 +36,7 @@ MASTER_COLUMN_ORDER = (
 )
 MASTER_COLUMNS = set(MASTER_COLUMN_ORDER)
 
-THERMALIZATION_COLUMNS = {
+THERMALIZATION_COLUMN_ORDER = (
     "Run_ID",
     "File_Location",
     "Clone_Run_ID",
@@ -81,7 +81,8 @@ THERMALIZATION_COLUMNS = {
     "PE_Per_Particle_Std",
     "PE_Per_Particle_SEM",
     "Num_Frames",
-}
+)
+THERMALIZATION_COLUMNS = set(THERMALIZATION_COLUMN_ORDER)
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS MD_Master (
@@ -320,6 +321,71 @@ class SQLiteRunDatabase:
             rows = connection.execute(sql, parameters).fetchall()
         return [dict(row) for row in rows]
 
+    def query_thermalizations(
+        self,
+        limit: int | None = None,
+        **filters: Any,
+    ) -> list[dict[str, Any]]:
+        """Query completed Thermalization rows with flexible filters.
+
+        A scalar requires equality, a list/set accepts any listed value, a
+        two-item tuple is an inclusive (minimum, maximum) range, and None
+        selects SQL NULL. Multiple filters are combined with AND.
+        """
+
+        unknown = set(filters) - THERMALIZATION_COLUMNS
+        if unknown:
+            raise ValueError(
+                f"Unknown Thermalization filters: {sorted(unknown)}"
+            )
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        for column, value in filters.items():
+            if value is None:
+                clauses.append(f"{column} IS NULL")
+            elif isinstance(value, tuple):
+                if len(value) != 2:
+                    raise ValueError(
+                        f"Range filter for {column} must have two items"
+                    )
+                minimum, maximum = value
+                if minimum is None and maximum is None:
+                    raise ValueError(
+                        f"Range filter for {column} cannot be (None, None)"
+                    )
+                if minimum is not None:
+                    clauses.append(f"{column} >= ?")
+                    parameters.append(minimum)
+                if maximum is not None:
+                    clauses.append(f"{column} <= ?")
+                    parameters.append(maximum)
+            elif isinstance(value, (list, set, frozenset)):
+                accepted = list(value)
+                if not accepted:
+                    clauses.append("0 = 1")
+                else:
+                    placeholders = ", ".join("?" for _ in accepted)
+                    clauses.append(f"{column} IN ({placeholders})")
+                    parameters.extend(accepted)
+            else:
+                clauses.append(f"{column} = ?")
+                parameters.append(value)
+
+        sql = "SELECT * FROM Thermalization"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY Run_ID"
+        if limit is not None:
+            limit = int(limit)
+            if limit <= 0:
+                raise ValueError("limit must be positive or None")
+            sql += " LIMIT ?"
+            parameters.append(limit)
+
+        with self.connection() as connection:
+            rows = connection.execute(sql, parameters).fetchall()
+        return [dict(row) for row in rows]
+
     def complete_thermalization(
         self,
         run_id: str,
@@ -376,36 +442,37 @@ def master_dataframe(database: SQLiteRunDatabase):
     ).convert_dtypes()
 
 
-def display_master_table(
-    database: SQLiteRunDatabase | None = None,
-    project_paths=None,
+def thermalization_dataframe(
+    database: SQLiteRunDatabase,
+    limit: int | None = None,
+    **filters: Any,
 ):
-    """Display the complete Master table cleanly in a Jupyter notebook.
+    """Return selected Thermalization rows as a pandas table."""
 
-    The returned DataFrame can also be filtered or reused by the caller.
-    """
+    import pandas as pd
+
+    rows = database.query_thermalizations(limit=limit, **filters)
+    return pd.DataFrame.from_records(
+        rows,
+        columns=THERMALIZATION_COLUMN_ORDER,
+    ).convert_dtypes()
+
+
+def _display_dataframe(
+    table,
+    integer_columns: list[str],
+    float_columns: list[str],
+):
+    """Render all rows/columns without tab-based alignment."""
 
     import pandas as pd
     from IPython.display import display
 
-    if database is None:
-        from .paths import ProjectPaths
-
-        project_paths = project_paths or ProjectPaths()
-        database = SQLiteRunDatabase(project_paths.database)
-    database.initialize()
-    table = master_dataframe(database)
-
-    integer_columns = ["N_Cells", "Nsteps", "Current_Nstep"]
-    float_columns = ["ElapsedTime"]
     numeric_columns = integer_columns + float_columns
-    text_columns = [
-        column for column in MASTER_COLUMN_ORDER if column not in numeric_columns
-    ]
-
+    text_columns = [column for column in table.columns if column not in numeric_columns]
     formatters = {
         **{column: "{:,.0f}" for column in integer_columns},
-        **{column: "{:,.3f}" for column in float_columns},
+        **{column: "{:,.6g}" for column in float_columns},
     }
     styled = (
         table.style.hide(axis="index")
@@ -421,14 +488,10 @@ def display_master_table(
         .set_table_styles([
             {
                 "selector": "th",
-                "props": [
-                    ("text-align", "left"),
-                    ("white-space", "nowrap"),
-                ],
+                "props": [("text-align", "left"), ("white-space", "nowrap")],
             }
         ])
     )
-
     with pd.option_context(
         "display.max_rows",
         None,
@@ -439,3 +502,72 @@ def display_master_table(
     ):
         display(styled)
     return table
+
+
+def display_master_table(
+    database: SQLiteRunDatabase | None = None,
+    project_paths=None,
+):
+    """Display the complete Master table cleanly in a Jupyter notebook.
+
+    The returned DataFrame can also be filtered or reused by the caller.
+    """
+
+    if database is None:
+        from .paths import ProjectPaths
+
+        project_paths = project_paths or ProjectPaths()
+        database = SQLiteRunDatabase(project_paths.database)
+    database.initialize()
+    table = master_dataframe(database)
+    return _display_dataframe(
+        table,
+        integer_columns=["N_Cells", "Nsteps", "Current_Nstep"],
+        float_columns=["ElapsedTime"],
+    )
+
+
+def display_thermalization_table(
+    database: SQLiteRunDatabase | None = None,
+    project_paths=None,
+    limit: int | None = None,
+    **filters: Any,
+):
+    """Display all or selected Thermalization rows in Jupyter."""
+
+    if database is None:
+        from .paths import ProjectPaths
+
+        project_paths = project_paths or ProjectPaths()
+        database = SQLiteRunDatabase(project_paths.database)
+    database.initialize()
+    table = thermalization_dataframe(database, limit=limit, **filters)
+    integer_columns = [
+        "Clone_Frame_ID",
+        "Therm_Seed",
+        "Nsteps",
+        "Summary_Start_Step",
+        "Summary_End_Step",
+        "Summary_Num_Samples",
+        "Num_Frames",
+    ]
+    float_columns = [
+        column
+        for column in THERMALIZATION_COLUMN_ORDER
+        if column not in integer_columns
+        and column
+        not in {
+            "Run_ID",
+            "File_Location",
+            "Clone_Run_ID",
+            "Ensemble",
+            "LJ_Mode",
+            "Phase_Separation_Status",
+            "Phase_Separation_Method",
+            "Phase_Separation_Method_Version",
+            "Phase_Fit_Status",
+            "Phase_Fit_Method",
+            "Phase_Fit_Method_Version",
+        }
+    ]
+    return _display_dataframe(table, integer_columns, float_columns)
