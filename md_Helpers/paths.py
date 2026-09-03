@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Change this one value for a different local output root. On the shared system,
 # this will eventually become Path("/exp/e961/data/MDsims-data/pnichols/SQL").
-TOP_DIRECTORY = Path(__file__).resolve().parents[1] / "MDSims"
+TOP_DIRECTORY = Path("/exp/e961/data/MDsims-data/pnichols/SQL")
 
 
 def _default_top_directory() -> Path:
@@ -65,4 +65,3 @@ class ProjectPaths:
             sim_type=str(sim_type),
             top_directory=self.top_directory,
         )
-
