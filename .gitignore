@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Local V4 simulation output. Change md_Helpers/paths.py to use another root.
+MDSims/
+

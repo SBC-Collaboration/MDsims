@@ -1,0 +1,73 @@
+# MD Sims V4
+
+V4 currently contains the smallest complete thermalization workflow. It:
+
+1. builds the V3-style FCC lattice;
+2. computes a deterministic signature from every dynamics/output input;
+3. checks the local SQL Master table and skips an existing signature without
+   loading any run file;
+4. reserves a timestamp Run ID and incrementally updates its Master row;
+5. runs NVT thermalization with the V3 Lennard-Jones defaults;
+6. writes exact initial, periodic, and final samples to `trajectory.gsd` and
+   `run.hdf5`;
+7. records thermodynamic summaries and both voxel and PE-drop phase checks;
+8. inserts the Thermalization row and marks Master complete in one transaction.
+
+## Output root
+
+Change `TOP_DIRECTORY` in `md_Helpers/paths.py`, or set the
+`MDSIMS_TOP_DIRECTORY` environment variable before importing the package.
+The local default is:
+
+```text
+MDSims/
+├── mdsims.sqlite3
+└── Thermalization/
+    └── <Run_ID>/
+        ├── trajectory.gsd
+        └── run.hdf5
+```
+
+The future shared root is
+`/exp/e961/data/MDsims-data/pnichols/SQL`. The live MySQL server storage will
+remain separate from this simulation-file root.
+
+## Notebook use
+
+```python
+from md_Helpers import ProjectPaths, ThermalizationConfig, run_thermalization
+
+paths = ProjectPaths()
+
+config = ThermalizationConfig(
+    n_fcc_cells=45,
+    target_rho=0.5,
+    nsteps=10_000,
+    kT=0.9,
+    log_period=1_000,
+    seed=1,
+    dt=0.005,
+    epsilon_LJ=1.0,
+    sigma_LJ=1.0,
+    r_cut_LJ=2.5,
+    buffer_LJ=0.4,
+    lj_mode="xplor",
+    r_on_LJ=2.0,
+)
+
+result = run_thermalization(config, project_paths=paths)
+result
+```
+
+Running the same cell again returns the existing SQL record with
+`result["skipped"] == True`; it does not open or load its GSD/HDF5 files.
+
+Query Master independently:
+
+```python
+from md_Helpers import SQLiteRunDatabase
+
+database = SQLiteRunDatabase(paths.database)
+database.query_runs(Sim_Type="Thermalization", Status="Complete")
+```
+
