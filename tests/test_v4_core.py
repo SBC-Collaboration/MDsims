@@ -16,7 +16,7 @@ from md_Helpers.database import (
 from md_Helpers.analysis import thermodynamic_summary
 from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
-from md_Helpers.run_analysis import open_run
+from md_Helpers.run_analysis import RunAnalysis, open_run
 from md_Helpers.signatures import create_run_signature
 from md_Helpers.storage import StateData
 from md_Helpers.thermalization import (
@@ -134,6 +134,43 @@ class PathTests(unittest.TestCase):
         )
         self.assertEqual(paths.trajectory.name, "trajectory.gsd")
         self.assertEqual(paths.hdf5.name, "run.hdf5")
+
+
+class RunPlotPolicyTests(unittest.TestCase):
+    @patch("md_Helpers.run_analysis.plot_log_dataframe", return_value="figure")
+    def test_fresh_lattice_skips_first_ten_pressure_and_pe_points(self, plot):
+        run = RunAnalysis.__new__(RunAnalysis)
+        run.sim_type = "Thermalization"
+        run.state_row = {"Clone_Run_ID": None}
+        run.logs_dataframe = lambda: "logs"
+
+        result = run.plot_logs(
+            quantities=["pressure", "potential_energy_per_particle"]
+        )
+
+        self.assertEqual(result, "figure")
+        self.assertEqual(
+            plot.call_args.kwargs["skip_initial_by_quantity"],
+            {
+                "pressure": 10,
+                "potential_energy_per_particle": 10,
+                "PE_per_particle": 10,
+            },
+        )
+
+    @patch("md_Helpers.run_analysis.plot_log_dataframe", return_value="figure")
+    def test_cloned_state_keeps_all_log_points(self, plot):
+        run = RunAnalysis.__new__(RunAnalysis)
+        run.sim_type = "Thermalization"
+        run.state_row = {"Clone_Run_ID": "20260903214936"}
+        run.logs_dataframe = lambda: "logs"
+
+        run.plot_logs(quantities=["pressure"])
+
+        self.assertEqual(
+            plot.call_args.kwargs["skip_initial_by_quantity"],
+            {},
+        )
 
 
 class DatabaseTests(unittest.TestCase):

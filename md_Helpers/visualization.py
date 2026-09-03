@@ -263,7 +263,12 @@ def plot_phase_histogram(fit: dict, title: str | None = None):
     return figure
 
 
-def plot_log_dataframe(dataframe, quantities, x="run_step"):
+def plot_log_dataframe(
+    dataframe,
+    quantities,
+    x="run_step",
+    skip_initial_by_quantity: dict[str, int] | None = None,
+):
     """Plot selected synchronized HDF5 log quantities."""
 
     import matplotlib.pyplot as plt
@@ -281,8 +286,13 @@ def plot_log_dataframe(dataframe, quantities, x="run_step"):
         sharex=True,
     )
     axes = np.atleast_1d(axes)
+    skip_initial_by_quantity = skip_initial_by_quantity or {}
     for axis, quantity in zip(axes, quantities):
-        axis.plot(dataframe[x], dataframe[quantity])
+        skip = int(skip_initial_by_quantity.get(quantity, 0))
+        if skip < 0:
+            raise ValueError("Initial log points to skip cannot be negative")
+        plotted = dataframe.iloc[skip:]
+        axis.plot(plotted[x], plotted[quantity])
         axis.set_ylabel(quantity)
         axis.grid(alpha=0.3)
     axes[-1].set_xlabel(x)

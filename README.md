@@ -99,6 +99,11 @@ run.plot_phase_fit()
 run.plot_logs()
 ```
 
+For runs initialized directly from an FCC lattice, `plot_logs()` omits the
+first 10 samples from the pressure and PE/N panels to hide the construction
+transient. Clone runs retain every sample. Pass
+`skip_lattice_transient=False` to show all points.
+
 `open_run` itself performs only the SQL lookup and path resolution. GSD and
 HDF5 data are loaded lazily by the individual inspection methods.
 

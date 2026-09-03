@@ -107,6 +107,16 @@ class RunAnalysis:
         with gsd.hoomd.open(name=str(self.trajectory_path), mode="r") as trajectory:
             return len(trajectory)
 
+    @property
+    def started_from_lattice(self) -> bool:
+        """Whether this run directly initialized a fresh FCC lattice."""
+
+        return (
+            self.sim_type == "Thermalization"
+            and self.state_row is not None
+            and self.state_row.get("Clone_Run_ID") is None
+        )
+
     def info(self) -> dict[str, Any]:
         """Display SQL rows, resolved paths, status, and frame count."""
 
@@ -303,7 +313,15 @@ class RunAnalysis:
     def frame_table(self):
         return self.logs_dataframe()
 
-    def plot_logs(self, quantities=None, x: str = "run_step"):
+    def plot_logs(
+        self,
+        quantities=None,
+        x: str = "run_step",
+        skip_lattice_transient: bool = True,
+        lattice_skip_points: int = 10,
+    ):
+        """Plot logs, omitting early lattice relaxation from P and PE/N."""
+
         if quantities is None:
             quantities = [
                 "kinetic_temperature",
@@ -312,7 +330,22 @@ class RunAnalysis:
                 "volume",
                 "max_particle_speed",
             ]
-        return plot_log_dataframe(self.logs_dataframe(), quantities, x=x)
+        lattice_skip_points = int(lattice_skip_points)
+        if lattice_skip_points < 0:
+            raise ValueError("lattice_skip_points cannot be negative")
+        skipped = {}
+        if skip_lattice_transient and self.started_from_lattice:
+            skipped = {
+                "pressure": lattice_skip_points,
+                "potential_energy_per_particle": lattice_skip_points,
+                "PE_per_particle": lattice_skip_points,
+            }
+        return plot_log_dataframe(
+            self.logs_dataframe(),
+            quantities,
+            x=x,
+            skip_initial_by_quantity=skipped,
+        )
 
     def _phase_fit_attributes(self) -> dict[str, Any]:
         self._require_hdf5()
