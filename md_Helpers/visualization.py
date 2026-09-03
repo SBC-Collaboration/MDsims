@@ -10,7 +10,7 @@ from typing import Sequence
 import numpy as np
 
 
-def _render_array(frame, samples: int = 2_000) -> np.ndarray:
+def _render_array(frame, samples: int = 2_000):
     """Render one GSD frame with the same yellow-sphere style used in V3."""
 
     try:
@@ -59,7 +59,10 @@ def _render_array(frame, samples: int = 2_000) -> np.ndarray:
     scene.background_color = (1, 1, 1)
     if "CI" in os.environ:
         samples = min(int(samples), 100)
-    return np.asarray(tracer.sample(scene, samples=int(samples)))
+    # Keep Fresnel's ImageArray intact. Some Fresnel versions expose direct
+    # slicing and _repr_png_(), but np.asarray(ImageArray) produces a scalar
+    # object array instead of its pixels.
+    return tracer.sample(scene, samples=int(samples))
 
 
 def render_frame(frame, samples: int = 2_000):
@@ -70,8 +73,11 @@ def render_frame(frame, samples: int = 2_000):
         from PIL import Image as PILImage
     except ImportError as error:
         raise ImportError("Rendering requires IPython and Pillow") from error
-    rgba = _render_array(frame, samples=samples)
-    return Image(PILImage.fromarray(rgba[:, :, :3])._repr_png_())
+    rendered = _render_array(frame, samples=samples)
+    if hasattr(rendered, "_repr_png_"):
+        return Image(rendered._repr_png_())
+    rgb = np.asarray(rendered[:, :, :3], dtype=np.uint8)
+    return Image(PILImage.fromarray(rgb)._repr_png_())
 
 
 def render_frames_movie(
@@ -89,10 +95,11 @@ def render_frames_movie(
     frames = list(frames)
     if not frames:
         raise ValueError("frames cannot be empty")
-    images = [
-        PILImage.fromarray(_render_array(frame, samples=samples)[:, :, :3])
-        for frame in frames
-    ]
+    images = []
+    for frame in frames:
+        rendered = _render_array(frame, samples=samples)
+        rgb = np.asarray(rendered[:, :, :3], dtype=np.uint8)
+        images.append(PILImage.fromarray(rgb))
     first = images[0].convert("P", palette=PILImage.Palette.ADAPTIVE)
     remaining = [image.quantize(palette=first) for image in images[1:]]
     buffer = io.BytesIO()
