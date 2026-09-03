@@ -507,10 +507,13 @@ def _display_dataframe(
 def display_master_table(
     database: SQLiteRunDatabase | None = None,
     project_paths=None,
+    show_run_signature: bool = False,
 ):
     """Display the complete Master table cleanly in a Jupyter notebook.
 
-    The returned DataFrame can also be filtered or reused by the caller.
+    Run_Signature remains stored in SQL but is hidden from the normal display.
+    Pass show_run_signature=True when inspecting duplicate-run behavior. The
+    returned DataFrame contains the same columns shown in the notebook.
     """
 
     if database is None:
@@ -520,6 +523,8 @@ def display_master_table(
         database = SQLiteRunDatabase(project_paths.database)
     database.initialize()
     table = master_dataframe(database)
+    if not show_run_signature:
+        table = table.drop(columns=["Run_Signature"])
     return _display_dataframe(
         table,
         integer_columns=["N_Cells", "Nsteps", "Current_Nstep"],
