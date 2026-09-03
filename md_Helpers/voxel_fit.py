@@ -100,6 +100,55 @@ def _voxel_count_histogram(
     )
 
 
+def averaged_trajectory_voxel_histogram(
+    trajectory_path: str | Path,
+    n_cells: int,
+    num_frames: int = PHASE_FIT_NUM_FRAMES,
+    frame_stride: int = PHASE_FIT_FRAME_STRIDE,
+) -> dict[str, Any]:
+    """Return the exact multi-frame histogram used as phase-fit input."""
+
+    import gsd.hoomd
+
+    nbins = voxel_bins_for_ncells(n_cells)
+    histograms = []
+    voxel_volumes = []
+    box_volumes = []
+    with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
+        indices = phase_fit_frame_indices(len(trajectory), num_frames, frame_stride)
+        for index in indices:
+            frame = trajectory[index]
+            histogram, voxel_volume, box_volume = _voxel_count_histogram(
+                frame.particles.position,
+                frame.configuration.box,
+                nbins,
+            )
+            histograms.append(histogram)
+            voxel_volumes.append(voxel_volume)
+            box_volumes.append(box_volume)
+
+    max_count_bins = max(len(histogram) for histogram in histograms)
+    padded = np.zeros((len(histograms), max_count_bins), dtype=float)
+    for row, histogram in enumerate(histograms):
+        padded[row, : len(histogram)] = histogram
+    voxel_volume = float(np.mean(voxel_volumes))
+    count_axis = np.arange(max_count_bins)
+    return {
+        "frame_indices": indices,
+        "negative_frame_indices": [index - (indices[0] + 1) for index in indices],
+        "requested_frames": int(num_frames),
+        "frames_used": len(indices),
+        "frame_stride": int(frame_stride),
+        "voxel_nbins": int(nbins),
+        "voxel_volume": voxel_volume,
+        "box_volume": float(np.mean(box_volumes)),
+        "count_axis": count_axis,
+        "density_axis": count_axis / voxel_volume,
+        "individual_histograms": padded,
+        "observed_counts": np.mean(padded, axis=0),
+    }
+
+
 def fit_averaged_voxel_mixture(
     positions_by_frame: Sequence[np.ndarray],
     boxes_by_frame: Sequence[np.ndarray],
@@ -286,6 +335,28 @@ def fit_averaged_voxel_mixture(
         fitted_weights[0] + interface_void_fraction * fitted_weights[2]
     )
     liquid_volume = box_volume - gas_volume
+    component_probabilities_at_optimum = component_probabilities(
+        gas_mean,
+        liquid_mean,
+        float(np.exp(optimum.x[2])),
+    )
+    expected_voxels_per_frame = float(nbins**3)
+    gas_counts = (
+        expected_voxels_per_frame
+        * fitted_weights[0]
+        * component_probabilities_at_optimum[0]
+    )
+    liquid_counts = (
+        expected_voxels_per_frame
+        * fitted_weights[1]
+        * component_probabilities_at_optimum[1]
+    )
+    interface_counts = (
+        expected_voxels_per_frame
+        * fitted_weights[2]
+        * component_probabilities_at_optimum[2]
+    )
+    model_counts = gas_counts + liquid_counts + interface_counts
     log_likelihood = -float(optimum.fun)
     return {
         "success": bool(optimum.success),
@@ -297,6 +368,14 @@ def fit_averaged_voxel_mixture(
         "frame_indices": list(frame_indices) if frame_indices is not None else None,
         "frame_stride": PHASE_FIT_FRAME_STRIDE,
         "histogram_aggregation": "arithmetic_mean",
+        "count_axis": count_axis,
+        "density_axis": count_axis / voxel_volume,
+        "individual_histograms": padded,
+        "observed_counts": observed_average,
+        "model_counts": model_counts,
+        "gas_counts": gas_counts,
+        "liquid_counts": liquid_counts,
+        "interface_counts": interface_counts,
         "n_voxels_per_frame": int(nbins**3),
         "n_voxel_samples": int(nbins**3 * len(histograms)),
         "voxel_volume": voxel_volume,
@@ -336,14 +415,12 @@ def fit_trajectory_voxel_mixture(
 
     with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
         indices = phase_fit_frame_indices(len(trajectory), num_frames, frame_stride)
-        positions = [
-            np.asarray(trajectory[index].particles.position, dtype=np.float64)
-            for index in indices
-        ]
-        boxes = [
-            np.asarray(trajectory[index].configuration.box, dtype=np.float64)
-            for index in indices
-        ]
+        positions = []
+        boxes = []
+        for index in indices:
+            frame = trajectory[index]
+            positions.append(np.asarray(frame.particles.position, dtype=np.float64))
+            boxes.append(np.asarray(frame.configuration.box, dtype=np.float64))
     fit = fit_averaged_voxel_mixture(
         positions,
         boxes,

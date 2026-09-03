@@ -14,6 +14,7 @@ from md_Helpers.database import (
 )
 from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
+from md_Helpers.run_analysis import open_run
 from md_Helpers.signatures import create_run_signature
 from md_Helpers.thermalization import ThermalizationConfig
 from md_Helpers.voxel_fit import (
@@ -178,6 +179,23 @@ class DatabaseTests(unittest.TestCase):
         )
         self.assertEqual(len(table), 1)
         self.assertEqual(table.loc[0, "Run_ID"], run_id)
+
+    def test_open_run_is_a_lazy_sql_and_path_lookup(self):
+        run_id = self.database.reserve_run_id()
+        self.database.update_master(
+            run_id,
+            Run_Signature="c" * 64,
+            Sim_Type="Thermalization",
+            Status="Running",
+        )
+        paths = ProjectPaths(self.temp_directory.name)
+        run = open_run(run_id, project_paths=paths, database=self.database)
+        self.assertEqual(run.run_id, run_id)
+        self.assertEqual(
+            run.trajectory_path,
+            paths.top_directory / "Thermalization" / run_id / "trajectory.gsd",
+        )
+        self.assertFalse(run.trajectory_path.exists())
 
 
 if __name__ == "__main__":

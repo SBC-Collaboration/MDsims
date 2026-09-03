@@ -66,6 +66,22 @@ result
 Running the same cell again returns the existing SQL record with
 `result["skipped"] == True`; it does not open or load its GSD/HDF5 files.
 
+Inspect any indexed run by its global ID:
+
+```python
+from md_Helpers import open_run
+
+run = open_run("20260903182141")
+run.info()
+run.render(frame=-1)
+run.xy_slice(frame=-1)
+run.plot_phase_fit()
+run.plot_logs()
+```
+
+`open_run` itself performs only the SQL lookup and path resolution. GSD and
+HDF5 data are loaded lazily by the individual inspection methods.
+
 Query Master independently:
 
 ```python
