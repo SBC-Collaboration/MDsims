@@ -16,7 +16,11 @@ from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.signatures import create_run_signature
 from md_Helpers.thermalization import ThermalizationConfig
-from md_Helpers.voxel_fit import conditional_phase_fit, phase_fit_sql_values
+from md_Helpers.voxel_fit import (
+    conditional_phase_fit,
+    phase_fit_frame_indices,
+    phase_fit_sql_values,
+)
 
 
 class SignatureTests(unittest.TestCase):
@@ -41,12 +45,17 @@ class LatticeTests(unittest.TestCase):
 
 
 class PhaseFitPolicyTests(unittest.TestCase):
-    @patch("md_Helpers.voxel_fit.fit_final_frame_voxel_mixture")
+    def test_selects_five_backward_spaced_frames(self):
+        self.assertEqual(phase_fit_frame_indices(100), [99, 94, 89, 84, 79])
+
+    def test_short_trajectory_uses_available_frames_without_duplicates(self):
+        self.assertEqual(phase_fit_frame_indices(12), [11, 6, 1])
+
+    @patch("md_Helpers.voxel_fit.fit_trajectory_voxel_mixture")
     def test_homogeneous_state_skips_fit_and_leaves_values_null(self, fit):
         result = conditional_phase_fit(
             {"phase_separated": False},
-            positions=np.zeros((1, 3)),
-            box=np.array([10, 10, 10, 0, 0, 0]),
+            trajectory_path="unused.gsd",
             n_cells=4,
         )
         fit.assert_not_called()

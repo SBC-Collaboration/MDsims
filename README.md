@@ -11,9 +11,10 @@ V4 currently contains the smallest complete thermalization workflow. It:
 6. writes exact initial, periodic, and final samples to `trajectory.gsd` and
    `run.hdf5`;
 7. records thermodynamic summaries and both voxel and PE-drop phase checks;
-8. runs the final-frame voxel mixture fit only when the voxel classifier marks
-   the state phase separated, leaving all eight fit values SQL `NULL` for a
-   homogeneous state;
+8. when the final-frame voxel classifier marks the state phase separated,
+   averages the voxel histograms from the final frame and every fifth frame
+   backward for five sampled frames, then performs one mixture fit; all eight
+   fit values remain SQL `NULL` for a homogeneous state;
 9. inserts the Thermalization row and marks Master complete in one transaction.
 
 ## Output root

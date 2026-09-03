@@ -1,16 +1,19 @@
-"""Conditional final-frame voxel mixture fit for every V4 workflow."""
+"""Conditional, time-averaged voxel mixture fit for every V4 workflow."""
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Sequence
 
 import numpy as np
 
 from .analysis import voxel_bins_for_ncells
 
 
-PHASE_FIT_METHOD = "final_frame_voxel_mixture"
-PHASE_FIT_METHOD_VERSION = "final_frame_voxel_mixture_v1"
+PHASE_FIT_METHOD = "averaged_voxel_histogram_mixture"
+PHASE_FIT_METHOD_VERSION = "last_5_frames_stride_5_voxel_mixture_v1"
+PHASE_FIT_NUM_FRAMES = 5
+PHASE_FIT_FRAME_STRIDE = 5
 
 PHASE_FIT_SQL_FIELDS = (
     "rho_liquid",
@@ -56,15 +59,57 @@ def _standard_uncertainty(gradient, covariance) -> float:
     return float(np.sqrt(variance)) if np.isfinite(variance) and variance >= 0 else np.nan
 
 
-def fit_final_frame_voxel_mixture(
+def phase_fit_frame_indices(
+    trajectory_length: int,
+    num_frames: int = PHASE_FIT_NUM_FRAMES,
+    frame_stride: int = PHASE_FIT_FRAME_STRIDE,
+) -> list[int]:
+    """Return final-first, zero-based frame indices for the averaged fit."""
+
+    trajectory_length = int(trajectory_length)
+    num_frames = int(num_frames)
+    frame_stride = int(frame_stride)
+    if trajectory_length <= 0:
+        raise ValueError("trajectory must contain at least one frame")
+    if num_frames <= 0 or frame_stride <= 0:
+        raise ValueError("num_frames and frame_stride must be positive")
+    final_index = trajectory_length - 1
+    return [
+        final_index - offset
+        for offset in range(0, num_frames * frame_stride, frame_stride)
+        if final_index - offset >= 0
+    ]
+
+
+def _voxel_count_histogram(
     positions: np.ndarray,
     box: np.ndarray,
+    nbins: int,
+) -> tuple[np.ndarray, float, float]:
+    positions = np.asarray(positions, dtype=np.float64)
+    box_lengths = np.asarray(box, dtype=np.float64)[:3]
+    wrapped = (positions + box_lengths / 2.0) % box_lengths - box_lengths / 2.0
+    bounds = [[-length / 2.0, length / 2.0] for length in box_lengths]
+    voxel_counts, _ = np.histogramdd(wrapped, bins=nbins, range=bounds)
+    voxel_counts = voxel_counts.astype(int).ravel()
+    observed = np.bincount(voxel_counts).astype(float)
+    return (
+        observed,
+        float(np.prod(box_lengths / nbins)),
+        float(np.prod(box_lengths)),
+    )
+
+
+def fit_averaged_voxel_mixture(
+    positions_by_frame: Sequence[np.ndarray],
+    boxes_by_frame: Sequence[np.ndarray],
     n_cells: int,
+    frame_indices: Sequence[int] | None = None,
     interface_void_fraction: float = 0.5,
     interface_points: int = 40,
     max_iterations: int = 500,
 ) -> dict[str, Any]:
-    """Fit V3's gas/liquid/interface count model to the exact final frame."""
+    """Fit V3's model once to the average of several voxel histograms."""
 
     from scipy.optimize import minimize
     from scipy.special import logsumexp
@@ -77,17 +122,36 @@ def fit_final_frame_voxel_mixture(
     if interface_points <= 0 or int(max_iterations) <= 0:
         raise ValueError("interface_points and max_iterations must be positive")
 
-    positions = np.asarray(positions, dtype=np.float64)
-    box_lengths = np.asarray(box, dtype=np.float64)[:3]
+    positions_by_frame = list(positions_by_frame)
+    boxes_by_frame = list(boxes_by_frame)
+    if not positions_by_frame or len(positions_by_frame) != len(boxes_by_frame):
+        raise ValueError("positions_by_frame and boxes_by_frame must have equal length")
+
     nbins = voxel_bins_for_ncells(n_cells)
-    wrapped = (positions + box_lengths / 2.0) % box_lengths - box_lengths / 2.0
-    bounds = [[-length / 2.0, length / 2.0] for length in box_lengths]
-    voxel_counts, _ = np.histogramdd(wrapped, bins=nbins, range=bounds)
-    voxel_counts = voxel_counts.astype(int).ravel()
-    voxel_volume = float(np.prod(box_lengths / nbins))
-    box_volume = float(np.prod(box_lengths))
-    count_axis = np.arange(int(voxel_counts.max()) + 1)
-    observed = np.bincount(voxel_counts, minlength=len(count_axis)).astype(float)
+    histograms = []
+    voxel_volumes = []
+    box_volumes = []
+    for positions, box in zip(positions_by_frame, boxes_by_frame):
+        histogram, voxel_volume, box_volume = _voxel_count_histogram(
+            positions,
+            box,
+            nbins,
+        )
+        histograms.append(histogram)
+        voxel_volumes.append(voxel_volume)
+        box_volumes.append(box_volume)
+
+    max_count_bins = max(len(histogram) for histogram in histograms)
+    padded = np.zeros((len(histograms), max_count_bins), dtype=float)
+    for row, histogram in enumerate(histograms):
+        padded[row, : len(histogram)] = histogram
+    observed_average = np.mean(padded, axis=0)
+    # Scaling the averaged histogram by the number of frames leaves the best-fit
+    # parameters unchanged while making covariance reflect all sampled voxels.
+    observed = observed_average * len(histograms)
+    voxel_volume = float(np.mean(voxel_volumes))
+    box_volume = float(np.mean(box_volumes))
+    count_axis = np.arange(max_count_bins)
 
     liquid_guess = max(1.0, float(np.argmax(observed)))
     low_mask = count_axis < max(1.0, 0.35 * liquid_guess)
@@ -97,9 +161,17 @@ def fit_final_frame_voxel_mixture(
         else max(0.1, 0.05 * liquid_guess)
     )
     gas_guess = max(0.05, min(gas_guess, 0.5 * liquid_guess))
-    dense = np.repeat(count_axis, observed.astype(int))
-    dense = dense[dense > 0.5 * liquid_guess]
-    sigma_guess = float(np.std(dense, ddof=1)) if len(dense) > 1 else np.sqrt(liquid_guess)
+    dense_mask = count_axis > 0.5 * liquid_guess
+    dense_weights = observed_average[dense_mask]
+    if dense_weights.sum() > 1:
+        dense_counts = count_axis[dense_mask]
+        dense_mean = np.average(dense_counts, weights=dense_weights)
+        sigma_guess = float(np.sqrt(np.average(
+            (dense_counts - dense_mean) ** 2,
+            weights=dense_weights,
+        )))
+    else:
+        sigma_guess = np.sqrt(liquid_guess)
     sigma_guess = max(0.5, sigma_guess)
     gas_weight = max(0.02, observed[low_mask].sum() / observed.sum())
     interface_weight = max(0.05, min(0.3, 2.0 * gas_weight))
@@ -221,7 +293,12 @@ def fit_final_frame_voxel_mixture(
         "method": PHASE_FIT_METHOD,
         "method_version": PHASE_FIT_METHOD_VERSION,
         "voxel_nbins": int(nbins),
-        "n_voxels": int(len(voxel_counts)),
+        "frames_used": int(len(histograms)),
+        "frame_indices": list(frame_indices) if frame_indices is not None else None,
+        "frame_stride": PHASE_FIT_FRAME_STRIDE,
+        "histogram_aggregation": "arithmetic_mean",
+        "n_voxels_per_frame": int(nbins**3),
+        "n_voxel_samples": int(nbins**3 * len(histograms)),
         "voxel_volume": voxel_volume,
         "box_volume": box_volume,
         "interface_void_fraction": interface_void_fraction,
@@ -242,14 +319,46 @@ def fit_final_frame_voxel_mixture(
         "parameter_covariance": covariance,
         "log_likelihood": log_likelihood,
         "AIC": float(10 - 2 * log_likelihood),
-        "BIC": float(5 * np.log(len(voxel_counts)) - 2 * log_likelihood),
+        "BIC": float(5 * np.log(nbins**3 * len(histograms)) - 2 * log_likelihood),
     }
+
+
+def fit_trajectory_voxel_mixture(
+    trajectory_path: str | Path,
+    n_cells: int,
+    num_frames: int = PHASE_FIT_NUM_FRAMES,
+    frame_stride: int = PHASE_FIT_FRAME_STRIDE,
+    **fit_options: Any,
+) -> dict[str, Any]:
+    """Read selected GSD frames and fit their averaged voxel histogram."""
+
+    import gsd.hoomd
+
+    with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
+        indices = phase_fit_frame_indices(len(trajectory), num_frames, frame_stride)
+        positions = [
+            np.asarray(trajectory[index].particles.position, dtype=np.float64)
+            for index in indices
+        ]
+        boxes = [
+            np.asarray(trajectory[index].configuration.box, dtype=np.float64)
+            for index in indices
+        ]
+    fit = fit_averaged_voxel_mixture(
+        positions,
+        boxes,
+        n_cells,
+        frame_indices=indices,
+        **fit_options,
+    )
+    fit["requested_frames"] = int(num_frames)
+    fit["frame_stride"] = int(frame_stride)
+    return fit
 
 
 def conditional_phase_fit(
     voxel_classification: dict[str, Any],
-    positions: np.ndarray,
-    box: np.ndarray,
+    trajectory_path: str | Path,
     n_cells: int,
     **fit_options: Any,
 ) -> dict[str, Any]:
@@ -270,9 +379,8 @@ def conditional_phase_fit(
         }
 
     try:
-        fit = fit_final_frame_voxel_mixture(
-            positions,
-            box,
+        fit = fit_trajectory_voxel_mixture(
+            trajectory_path,
             n_cells,
             **fit_options,
         )
@@ -304,4 +412,3 @@ def phase_fit_sql_values(fit: dict[str, Any]) -> dict[str, Any]:
         "Phase_Fit_Method": fit.get("method"),
         "Phase_Fit_Method_Version": fit.get("method_version"),
     }
-

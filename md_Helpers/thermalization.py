@@ -443,8 +443,7 @@ def run_thermalization(
         )
         phase_fit = conditional_phase_fit(
             voxel,
-            state.positions,
-            state.box,
+            run_paths.trajectory,
             config.n_fcc_cells,
             interface_void_fraction=config.phase_fit_interface_void_fraction,
             interface_points=config.phase_fit_interface_points,
