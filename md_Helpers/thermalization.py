@@ -24,6 +24,9 @@ from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
 
 
 THERMALIZATION_METHOD_VERSION = "thermalization_v4_2"
+CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v1"
+CLONE_FINAL_FRAME_METHOD_VERSION = "clone_final_frame_v1"
+LINEAR_DENSITY_METHOD_VERSION = "linear_density_v1"
 
 
 @dataclass(frozen=True)
@@ -128,10 +131,50 @@ class ThermalizationConfig:
         return create_run_signature(self.signature_parameters())
 
 
-def _make_simulation(config: ThermalizationConfig, lattice):
-    import hoomd
+@dataclass(frozen=True)
+class CloneRescaleThermalizationConfig:
+    """Inputs that differ from a completed source thermalization."""
 
-    frame = make_gsd_frame(lattice, particle_type=config.particle_type)
+    source_run_id: str
+    final_density: float
+    nsteps: int
+    notes: str | None = None
+
+    def validate(self) -> None:
+        if not str(self.source_run_id):
+            raise ValueError("source_run_id is required")
+        if float(self.final_density) <= 0:
+            raise ValueError("final_density must be positive")
+        if int(self.nsteps) <= 0:
+            raise ValueError("nsteps must be positive")
+
+    def signature_parameters(self, source_frame_id: int) -> dict[str, Any]:
+        """Describe the clone operation without opening source files."""
+
+        return {
+            "sim_type": "Thermalization",
+            "workflow_version": CLONE_RESCALE_METHOD_VERSION,
+            "initialization_method": CLONE_FINAL_FRAME_METHOD_VERSION,
+            "source_run_id": str(self.source_run_id),
+            "source_frame_id": int(source_frame_id),
+            "density_schedule": LINEAR_DENSITY_METHOD_VERSION,
+            "final_density": float(self.final_density),
+            "nsteps": int(self.nsteps),
+            "simulation_settings": "inherit_source",
+            "output_settings": "inherit_source",
+        }
+
+    def run_signature(self, source_frame_id: int) -> str:
+        return create_run_signature(self.signature_parameters(source_frame_id))
+
+
+def _make_simulation_from_frame(
+    config: ThermalizationConfig,
+    frame,
+    *,
+    thermalize_momenta: bool,
+):
+    import hoomd
 
     def create(device):
         simulation = hoomd.Simulation(device=device, seed=int(config.seed))
@@ -177,11 +220,47 @@ def _make_simulation(config: ThermalizationConfig, lattice):
     # HOOMD otherwise does not guarantee that pair virials and pressure are
     # available for an NVT simulation.
     simulation.always_compute_pressure = True
-    simulation.state.thermalize_particle_momenta(
-        filter=hoomd.filter.All(),
-        kT=float(config.kT),
-    )
+    if thermalize_momenta:
+        simulation.state.thermalize_particle_momenta(
+            filter=hoomd.filter.All(),
+            kT=float(config.kT),
+        )
     return simulation, thermo, type(simulation.device).__name__
+
+
+def _make_simulation(config: ThermalizationConfig, lattice):
+    frame = make_gsd_frame(lattice, particle_type=config.particle_type)
+    return _make_simulation_from_frame(
+        config,
+        frame,
+        thermalize_momenta=True,
+    )
+
+
+def _add_linear_density_resize(
+    simulation,
+    final_density: float,
+    n_particles: int,
+    nsteps: int,
+):
+    """Scale the box so number density varies linearly with timestep."""
+
+    import hoomd
+
+    final_volume = int(n_particles) / float(final_density)
+    box_variant = hoomd.variant.box.InverseVolumeRamp(
+        initial_box=simulation.state.box,
+        final_volume=final_volume,
+        t_start=int(simulation.timestep),
+        t_ramp=int(nsteps),
+    )
+    updater = hoomd.update.BoxResize(
+        trigger=hoomd.trigger.Periodic(1),
+        box=box_variant,
+        filter=hoomd.filter.All(),
+    )
+    simulation.operations.updaters.append(updater)
+    return updater
 
 
 def _base_metadata(
@@ -255,6 +334,100 @@ def _base_metadata(
     }
 
 
+def _frame_state_data(frame) -> StateData:
+    """Extract the state fields needed to validate and describe a GSD frame."""
+
+    return StateData(
+        positions=np.asarray(frame.particles.position, dtype=np.float64).copy(),
+        velocities=np.asarray(frame.particles.velocity, dtype=np.float64).copy(),
+        box=np.asarray(frame.configuration.box, dtype=np.float64).copy(),
+        n_particles=int(frame.particles.N),
+        particle_types=tuple(str(item) for item in frame.particles.types),
+    )
+
+
+def _metadata_value(
+    metadata: dict[str, Any],
+    path: str,
+    fallback: Any,
+) -> Any:
+    value = metadata.get(path)
+    return fallback if value is None else value
+
+
+def _clone_base_metadata(
+    run_id: str,
+    signature: str,
+    request: CloneRescaleThermalizationConfig,
+    config: ThermalizationConfig,
+    paths: RunPaths,
+    device_name: str,
+    source_state: StateData,
+    source_frame_id: int,
+    source_timestep: int,
+    source_file_location: str,
+    prior_lj_time: float,
+) -> dict[str, dict[str, Any]]:
+    relative = paths.relative_directory.as_posix()
+    return {
+        "mdsims/run": {
+            "Run_ID": run_id,
+            "Run_Signature": signature,
+            "Sim_Type": "Thermalization",
+            "Status": "Initializing",
+            "Workflow_Version": CLONE_RESCALE_METHOD_VERSION,
+            "Canonical_Config_JSON": canonical_json(
+                request.signature_parameters(source_frame_id)
+            ),
+        },
+        "mdsims/source": {
+            "State_Role": "source",
+            "Source_Type": "Thermalization_Run",
+            "State_Creation_Method": CLONE_FINAL_FRAME_METHOD_VERSION,
+            "Source_Run_ID": str(request.source_run_id),
+            "Source_Frame_ID": int(source_frame_id),
+            "Source_HOOMD_Timestep": int(source_timestep),
+            "Source_File_Location": str(source_file_location),
+        },
+        "mdsims/protocol": {
+            "N_Cells": int(config.n_fcc_cells),
+            "Therm_kT": float(config.kT),
+            "Therm_Seed": int(config.seed),
+            "Density_Start": float(source_state.density),
+            "Density_End_Target": float(request.final_density),
+            "Density_Schedule": "linear_density",
+            "Density_Schedule_Version": LINEAR_DENSITY_METHOD_VERSION,
+            "Nsteps": int(config.nsteps),
+            "dt": float(config.dt),
+            "Ensemble": "NVT",
+            "T_Set": float(config.kT),
+            "Particle_Type": config.particle_type,
+            "Device": device_name,
+            "Always_Compute_Pressure": True,
+            "Inherited_Simulation_Settings": True,
+        },
+        "mdsims/interaction": {
+            "epsilon_LJ": float(config.epsilon_LJ),
+            "sigma_LJ": float(config.sigma_LJ),
+            "LJ_r_cut": float(config.r_cut_LJ),
+            "LJ_r_on": float(config.r_on_LJ),
+            "LJ_Mode": config.lj_mode,
+            "Neighbor_Buffer": float(config.buffer_LJ),
+        },
+        "mdsims/output": {
+            "File_Location": relative,
+            "Trajectory_Path": f"{relative}/trajectory.gsd",
+            "HDF5_Path": f"{relative}/run.hdf5",
+            "Log_Period": int(config.log_period),
+            "Progress_Update_Period": int(config.progress_period),
+            "Output_Settings_Inherited_From_Run_ID": str(request.source_run_id),
+        },
+        "mdsims/time": {
+            "Prior_Cumulative_LJ_Time": float(prior_lj_time),
+        },
+    }
+
+
 def _state_metadata(
     role: str,
     run_id: str,
@@ -265,6 +438,7 @@ def _state_metadata(
     run_step: int,
     dt: float,
     trajectory_path: str,
+    prior_lj_time: float = 0.0,
 ) -> dict[str, Any]:
     return {
         "State_Role": role,
@@ -273,7 +447,9 @@ def _state_metadata(
         "HOOMD_Timestep": int(hoomd_timestep),
         "Run_Step": int(run_step),
         "This_LJ_Time": float(run_step) * float(dt),
-        "Cumulative_LJ_Time": float(run_step) * float(dt),
+        "Cumulative_LJ_Time": (
+            float(prior_lj_time) + float(run_step) * float(dt)
+        ),
         "N_Cells": int(n_cells),
         "N_Particles": int(state.n_particles),
         "Particle_Types": state.particle_types,
@@ -307,8 +483,129 @@ def _failure_update(
     )
 
 
+def _combined_note(automatic: str, user_note: str | None) -> str:
+    if user_note is None or not str(user_note).strip():
+        return automatic
+    return f"{automatic} User note: {str(user_note).strip()}"
+
+
+def _clone_request_context(
+    request: CloneRescaleThermalizationConfig,
+    database: SQLiteRunDatabase,
+) -> tuple[dict[str, Any], dict[str, Any], int, str]:
+    """Resolve everything needed for duplicate checking using SQL only."""
+
+    source_master = database.get_run(request.source_run_id)
+    if source_master is None:
+        raise KeyError(
+            f"Source Run_ID was not found: {request.source_run_id}"
+        )
+    if source_master.get("Sim_Type") != "Thermalization":
+        raise ValueError("Clone source must be a Thermalization run")
+    if source_master.get("Status") != "Complete":
+        raise ValueError("Clone source must have Status='Complete'")
+
+    rows = database.query_thermalizations(
+        Run_ID=str(request.source_run_id),
+        limit=1,
+    )
+    if not rows:
+        raise ValueError(
+            "Clone source has no completed Thermalization table row"
+        )
+    source_thermalization = rows[0]
+    source_frame_id = int(source_thermalization["Num_Frames"]) - 1
+    if source_frame_id < 0:
+        raise ValueError("Clone source contains no saved GSD frames")
+
+    automatic_note = (
+        f"Cloned final frame {source_frame_id} from Run_ID "
+        f"{request.source_run_id}; box rescaled isotropically with density "
+        f"changing linearly from "
+        f"{float(source_thermalization['Density_End']):.6f} to "
+        f"{float(request.final_density):.6f} over {int(request.nsteps)} steps. "
+        "All other simulation settings inherited from the source run."
+    )
+    return (
+        source_master,
+        source_thermalization,
+        source_frame_id,
+        _combined_note(automatic_note, request.notes),
+    )
+
+
+def _inherited_clone_config(
+    request: CloneRescaleThermalizationConfig,
+    source_master: dict[str, Any],
+    source_thermalization: dict[str, Any],
+    source_metadata: dict[str, Any],
+    source_state: StateData,
+) -> ThermalizationConfig:
+    """Recreate source dynamics and output settings from its saved record."""
+
+    device = str(_metadata_value(
+        source_metadata,
+        "mdsims/protocol/Device",
+        "auto",
+    )).lower()
+    if device not in {"cpu", "gpu"}:
+        device = "auto"
+
+    lj_mode = str(source_thermalization["LJ_Mode"])
+    r_on = source_thermalization["LJ_r_on"]
+    if r_on is None:
+        r_on = 2.0
+
+    config = ThermalizationConfig(
+        n_fcc_cells=int(source_master["N_Cells"]),
+        target_rho=float(request.final_density),
+        nsteps=int(request.nsteps),
+        kT=float(source_thermalization["Therm_kT"]),
+        log_period=int(_metadata_value(
+            source_metadata,
+            "mdsims/output/Log_Period",
+            1_000,
+        )),
+        seed=int(source_thermalization["Therm_Seed"]),
+        dt=float(source_thermalization["dt"]),
+        epsilon_LJ=float(_metadata_value(
+            source_metadata,
+            "mdsims/interaction/epsilon_LJ",
+            1.0,
+        )),
+        sigma_LJ=float(_metadata_value(
+            source_metadata,
+            "mdsims/interaction/sigma_LJ",
+            1.0,
+        )),
+        r_cut_LJ=float(source_thermalization["LJ_r_cut"]),
+        buffer_LJ=float(_metadata_value(
+            source_metadata,
+            "mdsims/interaction/Neighbor_Buffer",
+            0.4,
+        )),
+        lj_mode=lj_mode,
+        r_on_LJ=float(r_on),
+        particle_type=str(_metadata_value(
+            source_metadata,
+            "mdsims/protocol/Particle_Type",
+            source_state.particle_types[0],
+        )),
+        device=device,
+        progress_period=int(_metadata_value(
+            source_metadata,
+            "mdsims/output/Progress_Update_Period",
+            25_000,
+        )),
+        phase_method=str(source_thermalization["Phase_Separation_Method"]),
+        notes=request.notes,
+    )
+    config.validate()
+    return config
+
+
 def run_thermalization(
-    config: ThermalizationConfig,
+    config: ThermalizationConfig | CloneRescaleThermalizationConfig,
     project_paths: ProjectPaths | None = None,
     database: SQLiteRunDatabase | None = None,
 ) -> dict[str, Any]:
@@ -323,7 +620,26 @@ def run_thermalization(
     database = database or SQLiteRunDatabase(project_paths.database)
     database.initialize()
 
-    signature = config.run_signature
+    clone_request = (
+        config if isinstance(config, CloneRescaleThermalizationConfig) else None
+    )
+    source_master = None
+    source_thermalization = None
+    source_frame_id = None
+    master_note = config.notes
+    if clone_request is None:
+        signature = config.run_signature
+        n_cells = int(config.n_fcc_cells)
+    else:
+        (
+            source_master,
+            source_thermalization,
+            source_frame_id,
+            master_note,
+        ) = _clone_request_context(clone_request, database)
+        signature = clone_request.run_signature(source_frame_id)
+        n_cells = int(source_master["N_Cells"])
+
     existing = database.check_run_exists(signature)
     if existing is not None:
         return {
@@ -342,33 +658,105 @@ def run_thermalization(
     database.update_master(
         run_id,
         Run_Signature=signature,
-        N_Cells=int(config.n_fcc_cells),
+        N_Cells=n_cells,
         Nsteps=int(config.nsteps),
         Current_Nstep=0,
         ElapsedTime=0.0,
         Last_Update_Time=utc_now(),
         Sim_Type="Thermalization",
         Status="Initializing",
-        Notes=config.notes,
+        Notes=master_note,
     )
 
     current_step = 0
     elapsed_time = 0.0
     storage: RunStorage | None = None
     try:
-        lattice = build_fcc_lattice(config.n_fcc_cells, config.target_rho)
-        simulation, thermo, device_name = _make_simulation(config, lattice)
-        storage = RunStorage(run_paths)
-        storage.open(
-            _base_metadata(
+        prior_lj_time = 0.0
+        if clone_request is None:
+            simulation_config = config
+            lattice = build_fcc_lattice(
+                simulation_config.n_fcc_cells,
+                simulation_config.target_rho,
+            )
+            simulation, thermo, device_name = _make_simulation(
+                simulation_config,
+                lattice,
+            )
+            density_start = float(lattice.actual_density)
+            box_length_start = float(lattice.box_length)
+            metadata = _base_metadata(
                 run_id,
                 signature,
-                config,
+                simulation_config,
                 run_paths,
                 lattice,
                 device_name,
             )
-        )
+            source_state = None
+            source_timestep = None
+            source_file_location = None
+        else:
+            from .run_analysis import open_run
+
+            source_run = open_run(
+                clone_request.source_run_id,
+                project_paths=project_paths,
+                database=database,
+            )
+            if source_run.frame_count != int(source_thermalization["Num_Frames"]):
+                raise RuntimeError(
+                    "Source GSD frame count does not match the SQL record"
+                )
+            source_frame = source_run.load_frame(source_frame_id)
+            source_state = _frame_state_data(source_frame)
+            source_metadata = source_run.metadata()
+            simulation_config = _inherited_clone_config(
+                clone_request,
+                source_master,
+                source_thermalization,
+                source_metadata,
+                source_state,
+            )
+            expected_particles = 4 * int(simulation_config.n_fcc_cells) ** 3
+            if source_state.n_particles != expected_particles:
+                raise RuntimeError(
+                    "Source particle count does not match its recorded N_Cells"
+                )
+            simulation, thermo, device_name = _make_simulation_from_frame(
+                simulation_config,
+                source_frame,
+                thermalize_momenta=False,
+            )
+            _add_linear_density_resize(
+                simulation,
+                clone_request.final_density,
+                source_state.n_particles,
+                clone_request.nsteps,
+            )
+            density_start = float(source_state.density)
+            box_length_start = float(source_state.box[0])
+            prior_lj_time = float(
+                source_thermalization["Cumulative_LJ_Time"]
+            )
+            source_timestep = int(source_frame.configuration.step)
+            source_file_location = str(source_thermalization["File_Location"])
+            metadata = _clone_base_metadata(
+                run_id,
+                signature,
+                clone_request,
+                simulation_config,
+                run_paths,
+                device_name,
+                source_state,
+                source_frame_id,
+                source_timestep,
+                source_file_location,
+                prior_lj_time,
+            )
+
+        storage = RunStorage(run_paths)
+        storage.open(metadata)
 
         start_time = utc_now()
         database.update_master(
@@ -379,47 +767,89 @@ def run_thermalization(
         )
 
         simulation.run(0)
-        state = storage.record(simulation, thermo, 0, config.dt)
+        state = storage.record(
+            simulation,
+            thermo,
+            0,
+            simulation_config.dt,
+            prior_lj_time=prior_lj_time,
+        )
         trajectory_relative = (
             run_paths.relative_directory / "trajectory.gsd"
         ).as_posix()
-        storage.write_metadata({
+        initial_metadata = {
             "mdsims/run": {"Status": "Running", "StartTime": start_time},
             "mdsims/states/initial": _state_metadata(
                 "initial",
                 run_id,
                 state,
-                config.n_fcc_cells,
+                simulation_config.n_fcc_cells,
                 0,
                 simulation.timestep,
                 0,
-                config.dt,
+                simulation_config.dt,
                 trajectory_relative,
+                prior_lj_time=prior_lj_time,
             ),
-        })
+        }
+        if clone_request is not None:
+            source_this_lj_time = float(
+                source_thermalization["This_LJ_Time"]
+            )
+            source_trajectory = (
+                f"{source_file_location}/trajectory.gsd"
+            )
+            initial_metadata["mdsims/states/source"] = _state_metadata(
+                "source",
+                clone_request.source_run_id,
+                source_state,
+                simulation_config.n_fcc_cells,
+                source_frame_id,
+                source_timestep,
+                int(source_thermalization["Nsteps"]),
+                float(source_thermalization["dt"]),
+                source_trajectory,
+                prior_lj_time=prior_lj_time - source_this_lj_time,
+            )
+        storage.write_metadata(initial_metadata)
 
-        next_log = min(int(config.log_period), int(config.nsteps))
-        next_progress = min(int(config.progress_period), int(config.nsteps))
-        while current_step < int(config.nsteps):
-            target = min(next_log, next_progress, int(config.nsteps))
+        next_log = min(
+            int(simulation_config.log_period),
+            int(simulation_config.nsteps),
+        )
+        next_progress = min(
+            int(simulation_config.progress_period),
+            int(simulation_config.nsteps),
+        )
+        while current_step < int(simulation_config.nsteps):
+            target = min(
+                next_log,
+                next_progress,
+                int(simulation_config.nsteps),
+            )
             started = time.perf_counter()
             simulation.run(target - current_step)
             elapsed_time += time.perf_counter() - started
             current_step = target
 
-            log_now = current_step == next_log or current_step == config.nsteps
+            log_now = (
+                current_step == next_log
+                or current_step == simulation_config.nsteps
+            )
             progress_now = (
-                current_step == next_progress or current_step == config.nsteps
+                current_step == next_progress
+                or current_step == simulation_config.nsteps
             )
             if log_now:
                 state = storage.record(
                     simulation,
                     thermo,
                     current_step,
-                    config.dt,
+                    simulation_config.dt,
+                    prior_lj_time=prior_lj_time,
                 )
                 while next_log <= current_step:
-                    next_log += int(config.log_period)
+                    next_log += int(simulation_config.log_period)
             if progress_now:
                 database.update_master(
                     run_id,
@@ -429,42 +859,57 @@ def run_thermalization(
                 )
                 storage.flush()
                 while next_progress <= current_step:
-                    next_progress += int(config.progress_period)
+                    next_progress += int(simulation_config.progress_period)
+
+        if clone_request is not None and not np.isclose(
+            state.density,
+            clone_request.final_density,
+            rtol=1e-10,
+            atol=1e-12,
+        ):
+            raise RuntimeError(
+                "Linear density resize did not reach the requested final density: "
+                f"requested {clone_request.final_density}, got {state.density}"
+            )
 
         voxel = classify_voxel_histogram(
             state.positions,
             state.box,
-            config.n_fcc_cells,
-            density_threshold=config.phase_density_threshold,
-            voxel_fraction_threshold=config.phase_voxel_fraction_threshold,
+            simulation_config.n_fcc_cells,
+            density_threshold=simulation_config.phase_density_threshold,
+            voxel_fraction_threshold=(
+                simulation_config.phase_voxel_fraction_threshold
+            ),
         )
         pe_drop = classify_pe_drop(
             np.asarray(storage.samples["potential_energy"]),
             state.n_particles,
-            n_last=config.pe_drop_n_last,
-            drop_threshold=config.pe_drop_threshold,
-            z_limit=config.pe_drop_z_limit,
-            decision_rule=config.pe_drop_decision_rule,
+            n_last=simulation_config.pe_drop_n_last,
+            drop_threshold=simulation_config.pe_drop_threshold,
+            z_limit=simulation_config.pe_drop_z_limit,
+            decision_rule=simulation_config.pe_drop_decision_rule,
         )
         phase_fit = conditional_phase_fit(
             voxel,
             run_paths.trajectory,
-            config.n_fcc_cells,
-            interface_void_fraction=config.phase_fit_interface_void_fraction,
-            interface_points=config.phase_fit_interface_points,
-            max_iterations=config.phase_fit_max_iterations,
+            simulation_config.n_fcc_cells,
+            interface_void_fraction=(
+                simulation_config.phase_fit_interface_void_fraction
+            ),
+            interface_points=simulation_config.phase_fit_interface_points,
+            max_iterations=simulation_config.phase_fit_max_iterations,
         )
         selected_phase = select_phase_classification(
             voxel,
             pe_drop,
-            method=config.phase_method,
+            method=simulation_config.phase_method,
         )
         summary = thermodynamic_summary(
             np.asarray(storage.samples["run_step"]),
             np.asarray(storage.samples["pressure"]),
             np.asarray(storage.samples["potential_energy"]),
             state.n_particles,
-            n_last=config.summary_num_samples,
+            n_last=simulation_config.summary_num_samples,
         )
 
         end_time = utc_now()
@@ -478,12 +923,13 @@ def run_thermalization(
                 "final",
                 run_id,
                 state,
-                config.n_fcc_cells,
+                simulation_config.n_fcc_cells,
                 storage.frame_count - 1,
                 simulation.timestep,
                 current_step,
-                config.dt,
+                simulation_config.dt,
                 trajectory_relative,
+                prior_lj_time=prior_lj_time,
             ),
             "mdsims/analysis/phase_separation/voxel_histogram": voxel,
             "mdsims/analysis/phase_separation/PE_drop": pe_drop,
@@ -495,26 +941,37 @@ def run_thermalization(
 
         thermalization_row = {
             "File_Location": run_paths.relative_directory.as_posix(),
-            "Clone_Run_ID": None,
-            "Clone_Frame_ID": None,
-            "Therm_kT": float(config.kT),
-            "Therm_Seed": int(config.seed),
-            "Density_Start": float(lattice.actual_density),
-            "Density_End": float(state.density),
-            "BoxLength_Start": float(lattice.box_length),
-            "BoxLength_End": float(state.box[0]),
-            "dt": float(config.dt),
-            "Nsteps": int(config.nsteps),
-            "This_LJ_Time": float(config.nsteps) * float(config.dt),
-            "Cumulative_LJ_Time": float(config.nsteps) * float(config.dt),
-            "Ensemble": "NVT",
-            "T_Set": float(config.kT),
-            "P_Set": None,
-            "LJ_r_cut": float(config.r_cut_LJ),
-            "LJ_r_on": (
-                float(config.r_on_LJ) if config.lj_mode == "xplor" else None
+            "Clone_Run_ID": (
+                str(clone_request.source_run_id)
+                if clone_request is not None
+                else None
             ),
-            "LJ_Mode": config.lj_mode,
+            "Clone_Frame_ID": source_frame_id,
+            "Therm_kT": float(simulation_config.kT),
+            "Therm_Seed": int(simulation_config.seed),
+            "Density_Start": density_start,
+            "Density_End": float(state.density),
+            "BoxLength_Start": box_length_start,
+            "BoxLength_End": float(state.box[0]),
+            "dt": float(simulation_config.dt),
+            "Nsteps": int(simulation_config.nsteps),
+            "This_LJ_Time": (
+                float(simulation_config.nsteps) * float(simulation_config.dt)
+            ),
+            "Cumulative_LJ_Time": (
+                prior_lj_time
+                + float(simulation_config.nsteps) * float(simulation_config.dt)
+            ),
+            "Ensemble": "NVT",
+            "T_Set": float(simulation_config.kT),
+            "P_Set": None,
+            "LJ_r_cut": float(simulation_config.r_cut_LJ),
+            "LJ_r_on": (
+                float(simulation_config.r_on_LJ)
+                if simulation_config.lj_mode == "xplor"
+                else None
+            ),
+            "LJ_Mode": simulation_config.lj_mode,
             "Phase_Separation_Status": selected_phase["status"],
             "Phase_Separation_Method": selected_phase["method"],
             "Phase_Separation_Method_Version": selected_phase["method_version"],
@@ -588,3 +1045,33 @@ def run_thermalization(
         except Exception as database_error:
             error.add_note(f"The failure could not be written to SQL: {database_error}")
         raise
+
+
+def run_clone_rescale_thermalization(
+    source_run_id: str,
+    final_density: float,
+    nsteps: int,
+    *,
+    notes: str | None = None,
+    project_paths: ProjectPaths | None = None,
+    database: SQLiteRunDatabase | None = None,
+) -> dict[str, Any]:
+    """Clone a completed thermalization and linearly change only its density.
+
+    The final GSD frame supplies the complete particle state. Temperature,
+    seed, timestep, interactions, integration timestep, device preference, and
+    output periods are inherited from the source run. Positions are scaled by
+    HOOMD while velocities are preserved and are not rethermalized.
+    """
+
+    request = CloneRescaleThermalizationConfig(
+        source_run_id=str(source_run_id),
+        final_density=float(final_density),
+        nsteps=int(nsteps),
+        notes=notes,
+    )
+    return run_thermalization(
+        request,
+        project_paths=project_paths,
+        database=database,
+    )

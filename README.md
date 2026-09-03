@@ -66,6 +66,26 @@ result
 Running the same cell again returns the existing SQL record with
 `result["skipped"] == True`; it does not open or load its GSD/HDF5 files.
 
+Clone the last frame of a completed thermalization and change only its box so
+that number density varies linearly through the new run:
+
+```python
+from md_Helpers import run_clone_rescale_thermalization
+
+result = run_clone_rescale_thermalization(
+    source_run_id="20260903214936",
+    final_density=0.40,
+    nsteps=200_000,
+)
+result
+```
+
+The clone preserves the source positions, velocities, particle properties,
+HOOMD timestep, temperature, seed, integration timestep, LJ settings, device
+preference, and output periods. The SQL duplicate check occurs before either
+source file is opened. The Master note documents the source frame and density
+schedule automatically; pass `notes="..."` to append a user note.
+
 Inspect any indexed run by its global ID:
 
 ```python

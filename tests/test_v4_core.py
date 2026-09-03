@@ -18,7 +18,13 @@ from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.run_analysis import open_run
 from md_Helpers.signatures import create_run_signature
-from md_Helpers.thermalization import ThermalizationConfig
+from md_Helpers.storage import StateData
+from md_Helpers.thermalization import (
+    CloneRescaleThermalizationConfig,
+    ThermalizationConfig,
+    _clone_request_context,
+    _inherited_clone_config,
+)
 from md_Helpers.voxel_fit import (
     conditional_phase_fit,
     phase_fit_frame_indices,
@@ -37,6 +43,23 @@ class SignatureTests(unittest.TestCase):
         first = ThermalizationConfig(4, 0.5, 100, seed=1)
         second = ThermalizationConfig(4, 0.5, 100, seed=2)
         self.assertNotEqual(first.run_signature, second.run_signature)
+
+    def test_clone_signature_uses_source_frame_density_and_duration(self):
+        request = CloneRescaleThermalizationConfig(
+            source_run_id="20260903214936",
+            final_density=0.4,
+            nsteps=200_000,
+        )
+        signature = request.run_signature(source_frame_id=2000)
+        self.assertNotEqual(signature, request.run_signature(source_frame_id=1999))
+        self.assertNotEqual(
+            signature,
+            CloneRescaleThermalizationConfig(
+                source_run_id=request.source_run_id,
+                final_density=0.5,
+                nsteps=request.nsteps,
+            ).run_signature(source_frame_id=2000),
+        )
 
 
 class LatticeTests(unittest.TestCase):
@@ -227,6 +250,83 @@ class DatabaseTests(unittest.TestCase):
             paths.top_directory / "Thermalization" / run_id / "trajectory.gsd",
         )
         self.assertFalse(run.trajectory_path.exists())
+
+    def test_clone_request_uses_completed_source_and_builds_note(self):
+        source_run_id = self.database.reserve_run_id()
+        self.database.update_master(
+            source_run_id,
+            Run_Signature="d" * 64,
+            N_Cells=4,
+            Nsteps=1_000,
+            Sim_Type="Thermalization",
+            Status="Running",
+        )
+        self.database.complete_thermalization(
+            source_run_id,
+            thermalization={
+                "File_Location": f"Thermalization/{source_run_id}",
+                "Therm_kT": 0.9,
+                "Therm_Seed": 7,
+                "Density_Start": 0.5,
+                "Density_End": 0.5,
+                "BoxLength_Start": 8.0,
+                "BoxLength_End": 8.0,
+                "dt": 0.005,
+                "Nsteps": 1_000,
+                "This_LJ_Time": 5.0,
+                "Cumulative_LJ_Time": 5.0,
+                "Ensemble": "NVT",
+                "T_Set": 0.9,
+                "LJ_r_cut": 2.5,
+                "LJ_r_on": 2.0,
+                "LJ_Mode": "xplor",
+                "Phase_Separation_Status": "Not_Separated",
+                "Phase_Separation_Method": "voxel_histogram",
+                "Phase_Separation_Method_Version": "test",
+                "Phase_Fit_Status": "Not_Run",
+                "Summary_Start_Step": 0,
+                "Summary_End_Step": 1_000,
+                "Summary_Num_Samples": 2,
+                "Num_Frames": 11,
+            },
+            master={"Status": "Complete", "Current_Nstep": 1_000},
+        )
+        request = CloneRescaleThermalizationConfig(
+            source_run_id=source_run_id,
+            final_density=0.4,
+            nsteps=2_000,
+            notes="slow expansion",
+        )
+        master, thermal, frame_id, note = _clone_request_context(
+            request,
+            self.database,
+        )
+        self.assertEqual(master["N_Cells"], 4)
+        self.assertEqual(thermal["Therm_Seed"], 7)
+        self.assertEqual(frame_id, 10)
+        self.assertIn("density changing linearly from 0.500000 to 0.400000", note)
+        self.assertTrue(note.endswith("User note: slow expansion"))
+
+        inherited = _inherited_clone_config(
+            request,
+            master,
+            thermal,
+            {
+                "mdsims/output/Log_Period": 250,
+                "mdsims/protocol/Device": "GPU",
+            },
+            StateData(
+                positions=np.zeros((4 * 4**3, 3)),
+                velocities=np.zeros((4 * 4**3, 3)),
+                box=np.array([8.0, 8.0, 8.0, 0.0, 0.0, 0.0]),
+                n_particles=4 * 4**3,
+                particle_types=("A",),
+            ),
+        )
+        self.assertEqual(inherited.kT, 0.9)
+        self.assertEqual(inherited.seed, 7)
+        self.assertEqual(inherited.log_period, 250)
+        self.assertEqual(inherited.target_rho, 0.4)
 
     @patch(
         "md_Helpers.database._display_dataframe",

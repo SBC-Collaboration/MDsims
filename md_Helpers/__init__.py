@@ -9,17 +9,24 @@ from .database import (
 )
 from .paths import ProjectPaths
 from .run_analysis import RunAnalysis, open_run
-from .thermalization import ThermalizationConfig, run_thermalization
+from .thermalization import (
+    CloneRescaleThermalizationConfig,
+    ThermalizationConfig,
+    run_clone_rescale_thermalization,
+    run_thermalization,
+)
 
 __all__ = [
     "ProjectPaths",
     "RunAnalysis",
     "SQLiteRunDatabase",
+    "CloneRescaleThermalizationConfig",
     "ThermalizationConfig",
     "display_master_table",
     "display_thermalization_table",
     "master_dataframe",
     "open_run",
     "thermalization_dataframe",
+    "run_clone_rescale_thermalization",
     "run_thermalization",
 ]
