@@ -173,9 +173,13 @@ def thermodynamic_summary(
         raise ValueError("At least one logged sample is required")
     count = min(int(n_last), len(run_steps))
     selection = slice(len(run_steps) - count, None)
-    pressure_mean, pressure_std, pressure_sem = _stats(
-        np.asarray(pressure)[selection]
-    )
+    selected_pressure = np.asarray(pressure, dtype=np.float64)[selection]
+    if not np.any(np.isfinite(selected_pressure)):
+        raise RuntimeError(
+            "Pressure summary has no finite samples. Ensure "
+            "simulation.always_compute_pressure is enabled before evolution."
+        )
+    pressure_mean, pressure_std, pressure_sem = _stats(selected_pressure)
     pe_mean, pe_std, pe_sem = _stats(
         np.asarray(potential_energy)[selection] / int(n_particles)
     )
@@ -190,4 +194,3 @@ def thermodynamic_summary(
         "PE_Per_Particle_Std": pe_std,
         "PE_Per_Particle_SEM": pe_sem,
     }
-

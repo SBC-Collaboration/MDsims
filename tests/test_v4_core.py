@@ -9,9 +9,11 @@ import numpy as np
 
 from md_Helpers.database import (
     SQLiteRunDatabase,
+    display_master_table,
     master_dataframe,
     thermalization_dataframe,
 )
+from md_Helpers.analysis import thermodynamic_summary
 from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.run_analysis import open_run
@@ -73,6 +75,28 @@ class PhaseFitPolicyTests(unittest.TestCase):
             "V_gas_unc",
         ]:
             self.assertIsNone(sql_values[column])
+
+
+class ThermodynamicSummaryTests(unittest.TestCase):
+    def test_pressure_statistics_are_finite(self):
+        summary = thermodynamic_summary(
+            run_steps=np.array([0, 100, 200]),
+            pressure=np.array([np.nan, 5.0, 7.0]),
+            potential_energy=np.array([-10.0, -12.0, -14.0]),
+            n_particles=2,
+            n_last=3,
+        )
+        self.assertEqual(summary["Pressure_Mean"], 6.0)
+        self.assertAlmostEqual(summary["Pressure_Std"], np.sqrt(2.0))
+
+    def test_missing_pressure_fails_instead_of_writing_sql_null(self):
+        with self.assertRaisesRegex(RuntimeError, "no finite samples"):
+            thermodynamic_summary(
+                run_steps=np.array([0, 100]),
+                pressure=np.array([np.nan, np.nan]),
+                potential_energy=np.array([-10.0, -11.0]),
+                n_particles=2,
+            )
 
 
 class PathTests(unittest.TestCase):
@@ -164,12 +188,19 @@ class DatabaseTests(unittest.TestCase):
             master={"Status": "Complete", "Current_Nstep": 100},
         )
         self.assertEqual(self.database.get_run(run_id)["Status"], "Complete")
+        self.database.update_thermalization(
+            run_id,
+            Pressure_Mean=6.0,
+            Pressure_Std=0.2,
+            Pressure_SEM=0.02,
+        )
         with self.database.connection() as connection:
-            count = connection.execute(
-                "SELECT COUNT(*) FROM Thermalization WHERE Run_ID = ?",
+            row = connection.execute(
+                "SELECT COUNT(*), Pressure_Mean FROM Thermalization WHERE Run_ID = ?",
                 (run_id,),
-            ).fetchone()[0]
-        self.assertEqual(count, 1)
+            ).fetchone()
+        self.assertEqual(row[0], 1)
+        self.assertEqual(row[1], 6.0)
 
         table = thermalization_dataframe(
             self.database,
@@ -196,6 +227,22 @@ class DatabaseTests(unittest.TestCase):
             paths.top_directory / "Thermalization" / run_id / "trajectory.gsd",
         )
         self.assertFalse(run.trajectory_path.exists())
+
+    @patch(
+        "md_Helpers.database._display_dataframe",
+        side_effect=lambda table, **_: table,
+    )
+    def test_master_display_can_hide_clock_times(self, _display):
+        table = display_master_table(
+            self.database,
+            show_run_signature=False,
+            show_clock_times=False,
+        )
+        self.assertNotIn("Run_Signature", table.columns)
+        self.assertNotIn("StartTime", table.columns)
+        self.assertNotIn("EndTime", table.columns)
+        self.assertNotIn("Last_Update_Time", table.columns)
+        self.assertIn("ElapsedTime", table.columns)
 
 
 if __name__ == "__main__":

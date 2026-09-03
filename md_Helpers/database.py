@@ -289,6 +289,28 @@ class SQLiteRunDatabase:
             if cursor.rowcount != 1:
                 raise KeyError(f"Run_ID was not found: {run_id}")
 
+    def update_thermalization(self, run_id: str, **values: Any) -> None:
+        """Update selected result fields for one completed thermalization."""
+
+        if not values:
+            return
+        unknown = set(values) - (THERMALIZATION_COLUMNS - {"Run_ID"})
+        if unknown:
+            raise ValueError(
+                f"Unknown Thermalization columns: {sorted(unknown)}"
+            )
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        parameters = [*values.values(), str(run_id)]
+        with self.connection() as connection:
+            cursor = connection.execute(
+                f"UPDATE Thermalization SET {assignments} WHERE Run_ID = ?",
+                parameters,
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(
+                    f"Completed Thermalization Run_ID was not found: {run_id}"
+                )
+
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(
@@ -508,12 +530,15 @@ def display_master_table(
     database: SQLiteRunDatabase | None = None,
     project_paths=None,
     show_run_signature: bool = False,
+    show_clock_times: bool = True,
 ):
     """Display the complete Master table cleanly in a Jupyter notebook.
 
     Run_Signature remains stored in SQL but is hidden from the normal display.
     Pass show_run_signature=True when inspecting duplicate-run behavior. The
-    returned DataFrame contains the same columns shown in the notebook.
+    returned DataFrame contains the same columns shown in the notebook. Set
+    show_clock_times=False to hide StartTime, EndTime, and Last_Update_Time;
+    ElapsedTime remains visible because it is a duration.
     """
 
     if database is None:
@@ -525,6 +550,10 @@ def display_master_table(
     table = master_dataframe(database)
     if not show_run_signature:
         table = table.drop(columns=["Run_Signature"])
+    if not show_clock_times:
+        table = table.drop(
+            columns=["StartTime", "EndTime", "Last_Update_Time"]
+        )
     return _display_dataframe(
         table,
         integer_columns=["N_Cells", "Nsteps", "Current_Nstep"],

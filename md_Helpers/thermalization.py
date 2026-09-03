@@ -23,7 +23,7 @@ from .storage import RunStorage, StateData, update_hdf5_metadata
 from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
 
 
-THERMALIZATION_METHOD_VERSION = "thermalization_v4_1"
+THERMALIZATION_METHOD_VERSION = "thermalization_v4_2"
 
 
 @dataclass(frozen=True)
@@ -173,6 +173,10 @@ def _make_simulation(config: ThermalizationConfig, lattice):
         filter=hoomd.filter.All()
     )
     simulation.operations.computes.append(thermo)
+    # This workflow queries ThermodynamicQuantities manually after run calls.
+    # HOOMD otherwise does not guarantee that pair virials and pressure are
+    # available for an NVT simulation.
+    simulation.always_compute_pressure = True
     simulation.state.thermalize_particle_momenta(
         filter=hoomd.filter.All(),
         kT=float(config.kT),
@@ -216,6 +220,7 @@ def _base_metadata(
             "T_Set": float(config.kT),
             "Particle_Type": config.particle_type,
             "Device": device_name,
+            "Always_Compute_Pressure": True,
         },
         "mdsims/interaction": {
             "epsilon_LJ": float(config.epsilon_LJ),
