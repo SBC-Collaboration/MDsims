@@ -17,6 +17,7 @@ from md_Helpers.analysis import thermodynamic_summary
 from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.run_analysis import RunAnalysis, open_run
+from md_Helpers.run_management import delete_run
 from md_Helpers.signatures import create_run_signature
 from md_Helpers.storage import StateData
 from md_Helpers.thermalization import (
@@ -219,6 +220,53 @@ class DatabaseTests(unittest.TestCase):
     def tearDown(self):
         self.temp_directory.cleanup()
 
+    def _create_complete_thermalization(self) -> tuple[str, ProjectPaths]:
+        run_id = self.database.reserve_run_id()
+        self.database.update_master(
+            run_id,
+            Run_Signature="e" * 64,
+            N_Cells=4,
+            Nsteps=100,
+            Sim_Type="Thermalization",
+            Status="Running",
+        )
+        self.database.complete_thermalization(
+            run_id,
+            thermalization={
+                "File_Location": f"Thermalization/{run_id}",
+                "Therm_kT": 0.9,
+                "Therm_Seed": 1,
+                "Density_Start": 0.5,
+                "Density_End": 0.5,
+                "BoxLength_Start": 10.0,
+                "BoxLength_End": 10.0,
+                "dt": 0.005,
+                "Nsteps": 100,
+                "This_LJ_Time": 0.5,
+                "Cumulative_LJ_Time": 0.5,
+                "Ensemble": "NVT",
+                "T_Set": 0.9,
+                "LJ_r_cut": 2.5,
+                "LJ_r_on": 2.0,
+                "LJ_Mode": "xplor",
+                "Phase_Separation_Status": "Not_Separated",
+                "Phase_Separation_Method": "voxel_histogram",
+                "Phase_Separation_Method_Version": "test",
+                "Phase_Fit_Status": "Not_Run",
+                "Summary_Start_Step": 0,
+                "Summary_End_Step": 100,
+                "Summary_Num_Samples": 2,
+                "Num_Frames": 6,
+            },
+            master={"Status": "Complete", "Current_Nstep": 100},
+        )
+        paths = ProjectPaths(self.temp_directory.name)
+        run_paths = paths.for_run("Thermalization", run_id)
+        run_paths.directory.mkdir(parents=True)
+        run_paths.trajectory.write_bytes(b"trajectory")
+        run_paths.hdf5.write_bytes(b"hdf5")
+        return run_id, paths
+
     def test_reserve_then_populate_master(self):
         run_id = self.database.reserve_run_id()
         reserved = self.database.get_run(run_id)
@@ -305,6 +353,52 @@ class DatabaseTests(unittest.TestCase):
         )
         self.assertEqual(len(table), 1)
         self.assertEqual(table.loc[0, "Run_ID"], run_id)
+
+    def test_delete_run_previews_then_deletes_files_and_both_rows(self):
+        run_id, paths = self._create_complete_thermalization()
+        run_directory = paths.for_run("Thermalization", run_id).directory
+
+        preview = delete_run(
+            run_id,
+            project_paths=paths,
+            database=self.database,
+        )
+        self.assertTrue(preview["dry_run"])
+        self.assertTrue(preview["trajectory_exists"])
+        self.assertTrue(preview["hdf5_exists"])
+        self.assertTrue(run_directory.exists())
+        self.assertIsNotNone(self.database.get_run(run_id))
+
+        result = delete_run(
+            run_id,
+            dry_run=False,
+            confirm_run_id=run_id,
+            project_paths=paths,
+            database=self.database,
+        )
+        self.assertTrue(result["directory_deleted"])
+        self.assertEqual(result["thermalization_rows_deleted"], 1)
+        self.assertEqual(result["master_rows_deleted"], 1)
+        self.assertFalse(run_directory.exists())
+        self.assertIsNone(self.database.get_thermalization(run_id))
+        self.assertIsNone(self.database.get_run(run_id))
+
+    def test_delete_run_requires_exact_confirmation(self):
+        run_id, paths = self._create_complete_thermalization()
+
+        with self.assertRaisesRegex(ValueError, "confirm_run_id"):
+            delete_run(
+                run_id,
+                dry_run=False,
+                confirm_run_id="wrong",
+                project_paths=paths,
+                database=self.database,
+            )
+
+        self.assertTrue(
+            paths.for_run("Thermalization", run_id).directory.exists()
+        )
+        self.assertIsNotNone(self.database.get_run(run_id))
 
     def test_open_run_is_a_lazy_sql_and_path_lookup(self):
         run_id = self.database.reserve_run_id()

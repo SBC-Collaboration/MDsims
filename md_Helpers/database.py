@@ -319,6 +319,80 @@ class SQLiteRunDatabase:
             ).fetchone()
         return _row_dict(row)
 
+    def get_thermalization(self, run_id: str) -> dict[str, Any] | None:
+        """Return one completed Thermalization row, if present."""
+
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM Thermalization WHERE Run_ID = ?",
+                (str(run_id),),
+            ).fetchone()
+        return _row_dict(row)
+
+    def delete_run_records(
+        self,
+        run_id: str,
+        *,
+        allow_active: bool = False,
+    ) -> dict[str, int]:
+        """Delete a Thermalization row and its Master row atomically.
+
+        This method only changes SQL. Filesystem removal is coordinated by
+        :func:`md_Helpers.delete_run`.
+        """
+
+        run_id = str(run_id)
+        with self.connection() as connection:
+            master = connection.execute(
+                "SELECT Status FROM MD_Master WHERE Run_ID = ?",
+                (run_id,),
+            ).fetchone()
+            if master is None:
+                raise KeyError(f"Run_ID was not found: {run_id}")
+            if not allow_active and master["Status"] in {
+                "Initializing",
+                "Running",
+            }:
+                raise RuntimeError(
+                    f"Refusing to delete active run {run_id} "
+                    f"with Status={master['Status']!r}"
+                )
+
+            dependents = connection.execute(
+                """
+                SELECT Run_ID
+                FROM Thermalization
+                WHERE Clone_Run_ID = ? AND Run_ID != ?
+                ORDER BY Run_ID
+                """,
+                (run_id, run_id),
+            ).fetchall()
+            if dependents:
+                dependent_ids = ", ".join(row["Run_ID"] for row in dependents)
+                raise RuntimeError(
+                    f"Cannot delete {run_id}; it is the clone source for: "
+                    f"{dependent_ids}"
+                )
+
+            thermalization_count = connection.execute(
+                "DELETE FROM Thermalization WHERE Run_ID = ?",
+                (run_id,),
+            ).rowcount
+            master_count = connection.execute(
+                "DELETE FROM MD_Master WHERE Run_ID = ?",
+                (run_id,),
+            ).rowcount
+            if master_count != 1:
+                raise RuntimeError(
+                    f"Expected to delete one Master row for {run_id}, "
+                    f"deleted {master_count}"
+                )
+
+        return {
+            "thermalization_rows_deleted": thermalization_count,
+            "master_rows_deleted": master_count,
+        }
+
     def query_runs(self, **filters: Any) -> list[dict[str, Any]]:
         """Query Master rows using exact-match filters."""
 

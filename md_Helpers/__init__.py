@@ -9,6 +9,7 @@ from .database import (
 )
 from .paths import ProjectPaths
 from .run_analysis import RunAnalysis, open_run
+from .run_management import delete_run
 from .thermalization import (
     CloneRescaleThermalizationConfig,
     ThermalizationConfig,
@@ -24,6 +25,7 @@ __all__ = [
     "ThermalizationConfig",
     "display_master_table",
     "display_thermalization_table",
+    "delete_run",
     "master_dataframe",
     "open_run",
     "thermalization_dataframe",
