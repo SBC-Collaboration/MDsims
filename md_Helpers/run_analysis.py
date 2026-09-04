@@ -21,7 +21,6 @@ from .visualization import (
 from .voxel_fit import (
     averaged_trajectory_voxel_histogram,
     fit_trajectory_voxel_mixture,
-    phase_fit_frame_indices,
 )
 
 
@@ -311,8 +310,9 @@ class RunAnalysis:
             frame["density"] = frame["num_particles"] / frame["volume"]
         frame.insert(0, "log_index", np.arange(len(frame), dtype=int))
         if "trajectory_frame_id" not in frame:
-            # Older workflows wrote one GSD frame for every HDF5 sample.
-            frame["trajectory_frame_id"] = frame["log_index"]
+            raise KeyError(
+                "run.hdf5 is missing the required trajectory_frame_id mapping"
+            )
         frame.insert(1, "frame", frame["trajectory_frame_id"])
         return frame
 
@@ -369,18 +369,15 @@ class RunAnalysis:
     def phase_average_frame_ids(self) -> list[int]:
         """Return the exact GSD frames used for the averaged histogram."""
 
-        if self.hdf5_path.exists():
-            metadata = self.metadata()
-            saved = metadata.get(
-                "mdsims/output/Phase_Average_Trajectory_Frame_IDs"
+        metadata = self.metadata()
+        saved = metadata.get(
+            "mdsims/output/Phase_Average_Trajectory_Frame_IDs"
+        )
+        if saved is None:
+            raise KeyError(
+                "run.hdf5 is missing Phase_Average_Trajectory_Frame_IDs"
             )
-            if saved is not None:
-                return [int(index) for index in np.atleast_1d(saved)]
-            fit = self._phase_fit_attributes()
-            saved = fit.get("frame_indices")
-            if saved is not None:
-                return [int(index) for index in np.atleast_1d(saved)]
-        return phase_fit_frame_indices(self.frame_count)
+        return [int(index) for index in np.atleast_1d(saved)]
 
     def plot_phase_fit(self, recompute_missing: bool = True):
         """Plot the exact saved phase-fit data, or clearly label reconstruction."""
@@ -399,7 +396,7 @@ class RunAnalysis:
                     int(self.master_row["N_Cells"]),
                     frame_indices=frame_ids,
                 )
-                title = "Reconstructed averaged histogram and fit (not saved by older run)"
+                title = "Reconstructed averaged histogram and fit"
             else:
                 fit = averaged_trajectory_voxel_histogram(
                     self.trajectory_path,

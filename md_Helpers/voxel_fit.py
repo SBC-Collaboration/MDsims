@@ -13,7 +13,6 @@ from .analysis import voxel_bins_for_ncells
 PHASE_FIT_METHOD = "averaged_voxel_histogram_mixture"
 PHASE_FIT_METHOD_VERSION = "terminal_5_saved_frames_log_stride_10_v2"
 PHASE_FIT_NUM_FRAMES = 5
-PHASE_FIT_FRAME_STRIDE = 5
 
 PHASE_FIT_SQL_FIELDS = (
     "rho_liquid",
@@ -62,23 +61,19 @@ def _standard_uncertainty(gradient, covariance) -> float:
 def phase_fit_frame_indices(
     trajectory_length: int,
     num_frames: int = PHASE_FIT_NUM_FRAMES,
-    frame_stride: int = PHASE_FIT_FRAME_STRIDE,
 ) -> list[int]:
-    """Return final-first, zero-based frame indices for the averaged fit."""
+    """Return the terminal saved frames, excluding the initial state."""
 
     trajectory_length = int(trajectory_length)
     num_frames = int(num_frames)
-    frame_stride = int(frame_stride)
-    if trajectory_length <= 0:
-        raise ValueError("trajectory must contain at least one frame")
-    if num_frames <= 0 or frame_stride <= 0:
-        raise ValueError("num_frames and frame_stride must be positive")
-    final_index = trajectory_length - 1
-    return [
-        final_index - offset
-        for offset in range(0, num_frames * frame_stride, frame_stride)
-        if final_index - offset >= 0
-    ]
+    if num_frames <= 0:
+        raise ValueError("num_frames must be positive")
+    if trajectory_length < num_frames + 1:
+        raise ValueError(
+            "trajectory must contain one initial frame and "
+            f"{num_frames} phase-analysis frames"
+        )
+    return list(range(trajectory_length - num_frames, trajectory_length))
 
 
 def _voxel_count_histogram(
@@ -104,7 +99,6 @@ def averaged_trajectory_voxel_histogram(
     trajectory_path: str | Path,
     n_cells: int,
     num_frames: int = PHASE_FIT_NUM_FRAMES,
-    frame_stride: int = PHASE_FIT_FRAME_STRIDE,
     frame_indices: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Return the exact multi-frame histogram used as phase-fit input."""
@@ -118,7 +112,7 @@ def averaged_trajectory_voxel_histogram(
     with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
         trajectory_length = len(trajectory)
         indices = (
-            phase_fit_frame_indices(trajectory_length, num_frames, frame_stride)
+            phase_fit_frame_indices(trajectory_length, num_frames)
             if frame_indices is None
             else [int(index) for index in frame_indices]
         )
@@ -152,7 +146,7 @@ def averaged_trajectory_voxel_histogram(
             int(num_frames) if frame_indices is None else len(indices)
         ),
         "frames_used": len(indices),
-        "frame_stride": int(frame_stride) if frame_indices is None else None,
+        "trajectory_frame_selection": "terminal_saved_frames",
         "voxel_nbins": int(nbins),
         "voxel_volume": voxel_volume,
         "box_volume": float(np.mean(box_volumes)),
@@ -380,7 +374,7 @@ def fit_averaged_voxel_mixture(
         "voxel_nbins": int(nbins),
         "frames_used": int(len(histograms)),
         "frame_indices": list(frame_indices) if frame_indices is not None else None,
-        "frame_stride": PHASE_FIT_FRAME_STRIDE,
+        "trajectory_frame_selection": "terminal_saved_frames",
         "histogram_aggregation": "arithmetic_mean",
         "count_axis": count_axis,
         "density_axis": count_axis / voxel_volume,
@@ -420,7 +414,6 @@ def fit_trajectory_voxel_mixture(
     trajectory_path: str | Path,
     n_cells: int,
     num_frames: int = PHASE_FIT_NUM_FRAMES,
-    frame_stride: int = PHASE_FIT_FRAME_STRIDE,
     frame_indices: Sequence[int] | None = None,
     **fit_options: Any,
 ) -> dict[str, Any]:
@@ -430,7 +423,7 @@ def fit_trajectory_voxel_mixture(
 
     with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
         indices = (
-            phase_fit_frame_indices(len(trajectory), num_frames, frame_stride)
+            phase_fit_frame_indices(len(trajectory), num_frames)
             if frame_indices is None
             else [int(index) for index in frame_indices]
         )
@@ -454,9 +447,7 @@ def fit_trajectory_voxel_mixture(
     fit["requested_frames"] = (
         int(num_frames) if frame_indices is None else len(indices)
     )
-    fit["frame_stride"] = (
-        int(frame_stride) if frame_indices is None else None
-    )
+    fit["trajectory_frame_selection"] = "terminal_saved_frames"
     return fit
 
 

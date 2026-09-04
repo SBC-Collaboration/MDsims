@@ -73,11 +73,15 @@ class LatticeTests(unittest.TestCase):
 
 
 class PhaseFitPolicyTests(unittest.TestCase):
-    def test_selects_five_backward_spaced_frames(self):
-        self.assertEqual(phase_fit_frame_indices(100), [99, 94, 89, 84, 79])
+    def test_selects_five_terminal_saved_frames(self):
+        self.assertEqual(phase_fit_frame_indices(100), [95, 96, 97, 98, 99])
 
-    def test_short_trajectory_uses_available_frames_without_duplicates(self):
-        self.assertEqual(phase_fit_frame_indices(12), [11, 6, 1])
+    def test_six_frame_trajectory_excludes_initial_frame(self):
+        self.assertEqual(phase_fit_frame_indices(6), [1, 2, 3, 4, 5])
+
+    def test_incomplete_trajectory_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "one initial frame"):
+            phase_fit_frame_indices(5)
 
     @patch("md_Helpers.voxel_fit.fit_trajectory_voxel_mixture")
     def test_homogeneous_state_skips_fit_and_leaves_values_null(self, fit):
