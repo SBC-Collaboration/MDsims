@@ -87,7 +87,7 @@ class ThermalizationConfig:
     kT: float = 1.5
     log_period: int = 1_000
     seed: int = 1
-    dt: float = 0.005
+    dt: float = 0.002
     epsilon_LJ: float = 1.0
     sigma_LJ: float = 1.0
     r_cut_LJ: float = 2.5

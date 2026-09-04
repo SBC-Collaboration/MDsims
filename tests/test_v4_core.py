@@ -36,6 +36,10 @@ from md_Helpers.voxel_fit import (
 
 
 class SignatureTests(unittest.TestCase):
+    def test_thermalization_default_timestep(self):
+        config = ThermalizationConfig(4, 0.5, 100, seed=1)
+        self.assertEqual(config.dt, 0.002)
+
     def test_signature_is_stable_and_order_independent(self):
         first = create_run_signature({"n_cells": 45, "rho": 0.5, "kT": 0.9})
         second = create_run_signature({"kT": 0.9, "rho": 0.5, "n_cells": 45})
