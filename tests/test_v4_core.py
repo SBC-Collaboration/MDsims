@@ -25,6 +25,7 @@ from md_Helpers.thermalization import (
     ThermalizationConfig,
     _clone_request_context,
     _inherited_clone_config,
+    clone_final_density_is_acceptable,
     thermalization_log_steps,
     thermalization_phase_frame_schedule,
 )
@@ -112,6 +113,10 @@ class PhaseFitPolicyTests(unittest.TestCase):
 
 
 class ThermalizationFrameScheduleTests(unittest.TestCase):
+    def test_clone_final_density_accepts_point_one_percent_tolerance(self):
+        self.assertTrue(clone_final_density_is_acceptable(0.6000004, 0.6))
+        self.assertFalse(clone_final_density_is_acceptable(0.6007, 0.6))
+
     def test_selects_logs_60_70_80_90_100(self):
         schedule = thermalization_phase_frame_schedule(
             nsteps=100_000,

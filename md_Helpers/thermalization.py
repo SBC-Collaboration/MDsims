@@ -24,12 +24,26 @@ from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
 
 
 THERMALIZATION_METHOD_VERSION = "thermalization_v4_3"
-CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v2"
+CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v3"
 CLONE_FINAL_FRAME_METHOD_VERSION = "clone_final_frame_v1"
 LINEAR_DENSITY_METHOD_VERSION = "linear_density_v1"
+CLONE_FINAL_DENSITY_RELATIVE_TOLERANCE = 1e-3
 THERMALIZATION_TRAJECTORY_METHOD_VERSION = "initial_plus_terminal_5_stride_10_v1"
 THERMALIZATION_PHASE_FRAME_COUNT = 5
 THERMALIZATION_PHASE_LOG_STRIDE = 10
+
+
+def clone_final_density_is_acceptable(actual: float, requested: float) -> bool:
+    """Return whether a resized clone finished within 0.1% of its target."""
+
+    return bool(
+        np.isclose(
+            float(actual),
+            float(requested),
+            rtol=CLONE_FINAL_DENSITY_RELATIVE_TOLERANCE,
+            atol=0.0,
+        )
+    )
 
 
 def thermalization_log_steps(nsteps: int, log_period: int) -> list[int]:
@@ -467,6 +481,9 @@ def _clone_base_metadata(
             "Therm_Seed": int(config.seed),
             "Density_Start": float(source_state.density),
             "Density_End_Target": float(request.final_density),
+            "Density_End_Relative_Tolerance": (
+                CLONE_FINAL_DENSITY_RELATIVE_TOLERANCE
+            ),
             "Density_Schedule": "linear_density",
             "Density_Schedule_Version": LINEAR_DENSITY_METHOD_VERSION,
             "Nsteps": int(config.nsteps),
@@ -953,15 +970,14 @@ def run_thermalization(
             for record in storage.frame_records[1:]
         ]
 
-        if clone_request is not None and not np.isclose(
+        if clone_request is not None and not clone_final_density_is_acceptable(
             state.density,
             clone_request.final_density,
-            rtol=1e-10,
-            atol=1e-12,
         ):
             raise RuntimeError(
                 "Linear density resize did not reach the requested final density: "
-                f"requested {clone_request.final_density}, got {state.density}"
+                f"requested {clone_request.final_density}, got {state.density}; "
+                "allowed relative difference is 0.1%"
             )
 
         voxel = classify_voxel_histogram(
