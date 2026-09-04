@@ -8,23 +8,23 @@ V4 currently contains the smallest complete thermalization workflow. It:
    loading any run file;
 4. reserves a timestamp Run ID and incrementally updates its Master row;
 5. runs NVT thermalization with the V3 Lennard-Jones defaults;
-6. writes exact initial, periodic, and final samples to `trajectory.gsd` and
-   `run.hdf5`;
+6. logs every requested thermodynamic sample to `run.hdf5`, while
+   `trajectory.gsd` stores only the initial state and five terminal states;
 7. records thermodynamic summaries and both voxel and PE-drop phase checks;
 8. when the final-frame voxel classifier marks the state phase separated,
-   averages the voxel histograms from the final frame and every fifth frame
-   backward for five sampled frames, then performs one mixture fit; all eight
-   fit values remain SQL `NULL` for a homogeneous state;
+   averages the five terminal voxel histograms sampled every ten log points,
+   then performs one mixture fit; all eight fit values remain SQL `NULL` for a
+   homogeneous state;
 9. inserts the Thermalization row and marks Master complete in one transaction.
 
 ## Output root
 
 Change `TOP_DIRECTORY` in `md_Helpers/paths.py`, or set the
 `MDSIMS_TOP_DIRECTORY` environment variable before importing the package.
-The local default is:
+The configured shared default is:
 
 ```text
-MDSims/
+/exp/e961/data/MDsims-data/pnichols/SQL/
 ├── mdsims.sqlite3
 └── Thermalization/
     └── <Run_ID>/
@@ -32,9 +32,8 @@ MDSims/
         └── run.hdf5
 ```
 
-The future shared root is
-`/exp/e961/data/MDsims-data/pnichols/SQL`. The live MySQL server storage will
-remain separate from this simulation-file root.
+The live MySQL server storage will remain separate from this simulation-file
+root.
 
 ## Notebook use
 
@@ -46,7 +45,7 @@ paths = ProjectPaths()
 config = ThermalizationConfig(
     n_fcc_cells=45,
     target_rho=0.5,
-    nsteps=10_000,
+    nsteps=100_000,
     kT=0.9,
     log_period=1_000,
     seed=1,
@@ -62,6 +61,11 @@ config = ThermalizationConfig(
 result = run_thermalization(config, project_paths=paths)
 result
 ```
+
+Thermalization requires at least 41 evolved HDF5 log points. With 100 log
+points, the trajectory contains the initial state followed by states from logs
+60, 70, 80, 90, and 100. These last five frames are the exact inputs to the
+averaged voxel histogram.
 
 Running the same cell again returns the existing SQL record with
 `result["skipped"] == True`; it does not open or load its GSD/HDF5 files.

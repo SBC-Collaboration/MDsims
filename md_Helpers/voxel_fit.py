@@ -11,7 +11,7 @@ from .analysis import voxel_bins_for_ncells
 
 
 PHASE_FIT_METHOD = "averaged_voxel_histogram_mixture"
-PHASE_FIT_METHOD_VERSION = "last_5_frames_stride_5_voxel_mixture_v1"
+PHASE_FIT_METHOD_VERSION = "terminal_5_saved_frames_log_stride_10_v2"
 PHASE_FIT_NUM_FRAMES = 5
 PHASE_FIT_FRAME_STRIDE = 5
 
@@ -105,6 +105,7 @@ def averaged_trajectory_voxel_histogram(
     n_cells: int,
     num_frames: int = PHASE_FIT_NUM_FRAMES,
     frame_stride: int = PHASE_FIT_FRAME_STRIDE,
+    frame_indices: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Return the exact multi-frame histogram used as phase-fit input."""
 
@@ -115,7 +116,16 @@ def averaged_trajectory_voxel_histogram(
     voxel_volumes = []
     box_volumes = []
     with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
-        indices = phase_fit_frame_indices(len(trajectory), num_frames, frame_stride)
+        trajectory_length = len(trajectory)
+        indices = (
+            phase_fit_frame_indices(trajectory_length, num_frames, frame_stride)
+            if frame_indices is None
+            else [int(index) for index in frame_indices]
+        )
+        if not indices:
+            raise ValueError("At least one phase-fit frame is required")
+        if any(index < 0 or index >= trajectory_length for index in indices):
+            raise IndexError("A phase-fit frame index is outside the trajectory")
         for index in indices:
             frame = trajectory[index]
             histogram, voxel_volume, box_volume = _voxel_count_histogram(
@@ -135,10 +145,14 @@ def averaged_trajectory_voxel_histogram(
     count_axis = np.arange(max_count_bins)
     return {
         "frame_indices": indices,
-        "negative_frame_indices": [index - (indices[0] + 1) for index in indices],
-        "requested_frames": int(num_frames),
+        "negative_frame_indices": [
+            index - trajectory_length for index in indices
+        ],
+        "requested_frames": (
+            int(num_frames) if frame_indices is None else len(indices)
+        ),
         "frames_used": len(indices),
-        "frame_stride": int(frame_stride),
+        "frame_stride": int(frame_stride) if frame_indices is None else None,
         "voxel_nbins": int(nbins),
         "voxel_volume": voxel_volume,
         "box_volume": float(np.mean(box_volumes)),
@@ -407,6 +421,7 @@ def fit_trajectory_voxel_mixture(
     n_cells: int,
     num_frames: int = PHASE_FIT_NUM_FRAMES,
     frame_stride: int = PHASE_FIT_FRAME_STRIDE,
+    frame_indices: Sequence[int] | None = None,
     **fit_options: Any,
 ) -> dict[str, Any]:
     """Read selected GSD frames and fit their averaged voxel histogram."""
@@ -414,7 +429,15 @@ def fit_trajectory_voxel_mixture(
     import gsd.hoomd
 
     with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
-        indices = phase_fit_frame_indices(len(trajectory), num_frames, frame_stride)
+        indices = (
+            phase_fit_frame_indices(len(trajectory), num_frames, frame_stride)
+            if frame_indices is None
+            else [int(index) for index in frame_indices]
+        )
+        if not indices:
+            raise ValueError("At least one phase-fit frame is required")
+        if any(index < 0 or index >= len(trajectory) for index in indices):
+            raise IndexError("A phase-fit frame index is outside the trajectory")
         positions = []
         boxes = []
         for index in indices:
@@ -428,8 +451,12 @@ def fit_trajectory_voxel_mixture(
         frame_indices=indices,
         **fit_options,
     )
-    fit["requested_frames"] = int(num_frames)
-    fit["frame_stride"] = int(frame_stride)
+    fit["requested_frames"] = (
+        int(num_frames) if frame_indices is None else len(indices)
+    )
+    fit["frame_stride"] = (
+        int(frame_stride) if frame_indices is None else None
+    )
     return fit
 
 

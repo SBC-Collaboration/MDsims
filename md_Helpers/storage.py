@@ -40,6 +40,7 @@ LOG_DATASETS = {
     "mdsims/time/run_step": ((), "i8"),
     "mdsims/time/this_lj_time": ((), "f8"),
     "mdsims/time/cumulative_lj_time": ((), "f8"),
+    "mdsims/output/trajectory_frame_id": ((), "i8"),
     "mdsims/analysis/speed/max_particle_speed": ((), "f8"),
 }
 
@@ -92,6 +93,7 @@ class RunStorage:
             "pressure": [],
             "potential_energy": [],
         }
+        self.frame_records: list[dict[str, int]] = []
 
     def open(self, metadata_groups: dict[str, dict[str, Any]]) -> None:
         import h5py
@@ -172,11 +174,34 @@ class RunStorage:
         run_step: int,
         dt: float,
         prior_lj_time: float = 0.0,
+        save_frame: bool = True,
     ) -> StateData:
-        """Write one exact GSD frame and its matching HDF5 log sample."""
+        """Write one HDF5 sample and optionally its exact GSD frame."""
 
         snapshot = simulation.state.get_snapshot()
-        state = self._append_gsd(snapshot, simulation.timestep)
+        if save_frame:
+            trajectory_frame_id = self._frame_count
+            state = self._append_gsd(snapshot, simulation.timestep)
+        else:
+            trajectory_frame_id = -1
+            state = StateData(
+                positions=np.asarray(
+                    snapshot.particles.position,
+                    dtype=np.float64,
+                ).copy(),
+                velocities=np.asarray(
+                    snapshot.particles.velocity,
+                    dtype=np.float64,
+                ).copy(),
+                box=np.asarray(
+                    snapshot.configuration.box,
+                    dtype=np.float64,
+                ).copy(),
+                n_particles=int(snapshot.particles.N),
+                particle_types=tuple(
+                    str(item) for item in snapshot.particles.types
+                ),
+            )
         speed = np.linalg.norm(state.velocities, axis=1)
         pressure_tensor = np.asarray(
             thermo.pressure_tensor,
@@ -209,6 +234,7 @@ class RunStorage:
             "mdsims/time/cumulative_lj_time": (
                 float(prior_lj_time) + float(run_step) * float(dt)
             ),
+            "mdsims/output/trajectory_frame_id": trajectory_frame_id,
             "mdsims/analysis/speed/max_particle_speed": (
                 float(np.max(speed)) if len(speed) else 0.0
             ),
@@ -221,6 +247,13 @@ class RunStorage:
         self.samples["potential_energy"].append(values[
             "hoomd-data/md/compute/ThermodynamicQuantities/potential_energy"
         ])
+        if save_frame:
+            self.frame_records.append({
+                "trajectory_frame_id": int(trajectory_frame_id),
+                "log_index": len(self.samples["run_step"]) - 1,
+                "run_step": int(run_step),
+                "hoomd_timestep": int(simulation.timestep),
+            })
         return state
 
     @property
@@ -262,4 +295,3 @@ def update_hdf5_metadata(
                 if value is None:
                     continue
                 group.attrs[str(key)] = _attribute_value(value)
-

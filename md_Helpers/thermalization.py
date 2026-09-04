@@ -23,10 +23,58 @@ from .storage import RunStorage, StateData, update_hdf5_metadata
 from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
 
 
-THERMALIZATION_METHOD_VERSION = "thermalization_v4_2"
-CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v1"
+THERMALIZATION_METHOD_VERSION = "thermalization_v4_3"
+CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v2"
 CLONE_FINAL_FRAME_METHOD_VERSION = "clone_final_frame_v1"
 LINEAR_DENSITY_METHOD_VERSION = "linear_density_v1"
+THERMALIZATION_TRAJECTORY_METHOD_VERSION = "initial_plus_terminal_5_stride_10_v1"
+THERMALIZATION_PHASE_FRAME_COUNT = 5
+THERMALIZATION_PHASE_LOG_STRIDE = 10
+
+
+def thermalization_log_steps(nsteps: int, log_period: int) -> list[int]:
+    """Return every evolved HDF5 logging step, including the final step."""
+
+    nsteps = int(nsteps)
+    log_period = int(log_period)
+    if nsteps <= 0 or log_period <= 0:
+        raise ValueError("nsteps and log_period must be positive")
+    steps = list(range(log_period, nsteps + 1, log_period))
+    if not steps or steps[-1] != nsteps:
+        steps.append(nsteps)
+    return steps
+
+
+def thermalization_phase_frame_schedule(
+    nsteps: int,
+    log_period: int,
+) -> list[dict[str, int]]:
+    """Select five terminal logs separated by ten evolved log points."""
+
+    log_steps = thermalization_log_steps(nsteps, log_period)
+    final_ordinal = len(log_steps)
+    first_ordinal = final_ordinal - (
+        (THERMALIZATION_PHASE_FRAME_COUNT - 1)
+        * THERMALIZATION_PHASE_LOG_STRIDE
+    )
+    if first_ordinal < 1:
+        raise ValueError(
+            "Thermalization requires at least 41 evolved log points to save "
+            "five phase-analysis frames spaced by 10 logs. Reduce log_period "
+            "or increase Nsteps."
+        )
+    ordinals = list(range(
+        first_ordinal,
+        final_ordinal + 1,
+        THERMALIZATION_PHASE_LOG_STRIDE,
+    ))
+    return [
+        {
+            "log_ordinal": ordinal,
+            "run_step": log_steps[ordinal - 1],
+        }
+        for ordinal in ordinals
+    ]
 
 
 @dataclass(frozen=True)
@@ -100,6 +148,7 @@ class ThermalizationConfig:
             raise ValueError(
                 "phase_fit_interface_void_fraction must be between 0 and 1"
             )
+        thermalization_phase_frame_schedule(self.nsteps, self.log_period)
 
     def signature_parameters(self) -> dict[str, Any]:
         """Parameters that define dynamics or canonical saved output."""
@@ -161,7 +210,8 @@ class CloneRescaleThermalizationConfig:
             "final_density": float(self.final_density),
             "nsteps": int(self.nsteps),
             "simulation_settings": "inherit_source",
-            "output_settings": "inherit_source",
+            "log_period": "inherit_source",
+            "trajectory_storage": THERMALIZATION_TRAJECTORY_METHOD_VERSION,
         }
 
     def run_signature(self, source_frame_id: int) -> str:
@@ -263,6 +313,27 @@ def _add_linear_density_resize(
     return updater
 
 
+def _trajectory_policy_metadata(config: ThermalizationConfig) -> dict[str, Any]:
+    schedule = thermalization_phase_frame_schedule(
+        config.nsteps,
+        config.log_period,
+    )
+    return {
+        "Trajectory_Storage_Method": THERMALIZATION_TRAJECTORY_METHOD_VERSION,
+        "Initial_Frame_Count": 1,
+        "Phase_Average_Frame_Count": THERMALIZATION_PHASE_FRAME_COUNT,
+        "Phase_Average_Log_Stride": THERMALIZATION_PHASE_LOG_STRIDE,
+        "Phase_Average_Log_Ordinals": [
+            item["log_ordinal"] for item in schedule
+        ],
+        "Phase_Average_Run_Steps": [item["run_step"] for item in schedule],
+        "Phase_Average_Trajectory_Frame_IDs": list(range(
+            1,
+            THERMALIZATION_PHASE_FRAME_COUNT + 1,
+        )),
+    }
+
+
 def _base_metadata(
     run_id: str,
     signature: str,
@@ -315,6 +386,7 @@ def _base_metadata(
             "HDF5_Path": f"{relative}/run.hdf5",
             "Log_Period": int(config.log_period),
             "Progress_Update_Period": int(config.progress_period),
+            **_trajectory_policy_metadata(config),
         },
         "mdsims/states/source": {
             "State_Role": "source",
@@ -420,7 +492,8 @@ def _clone_base_metadata(
             "HDF5_Path": f"{relative}/run.hdf5",
             "Log_Period": int(config.log_period),
             "Progress_Update_Period": int(config.progress_period),
-            "Output_Settings_Inherited_From_Run_ID": str(request.source_run_id),
+            "Log_Period_Inherited_From_Run_ID": str(request.source_run_id),
+            **_trajectory_policy_metadata(config),
         },
         "mdsims/time": {
             "Prior_Cumulative_LJ_Time": float(prior_lj_time),
@@ -755,6 +828,13 @@ def run_thermalization(
                 prior_lj_time,
             )
 
+        phase_frame_schedule = thermalization_phase_frame_schedule(
+            simulation_config.nsteps,
+            simulation_config.log_period,
+        )
+        phase_frame_steps = {
+            item["run_step"] for item in phase_frame_schedule
+        }
         storage = RunStorage(run_paths)
         storage.open(metadata)
 
@@ -773,6 +853,7 @@ def run_thermalization(
             0,
             simulation_config.dt,
             prior_lj_time=prior_lj_time,
+            save_frame=True,
         )
         trajectory_relative = (
             run_paths.relative_directory / "trajectory.gsd"
@@ -847,6 +928,7 @@ def run_thermalization(
                     current_step,
                     simulation_config.dt,
                     prior_lj_time=prior_lj_time,
+                    save_frame=current_step in phase_frame_steps,
                 )
                 while next_log <= current_step:
                     next_log += int(simulation_config.log_period)
@@ -860,6 +942,16 @@ def run_thermalization(
                 storage.flush()
                 while next_progress <= current_step:
                     next_progress += int(simulation_config.progress_period)
+
+        if storage.frame_count != 1 + THERMALIZATION_PHASE_FRAME_COUNT:
+            raise RuntimeError(
+                "Thermalization trajectory did not save exactly one initial "
+                "frame and five phase-analysis frames"
+            )
+        phase_frame_ids = [
+            record["trajectory_frame_id"]
+            for record in storage.frame_records[1:]
+        ]
 
         if clone_request is not None and not np.isclose(
             state.density,
@@ -898,6 +990,7 @@ def run_thermalization(
             ),
             interface_points=simulation_config.phase_fit_interface_points,
             max_iterations=simulation_config.phase_fit_max_iterations,
+            frame_indices=phase_frame_ids,
         )
         selected_phase = select_phase_classification(
             voxel,
@@ -936,6 +1029,19 @@ def run_thermalization(
             "mdsims/analysis/phase_separation/selected": selected_phase,
             "mdsims/analysis/thermodynamics": summary,
             "mdsims/analysis/phase_fit": phase_fit,
+            "mdsims/output": {
+                "Trajectory_Frame_Log_Indices": [
+                    record["log_index"] for record in storage.frame_records
+                ],
+                "Trajectory_Frame_Run_Steps": [
+                    record["run_step"] for record in storage.frame_records
+                ],
+                "Trajectory_Frame_HOOMD_Timesteps": [
+                    record["hoomd_timestep"]
+                    for record in storage.frame_records
+                ],
+                "Phase_Average_Trajectory_Frame_IDs": phase_frame_ids,
+            },
         })
         storage.close()
 

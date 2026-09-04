@@ -24,6 +24,8 @@ from md_Helpers.thermalization import (
     ThermalizationConfig,
     _clone_request_context,
     _inherited_clone_config,
+    thermalization_log_steps,
+    thermalization_phase_frame_schedule,
 )
 from md_Helpers.voxel_fit import (
     conditional_phase_fit,
@@ -98,6 +100,35 @@ class PhaseFitPolicyTests(unittest.TestCase):
             "V_gas_unc",
         ]:
             self.assertIsNone(sql_values[column])
+
+
+class ThermalizationFrameScheduleTests(unittest.TestCase):
+    def test_selects_logs_60_70_80_90_100(self):
+        schedule = thermalization_phase_frame_schedule(
+            nsteps=100_000,
+            log_period=1_000,
+        )
+        self.assertEqual(
+            [item["log_ordinal"] for item in schedule],
+            [60, 70, 80, 90, 100],
+        )
+        self.assertEqual(
+            [item["run_step"] for item in schedule],
+            [60_000, 70_000, 80_000, 90_000, 100_000],
+        )
+
+    def test_final_step_is_always_a_log_point(self):
+        self.assertEqual(
+            thermalization_log_steps(2_500, 1_000),
+            [1_000, 2_000, 2_500],
+        )
+
+    def test_rejects_too_few_evolved_logs(self):
+        with self.assertRaisesRegex(ValueError, "at least 41"):
+            thermalization_phase_frame_schedule(
+                nsteps=40_000,
+                log_period=1_000,
+            )
 
 
 class ThermodynamicSummaryTests(unittest.TestCase):
@@ -331,7 +362,7 @@ class DatabaseTests(unittest.TestCase):
         request = CloneRescaleThermalizationConfig(
             source_run_id=source_run_id,
             final_density=0.4,
-            nsteps=2_000,
+            nsteps=20_000,
             notes="slow expansion",
         )
         master, thermal, frame_id, note = _clone_request_context(

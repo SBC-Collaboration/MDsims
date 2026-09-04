@@ -21,6 +21,7 @@ from .visualization import (
 from .voxel_fit import (
     averaged_trajectory_voxel_histogram,
     fit_trajectory_voxel_mixture,
+    phase_fit_frame_indices,
 )
 
 
@@ -280,6 +281,7 @@ class RunAnalysis:
             "run_step": "mdsims/time/run_step",
             "this_lj_time": "mdsims/time/this_lj_time",
             "cumulative_lj_time": "mdsims/time/cumulative_lj_time",
+            "trajectory_frame_id": "mdsims/output/trajectory_frame_id",
             "max_particle_speed": "mdsims/analysis/speed/max_particle_speed",
         }
         with h5py.File(self.hdf5_path, mode="r") as hdf5:
@@ -307,11 +309,18 @@ class RunAnalysis:
             )
         if {"num_particles", "volume"} <= set(frame):
             frame["density"] = frame["num_particles"] / frame["volume"]
-        frame.insert(0, "frame", np.arange(len(frame), dtype=int))
+        frame.insert(0, "log_index", np.arange(len(frame), dtype=int))
+        if "trajectory_frame_id" not in frame:
+            # Older workflows wrote one GSD frame for every HDF5 sample.
+            frame["trajectory_frame_id"] = frame["log_index"]
+        frame.insert(1, "frame", frame["trajectory_frame_id"])
         return frame
 
     def frame_table(self):
-        return self.logs_dataframe()
+        """Return only HDF5 rows that have a corresponding GSD frame."""
+
+        logs = self.logs_dataframe()
+        return logs.loc[logs["trajectory_frame_id"] >= 0].reset_index(drop=True)
 
     def plot_logs(
         self,
@@ -357,11 +366,28 @@ class RunAnalysis:
                 return {}
             return {key: _decode(value) for key, value in hdf5[path].attrs.items()}
 
+    def phase_average_frame_ids(self) -> list[int]:
+        """Return the exact GSD frames used for the averaged histogram."""
+
+        if self.hdf5_path.exists():
+            metadata = self.metadata()
+            saved = metadata.get(
+                "mdsims/output/Phase_Average_Trajectory_Frame_IDs"
+            )
+            if saved is not None:
+                return [int(index) for index in np.atleast_1d(saved)]
+            fit = self._phase_fit_attributes()
+            saved = fit.get("frame_indices")
+            if saved is not None:
+                return [int(index) for index in np.atleast_1d(saved)]
+        return phase_fit_frame_indices(self.frame_count)
+
     def plot_phase_fit(self, recompute_missing: bool = True):
         """Plot the exact saved phase-fit data, or clearly label reconstruction."""
 
         self._require_trajectory()
         fit = self._phase_fit_attributes() if self.hdf5_path.exists() else {}
+        frame_ids = self.phase_average_frame_ids()
         exact_saved = "observed_counts" in fit and "density_axis" in fit
         if not exact_saved:
             phase_fit_status = (
@@ -371,12 +397,14 @@ class RunAnalysis:
                 fit = fit_trajectory_voxel_mixture(
                     self.trajectory_path,
                     int(self.master_row["N_Cells"]),
+                    frame_indices=frame_ids,
                 )
                 title = "Reconstructed averaged histogram and fit (not saved by older run)"
             else:
                 fit = averaged_trajectory_voxel_histogram(
                     self.trajectory_path,
                     int(self.master_row["N_Cells"]),
+                    frame_indices=frame_ids,
                 )
                 reason = phase_fit_status or "fit data unavailable"
                 title = f"Averaged voxel histogram — no fitted curve ({reason})"
