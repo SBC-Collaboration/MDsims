@@ -1093,6 +1093,7 @@ def run_thermalization(
                 else None
             ),
             "Clone_Frame_ID": source_frame_id,
+            "N_Cells": int(simulation_config.n_fcc_cells),
             "Therm_kT": float(simulation_config.kT),
             "Therm_Seed": int(simulation_config.seed),
             "Density_Start": density_start,

@@ -41,6 +41,7 @@ THERMALIZATION_COLUMN_ORDER = (
     "File_Location",
     "Clone_Run_ID",
     "Clone_Frame_ID",
+    "N_Cells",
     "Therm_kT",
     "Therm_Seed",
     "Density_Start",
@@ -130,6 +131,7 @@ CREATE TABLE IF NOT EXISTS Thermalization (
     File_Location TEXT NOT NULL,
     Clone_Run_ID TEXT,
     Clone_Frame_ID INTEGER,
+    N_Cells INTEGER NOT NULL,
     Therm_kT REAL NOT NULL,
     Therm_Seed INTEGER NOT NULL,
     Density_Start REAL NOT NULL,
@@ -173,6 +175,7 @@ CREATE TABLE IF NOT EXISTS Thermalization (
     FOREIGN KEY (Run_ID) REFERENCES MD_Master (Run_ID),
     FOREIGN KEY (Clone_Run_ID) REFERENCES MD_Master (Run_ID),
     CHECK (Clone_Frame_ID IS NULL OR Clone_Frame_ID >= 0),
+    CHECK (N_Cells > 0),
     CHECK (Therm_kT > 0),
     CHECK (Density_Start > 0 AND Density_End > 0),
     CHECK (BoxLength_Start > 0 AND BoxLength_End > 0),
@@ -228,7 +231,64 @@ class SQLiteRunDatabase:
     def initialize(self) -> None:
         with self.connection() as connection:
             connection.executescript(SQLITE_SCHEMA)
-            connection.execute("PRAGMA user_version = 1")
+            thermalization_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(Thermalization)"
+                ).fetchall()
+            }
+            if "N_Cells" not in thermalization_columns:
+                # SQLite cannot insert a column at a physical position or add
+                # a NOT NULL column to a populated table. Canonical query and
+                # display order is controlled by THERMALIZATION_COLUMN_ORDER;
+                # the backfill helper populates this migrated nullable column.
+                connection.execute(
+                    "ALTER TABLE Thermalization ADD COLUMN N_Cells INTEGER "
+                    "CHECK (N_Cells IS NULL OR N_Cells > 0)"
+                )
+            connection.execute("PRAGMA user_version = 2")
+
+    def backfill_thermalization_n_cells(self) -> dict[str, int]:
+        """Copy N_Cells from Master into every matching Thermalization row."""
+
+        self.initialize()
+        with self.connection() as connection:
+            total = int(connection.execute(
+                "SELECT COUNT(*) FROM Thermalization"
+            ).fetchone()[0])
+            missing_master_value = int(connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM Thermalization AS t
+                LEFT JOIN MD_Master AS m ON m.Run_ID = t.Run_ID
+                WHERE m.N_Cells IS NULL
+                """
+            ).fetchone()[0])
+            cursor = connection.execute(
+                """
+                UPDATE Thermalization
+                SET N_Cells = (
+                    SELECT m.N_Cells
+                    FROM MD_Master AS m
+                    WHERE m.Run_ID = Thermalization.Run_ID
+                )
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM MD_Master AS m
+                    WHERE m.Run_ID = Thermalization.Run_ID
+                      AND m.N_Cells IS NOT NULL
+                )
+                """
+            )
+            remaining_null = int(connection.execute(
+                "SELECT COUNT(*) FROM Thermalization WHERE N_Cells IS NULL"
+            ).fetchone()[0])
+        return {
+            "thermalization_rows": total,
+            "rows_copied": int(cursor.rowcount),
+            "rows_missing_master_n_cells": missing_master_value,
+            "rows_remaining_null": remaining_null,
+        }
 
     def check_run_exists(self, run_signature: str) -> dict[str, Any] | None:
         """Return an existing Master row without opening any run files."""
@@ -499,6 +559,10 @@ class SQLiteRunDatabase:
             )
         if unknown_master:
             raise ValueError(f"Unknown Master columns: {sorted(unknown_master)}")
+        if "N_Cells" not in thermalization:
+            raise ValueError("Thermalization results must include N_Cells")
+        if int(thermalization["N_Cells"]) <= 0:
+            raise ValueError("Thermalization N_Cells must be positive")
 
         thermal_columns = list(thermalization)
         thermal_placeholders = ", ".join("?" for _ in thermal_columns)
@@ -507,6 +571,18 @@ class SQLiteRunDatabase:
         )
 
         with self.connection() as connection:
+            master_row = connection.execute(
+                "SELECT N_Cells FROM MD_Master WHERE Run_ID = ?",
+                (str(run_id),),
+            ).fetchone()
+            if master_row is None:
+                raise KeyError(f"Run_ID was not found: {run_id}")
+            if master_row["N_Cells"] is None:
+                raise ValueError("Master N_Cells must be set before completion")
+            if int(master_row["N_Cells"]) != int(thermalization["N_Cells"]):
+                raise ValueError(
+                    "Thermalization N_Cells must match MD_Master.N_Cells"
+                )
             connection.execute(
                 f"""
                 INSERT INTO Thermalization ({', '.join(thermal_columns)})
@@ -652,6 +728,7 @@ def display_thermalization_table(
     table = thermalization_dataframe(database, limit=limit, **filters)
     integer_columns = [
         "Clone_Frame_ID",
+        "N_Cells",
         "Therm_Seed",
         "Nsteps",
         "Summary_Start_Step",

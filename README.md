@@ -70,6 +70,17 @@ averaged voxel histogram.
 Running the same cell again returns the existing SQL record with
 `result["skipped"] == True`; it does not open or load its GSD/HDF5 files.
 
+`N_Cells` is stored in both `MD_Master` and `Thermalization`. New
+thermalization writes require the values to match. To migrate and populate an
+older database, run:
+
+```python
+from md_Helpers import ProjectPaths, SQLiteRunDatabase
+
+database = SQLiteRunDatabase(ProjectPaths().database)
+database.backfill_thermalization_n_cells()
+```
+
 Clone the last frame of a completed thermalization and change only its box so
 that number density varies linearly through the new run:
 

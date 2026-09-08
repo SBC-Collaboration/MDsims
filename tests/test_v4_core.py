@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
@@ -258,6 +259,7 @@ class DatabaseTests(unittest.TestCase):
             run_id,
             thermalization={
                 "File_Location": f"Thermalization/{run_id}",
+                "N_Cells": 4,
                 "Therm_kT": 0.9,
                 "Therm_Seed": 1,
                 "Density_Start": 0.5,
@@ -314,6 +316,27 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(table.loc[0, "Run_ID"], run_id)
         self.assertEqual(len(table.columns), 14)
 
+    def test_initialize_adds_n_cells_to_legacy_thermalization_table(self):
+        legacy_path = Path(self.temp_directory.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_path) as connection:
+            connection.execute(
+                "CREATE TABLE Thermalization (Run_ID TEXT PRIMARY KEY)"
+            )
+
+        legacy_database = SQLiteRunDatabase(legacy_path)
+        legacy_database.initialize()
+
+        with legacy_database.connection() as connection:
+            columns = [
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(Thermalization)"
+                ).fetchall()
+            ]
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertIn("N_Cells", columns)
+        self.assertEqual(version, 2)
+
     def test_complete_thermalization_updates_both_tables(self):
         run_id = self.database.reserve_run_id()
         self.database.update_master(
@@ -328,6 +351,7 @@ class DatabaseTests(unittest.TestCase):
             run_id,
             thermalization={
                 "File_Location": f"Thermalization/{run_id}",
+                "N_Cells": 4,
                 "Therm_kT": 0.9,
                 "Therm_Seed": 1,
                 "Density_Start": 0.5,
@@ -377,6 +401,24 @@ class DatabaseTests(unittest.TestCase):
         )
         self.assertEqual(len(table), 1)
         self.assertEqual(table.loc[0, "Run_ID"], run_id)
+        self.assertEqual(
+            list(table.columns)[2:5],
+            ["Clone_Run_ID", "Clone_Frame_ID", "N_Cells"],
+        )
+
+    def test_backfills_thermalization_n_cells_from_master(self):
+        run_id, _ = self._create_complete_thermalization()
+        self.database.update_thermalization(run_id, N_Cells=3)
+
+        result = self.database.backfill_thermalization_n_cells()
+
+        self.assertEqual(result["thermalization_rows"], 1)
+        self.assertEqual(result["rows_copied"], 1)
+        self.assertEqual(result["rows_remaining_null"], 0)
+        self.assertEqual(
+            self.database.get_thermalization(run_id)["N_Cells"],
+            4,
+        )
 
     def test_delete_run_previews_then_deletes_files_and_both_rows(self):
         run_id, paths = self._create_complete_thermalization()
@@ -455,6 +497,7 @@ class DatabaseTests(unittest.TestCase):
             source_run_id,
             thermalization={
                 "File_Location": f"Thermalization/{source_run_id}",
+                "N_Cells": 4,
                 "Therm_kT": 0.9,
                 "Therm_Seed": 7,
                 "Density_Start": 0.5,
