@@ -13,6 +13,7 @@ from .run_management import delete_run
 from .thermalization import (
     CloneRescaleThermalizationConfig,
     ThermalizationConfig,
+    run_clone_rescale_ensemble,
     run_clone_rescale_thermalization,
     run_thermalization,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "master_dataframe",
     "open_run",
     "thermalization_dataframe",
+    "run_clone_rescale_ensemble",
     "run_clone_rescale_thermalization",
     "run_thermalization",
 ]

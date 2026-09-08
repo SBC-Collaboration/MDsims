@@ -69,6 +69,21 @@ class SignatureTests(unittest.TestCase):
             ).run_signature(source_frame_id=2000),
         )
 
+    def test_clone_signature_distinguishes_nvt_and_nve(self):
+        nvt = CloneRescaleThermalizationConfig("source", 0.4, 200_000)
+        nve = CloneRescaleThermalizationConfig(
+            "source", 0.4, 200_000, ensemble="nve"
+        )
+        self.assertNotEqual(nvt.run_signature(5), nve.run_signature(5))
+        self.assertEqual(nve.signature_parameters(5)["ensemble"], "NVE")
+
+    def test_clone_rejects_unknown_ensemble(self):
+        config = CloneRescaleThermalizationConfig(
+            "source", 0.4, 200_000, ensemble="NPT"
+        )
+        with self.assertRaisesRegex(ValueError, "NVT.*NVE"):
+            config.validate()
+
 
 class LatticeTests(unittest.TestCase):
     def test_fcc_count_and_density(self):

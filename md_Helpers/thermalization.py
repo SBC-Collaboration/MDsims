@@ -24,7 +24,7 @@ from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
 
 
 THERMALIZATION_METHOD_VERSION = "thermalization_v4_3"
-CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v3"
+CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v4"
 CLONE_FINAL_FRAME_METHOD_VERSION = "clone_final_frame_v1"
 LINEAR_DENSITY_METHOD_VERSION = "linear_density_v1"
 CLONE_FINAL_DENSITY_RELATIVE_TOLERANCE = 1e-3
@@ -202,6 +202,7 @@ class CloneRescaleThermalizationConfig:
     final_density: float
     nsteps: int
     notes: str | None = None
+    ensemble: str = "NVT"
 
     def validate(self) -> None:
         if not str(self.source_run_id):
@@ -210,6 +211,12 @@ class CloneRescaleThermalizationConfig:
             raise ValueError("final_density must be positive")
         if int(self.nsteps) <= 0:
             raise ValueError("nsteps must be positive")
+        if self.normalized_ensemble not in {"NVT", "NVE"}:
+            raise ValueError("clone ensemble must be 'NVT' or 'NVE'")
+
+    @property
+    def normalized_ensemble(self) -> str:
+        return str(self.ensemble).upper()
 
     def signature_parameters(self, source_frame_id: int) -> dict[str, Any]:
         """Describe the clone operation without opening source files."""
@@ -223,6 +230,7 @@ class CloneRescaleThermalizationConfig:
             "density_schedule": LINEAR_DENSITY_METHOD_VERSION,
             "final_density": float(self.final_density),
             "nsteps": int(self.nsteps),
+            "ensemble": self.normalized_ensemble,
             "simulation_settings": "inherit_source",
             "log_period": "inherit_source",
             "trajectory_storage": THERMALIZATION_TRAJECTORY_METHOD_VERSION,
@@ -237,6 +245,7 @@ def _make_simulation_from_frame(
     frame,
     *,
     thermalize_momenta: bool,
+    ensemble: str = "NVT",
 ):
     import hoomd
 
@@ -268,12 +277,19 @@ def _make_simulation_from_frame(
     if config.lj_mode == "xplor":
         lj.r_on[pair] = float(config.r_on_LJ)
     integrator.forces.append(lj)
-    integrator.methods.append(
-        hoomd.md.methods.ConstantVolume(
+    ensemble = str(ensemble).upper()
+    if ensemble == "NVT":
+        method = hoomd.md.methods.ConstantVolume(
             filter=hoomd.filter.All(),
             thermostat=hoomd.md.methods.thermostats.Bussi(kT=float(config.kT)),
         )
-    )
+    elif ensemble == "NVE":
+        method = hoomd.md.methods.ConstantVolume(
+            filter=hoomd.filter.All(),
+        )
+    else:
+        raise ValueError("ensemble must be 'NVT' or 'NVE'")
+    integrator.methods.append(method)
     simulation.operations.integrator = integrator
 
     thermo = hoomd.md.compute.ThermodynamicQuantities(
@@ -282,7 +298,7 @@ def _make_simulation_from_frame(
     simulation.operations.computes.append(thermo)
     # This workflow queries ThermodynamicQuantities manually after run calls.
     # HOOMD otherwise does not guarantee that pair virials and pressure are
-    # available for an NVT simulation.
+    # available for a constant-volume integration method.
     simulation.always_compute_pressure = True
     if thermalize_momenta:
         simulation.state.thermalize_particle_momenta(
@@ -298,6 +314,7 @@ def _make_simulation(config: ThermalizationConfig, lattice):
         config,
         frame,
         thermalize_momenta=True,
+        ensemble="NVT",
     )
 
 
@@ -488,8 +505,13 @@ def _clone_base_metadata(
             "Density_Schedule_Version": LINEAR_DENSITY_METHOD_VERSION,
             "Nsteps": int(config.nsteps),
             "dt": float(config.dt),
-            "Ensemble": "NVT",
-            "T_Set": float(config.kT),
+            "Ensemble": request.normalized_ensemble,
+            "T_Set": (
+                float(config.kT)
+                if request.normalized_ensemble == "NVT"
+                else None
+            ),
+            "Thermostat_Enabled": request.normalized_ensemble == "NVT",
             "Particle_Type": config.particle_type,
             "Device": device_name,
             "Always_Compute_Pressure": True,
@@ -614,7 +636,8 @@ def _clone_request_context(
         f"changing linearly from "
         f"{float(source_thermalization['Density_End']):.6f} to "
         f"{float(request.final_density):.6f} over {int(request.nsteps)} steps. "
-        "All other simulation settings inherited from the source run."
+        f"Clone evolved in {request.normalized_ensemble}; all other simulation "
+        "settings inherited from the source run."
     )
     return (
         source_master,
@@ -817,6 +840,7 @@ def run_thermalization(
                 simulation_config,
                 source_frame,
                 thermalize_momenta=False,
+                ensemble=clone_request.normalized_ensemble,
             )
             _add_linear_density_resize(
                 simulation,
@@ -1084,8 +1108,17 @@ def run_thermalization(
                 prior_lj_time
                 + float(simulation_config.nsteps) * float(simulation_config.dt)
             ),
-            "Ensemble": "NVT",
-            "T_Set": float(simulation_config.kT),
+            "Ensemble": (
+                clone_request.normalized_ensemble
+                if clone_request is not None
+                else "NVT"
+            ),
+            "T_Set": (
+                float(simulation_config.kT)
+                if clone_request is None
+                or clone_request.normalized_ensemble == "NVT"
+                else None
+            ),
             "P_Set": None,
             "LJ_r_cut": float(simulation_config.r_cut_LJ),
             "LJ_r_on": (
@@ -1190,6 +1223,40 @@ def run_clone_rescale_thermalization(
         source_run_id=str(source_run_id),
         final_density=float(final_density),
         nsteps=int(nsteps),
+        ensemble="NVT",
+        notes=notes,
+    )
+    return run_thermalization(
+        request,
+        project_paths=project_paths,
+        database=database,
+    )
+
+
+def run_clone_rescale_ensemble(
+    source_run_id: str,
+    final_density: float,
+    nsteps: int,
+    *,
+    ensemble: str = "NVE",
+    notes: str | None = None,
+    project_paths: ProjectPaths | None = None,
+    database: SQLiteRunDatabase | None = None,
+) -> dict[str, Any]:
+    """Clone a thermalized state and resize its box in NVE or NVT mode.
+
+    ``ensemble='NVE'`` preserves the source velocities and applies no
+    thermostat while the box is resized. The resize performs external work,
+    so total energy is not expected to remain constant during the ramp even
+    though the particle integrator is NVE. Use ``ensemble='NVT'`` to apply the
+    source run's temperature set point during the same density protocol.
+    """
+
+    request = CloneRescaleThermalizationConfig(
+        source_run_id=str(source_run_id),
+        final_density=float(final_density),
+        nsteps=int(nsteps),
+        ensemble=str(ensemble),
         notes=notes,
     )
     return run_thermalization(

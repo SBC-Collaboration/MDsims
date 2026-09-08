@@ -90,6 +90,35 @@ preference, and output periods. The SQL duplicate check occurs before either
 source file is opened. The Master note documents the source frame and density
 schedule automatically; pass `notes="..."` to append a user note.
 
+To resize a thermalized state without a thermostat, use the ensemble-aware
+clone function:
+
+```python
+from md_Helpers import run_clone_rescale_ensemble
+
+expansion = run_clone_rescale_ensemble(
+    source_run_id="HIGH_DENSITY_RUN_ID",
+    final_density=0.40,
+    nsteps=200_000,
+    ensemble="NVE",
+    notes="decreasing-density branch",
+)
+
+compression = run_clone_rescale_ensemble(
+    source_run_id="LOW_DENSITY_RUN_ID",
+    final_density=0.60,
+    nsteps=200_000,
+    ensemble="NVE",
+    notes="increasing-density branch",
+)
+```
+
+The source velocities are retained and no thermostat is attached in NVE mode.
+Because changing the box performs work on the system, total energy need not be
+constant during the ramp. Pressure, volume, particle count, and kinetic
+temperature are logged at every configured log point. For a pressure-density
+curve, use `open_run(run_id).plot_logs(quantities=["pressure"], x="density")`.
+
 Inspect any indexed run by its global ID:
 
 ```python
