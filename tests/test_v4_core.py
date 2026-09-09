@@ -466,6 +466,60 @@ class DatabaseTests(unittest.TestCase):
         )
         self.assertIsNotNone(self.database.get_run(run_id))
 
+    def test_delete_failed_run_without_directory_deletes_sql_record(self):
+        run_id = self.database.reserve_run_id()
+        self.database.update_master(
+            run_id,
+            Run_Signature="f" * 64,
+            N_Cells=40,
+            Nsteps=25_000,
+            Current_Nstep=0,
+            Sim_Type="Thermalization",
+            Status="Failed",
+            Stop_Reason="exception",
+            Status_Message="ValueError: invalid thermalization schedule",
+        )
+        paths = ProjectPaths(self.temp_directory.name)
+
+        preview = delete_run(
+            run_id,
+            project_paths=paths,
+            database=self.database,
+        )
+        self.assertFalse(preview["directory_exists"])
+
+        result = delete_run(
+            run_id,
+            dry_run=False,
+            confirm_run_id=run_id,
+            project_paths=paths,
+            database=self.database,
+        )
+
+        self.assertFalse(result["directory_deleted"])
+        self.assertEqual(result["thermalization_rows_deleted"], 0)
+        self.assertEqual(result["master_rows_deleted"], 1)
+        self.assertIsNone(self.database.get_run(run_id))
+
+    def test_delete_complete_run_without_directory_still_refuses(self):
+        run_id, paths = self._create_complete_thermalization()
+        run_directory = paths.for_run("Thermalization", run_id).directory
+        for path in run_directory.iterdir():
+            path.unlink()
+        run_directory.rmdir()
+
+        with self.assertRaisesRegex(FileNotFoundError, "no SQL rows"):
+            delete_run(
+                run_id,
+                dry_run=False,
+                confirm_run_id=run_id,
+                project_paths=paths,
+                database=self.database,
+            )
+
+        self.assertIsNotNone(self.database.get_run(run_id))
+        self.assertIsNotNone(self.database.get_thermalization(run_id))
+
     def test_open_run_is_a_lazy_sql_and_path_lookup(self):
         run_id = self.database.reserve_run_id()
         self.database.update_master(

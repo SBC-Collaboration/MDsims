@@ -14,6 +14,7 @@ from .paths import ProjectPaths
 
 _RUN_ID_PATTERN = re.compile(r"^[0-9]{14}$")
 _ACTIVE_STATUSES = {"Initializing", "Running"}
+_MISSING_DIRECTORY_CLEANUP_STATUSES = {"Failed", "Cancelled"}
 
 
 def _validated_run_directory(
@@ -69,7 +70,9 @@ def delete_run(
 
     ``dry_run=True`` only reports the exact targets. Permanent deletion
     requires ``confirm_run_id`` to exactly match ``run_id``. Initializing and
-    running simulations are rejected unless ``force=True``.
+    running simulations are rejected unless ``force=True``. Failed or
+    cancelled runs that never created a directory may have their SQL records
+    deleted; other missing run directories are treated as possible data loss.
     """
 
     run_id = str(run_id)
@@ -96,6 +99,7 @@ def delete_run(
         "sim_type": master.get("Sim_Type"),
         "status": master.get("Status"),
         "run_directory": str(run_directory),
+        "directory_exists": run_directory.is_dir(),
         "trajectory_gsd": str(run_directory / "trajectory.gsd"),
         "trajectory_exists": (run_directory / "trajectory.gsd").is_file(),
         "run_hdf5": str(run_directory / "run.hdf5"),
@@ -118,6 +122,25 @@ def delete_run(
             "confirming that the simulation process has stopped"
         )
     if not run_directory.is_dir():
+        if (
+            not run_directory.exists()
+            and master.get("Status") in _MISSING_DIRECTORY_CLEANUP_STATUSES
+        ):
+            deleted = database.delete_run_records(
+                run_id,
+                allow_active=force,
+            )
+            return {
+                **preview,
+                **deleted,
+                "directory_deleted": False,
+                "dry_run": False,
+            }
+        if run_directory.exists():
+            raise RuntimeError(
+                f"Run path exists but is not a directory; no SQL rows were "
+                f"deleted: {run_directory}"
+            )
         raise FileNotFoundError(
             f"Run directory does not exist; no SQL rows were deleted: "
             f"{run_directory}"
