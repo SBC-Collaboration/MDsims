@@ -62,6 +62,24 @@ result = run_thermalization(config, project_paths=paths)
 result
 ```
 
+## Reproducible visual examples
+
+The retained visualization examples live in `examples/` instead of the legacy
+V3 notebooks. Generate the HOOMD LJ cutoff-mode potential and force plots with:
+
+```bash
+python -m examples.plot_lj_modes
+```
+
+Render one FCC unit cell with its four basis particles colored separately with:
+
+```bash
+python -m examples.render_single_fcc_cell
+```
+
+Both commands write PNGs below `Plots/`. The LJ example requires HOOMD, and the
+FCC renderer requires Fresnel and Matplotlib.
+
 Thermalization requires at least 41 evolved HDF5 log points. With 100 log
 points, the trajectory contains the initial state followed by states from logs
 60, 70, 80, 90, and 100. These last five frames are the exact inputs to the
