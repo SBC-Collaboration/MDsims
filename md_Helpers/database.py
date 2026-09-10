@@ -681,14 +681,16 @@ def display_master_table(
     project_paths=None,
     show_run_signature: bool = False,
     show_clock_times: bool = True,
+    limit: int | None = None,
 ):
-    """Display the complete Master table cleanly in a Jupyter notebook.
+    """Display the Master table cleanly in a Jupyter notebook.
 
     Run_Signature remains stored in SQL but is hidden from the normal display.
     Pass show_run_signature=True when inspecting duplicate-run behavior. The
     returned DataFrame contains the same columns shown in the notebook. Set
     show_clock_times=False to hide StartTime, EndTime, and Last_Update_Time;
-    ElapsedTime remains visible because it is a duration.
+    ElapsedTime remains visible because it is a duration. Pass a positive
+    ``limit`` to show only the latest rows by Run_ID, in chronological order.
     """
 
     if database is None:
@@ -698,6 +700,11 @@ def display_master_table(
         database = SQLiteRunDatabase(project_paths.database)
     database.initialize()
     table = master_dataframe(database)
+    if limit is not None:
+        limit = int(limit)
+        if limit <= 0:
+            raise ValueError("limit must be positive or None")
+        table = table.tail(limit)
     if not show_run_signature:
         table = table.drop(columns=["Run_Signature"])
     if not show_clock_times:

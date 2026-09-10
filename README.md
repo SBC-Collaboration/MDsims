@@ -177,8 +177,8 @@ from md_Helpers import SQLiteRunDatabase, display_master_table
 database = SQLiteRunDatabase(paths.database)
 database.query_runs(Sim_Type="Thermalization", Status="Complete")
 
-# Render every Master row and column as a formatted pandas table.
-master = display_master_table(database)
+# Render the latest 100 Master rows as a formatted pandas table.
+master = display_master_table(database, limit=100)
 ```
 
 Display the complete Thermalization table:

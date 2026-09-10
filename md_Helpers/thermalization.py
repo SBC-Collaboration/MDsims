@@ -27,6 +27,7 @@ THERMALIZATION_METHOD_VERSION = "thermalization_v4_3"
 CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v4"
 CLONE_FINAL_FRAME_METHOD_VERSION = "clone_final_frame_v1"
 LINEAR_DENSITY_METHOD_VERSION = "linear_density_v1"
+LINEAR_VOLUME_AXIS_METHOD_VERSION = "linear_volume_single_axis_v1"
 CLONE_FINAL_DENSITY_RELATIVE_TOLERANCE = 1e-3
 THERMALIZATION_TRAJECTORY_METHOD_VERSION = "initial_plus_terminal_5_stride_10_v1"
 THERMALIZATION_PHASE_FRAME_COUNT = 5
@@ -203,6 +204,8 @@ class CloneRescaleThermalizationConfig:
     nsteps: int
     notes: str | None = None
     ensemble: str = "NVT"
+    resize_mode: str = "linear_density"
+    resize_axis: str = "x"
 
     def validate(self) -> None:
         if not str(self.source_run_id):
@@ -213,15 +216,32 @@ class CloneRescaleThermalizationConfig:
             raise ValueError("nsteps must be positive")
         if self.normalized_ensemble not in {"NVT", "NVE"}:
             raise ValueError("clone ensemble must be 'NVT' or 'NVE'")
+        if self.normalized_resize_mode not in {
+            "linear_density",
+            "linear_volume_axis",
+        }:
+            raise ValueError(
+                "resize_mode must be 'linear_density' or 'linear_volume_axis'"
+            )
+        if self.normalized_resize_axis not in {"x", "y", "z"}:
+            raise ValueError("resize_axis must be 'x', 'y', or 'z'")
 
     @property
     def normalized_ensemble(self) -> str:
         return str(self.ensemble).upper()
 
+    @property
+    def normalized_resize_mode(self) -> str:
+        return str(self.resize_mode).lower()
+
+    @property
+    def normalized_resize_axis(self) -> str:
+        return str(self.resize_axis).lower()
+
     def signature_parameters(self, source_frame_id: int) -> dict[str, Any]:
         """Describe the clone operation without opening source files."""
 
-        return {
+        parameters = {
             "sim_type": "Thermalization",
             "workflow_version": CLONE_RESCALE_METHOD_VERSION,
             "initialization_method": CLONE_FINAL_FRAME_METHOD_VERSION,
@@ -235,6 +255,14 @@ class CloneRescaleThermalizationConfig:
             "log_period": "inherit_source",
             "trajectory_storage": THERMALIZATION_TRAJECTORY_METHOD_VERSION,
         }
+        # Preserve signatures for the original isotropic protocol while making
+        # the single-axis constant-volume-rate protocol unambiguously distinct.
+        if self.normalized_resize_mode != "linear_density":
+            parameters.update({
+                "density_schedule": LINEAR_VOLUME_AXIS_METHOD_VERSION,
+                "resize_axis": self.normalized_resize_axis,
+            })
+        return parameters
 
     def run_signature(self, source_frame_id: int) -> str:
         return create_run_signature(self.signature_parameters(source_frame_id))
@@ -334,6 +362,81 @@ def _add_linear_density_resize(
         final_volume=final_volume,
         t_start=int(simulation.timestep),
         t_ramp=int(nsteps),
+    )
+    updater = hoomd.update.BoxResize(
+        trigger=hoomd.trigger.Periodic(1),
+        box=box_variant,
+        filter=hoomd.filter.All(),
+    )
+    simulation.operations.updaters.append(updater)
+    return updater
+
+
+def _single_axis_final_box(
+    initial_box: list[float],
+    final_volume: float,
+    axis: str,
+) -> list[float]:
+    """Return a box with the requested volume by changing one length."""
+
+    axis = str(axis).lower()
+    if axis not in {"x", "y", "z"}:
+        raise ValueError("axis must be 'x', 'y', or 'z'")
+    if len(initial_box) != 6:
+        raise ValueError("initial_box must contain three lengths and three tilts")
+    if float(final_volume) <= 0:
+        raise ValueError("final_volume must be positive")
+
+    final_box = [float(value) for value in initial_box]
+    axis_index = {"x": 0, "y": 1, "z": 2}[axis]
+    other_indices = {
+        "x": (1, 2),
+        "y": (0, 2),
+        "z": (0, 1),
+    }[axis]
+    final_box[axis_index] = float(final_volume) / (
+        final_box[other_indices[0]] * final_box[other_indices[1]]
+    )
+    return final_box
+
+
+def _add_linear_volume_axis_resize(
+    simulation,
+    final_density: float,
+    n_particles: int,
+    nsteps: int,
+    axis: str,
+):
+    """Ramp one box length so volume changes linearly with timestep."""
+
+    import hoomd
+
+    axis = str(axis).lower()
+    if axis not in {"x", "y", "z"}:
+        raise ValueError("axis must be 'x', 'y', or 'z'")
+
+    state_box = simulation.state.box
+    initial_box = [
+        float(state_box.Lx),
+        float(state_box.Ly),
+        float(state_box.Lz),
+        float(state_box.xy),
+        float(state_box.xz),
+        float(state_box.yz),
+    ]
+    final_volume = int(n_particles) / float(final_density)
+    final_box = _single_axis_final_box(initial_box, final_volume, axis)
+
+    ramp = hoomd.variant.Ramp(
+        0.0,
+        1.0,
+        int(simulation.timestep),
+        int(nsteps),
+    )
+    box_variant = hoomd.variant.box.Interpolate(
+        initial_box=initial_box,
+        final_box=final_box,
+        variant=ramp,
     )
     updater = hoomd.update.BoxResize(
         trigger=hoomd.trigger.Periodic(1),
@@ -501,8 +604,17 @@ def _clone_base_metadata(
             "Density_End_Relative_Tolerance": (
                 CLONE_FINAL_DENSITY_RELATIVE_TOLERANCE
             ),
-            "Density_Schedule": "linear_density",
-            "Density_Schedule_Version": LINEAR_DENSITY_METHOD_VERSION,
+            "Density_Schedule": request.normalized_resize_mode,
+            "Density_Schedule_Version": (
+                LINEAR_DENSITY_METHOD_VERSION
+                if request.normalized_resize_mode == "linear_density"
+                else LINEAR_VOLUME_AXIS_METHOD_VERSION
+            ),
+            "Resize_Axis": (
+                request.normalized_resize_axis
+                if request.normalized_resize_mode == "linear_volume_axis"
+                else None
+            ),
             "Nsteps": int(config.nsteps),
             "dt": float(config.dt),
             "Ensemble": request.normalized_ensemble,
@@ -630,14 +742,23 @@ def _clone_request_context(
     if source_frame_id < 0:
         raise ValueError("Clone source contains no saved GSD frames")
 
+    if request.normalized_resize_mode == "linear_density":
+        resize_note = (
+            "box rescaled isotropically with density changing linearly from "
+            f"{float(source_thermalization['Density_End']):.6f} to "
+            f"{float(request.final_density):.6f}"
+        )
+    else:
+        resize_note = (
+            f"only the {request.normalized_resize_axis}-length rescaled, with "
+            "volume changing linearly to reach density "
+            f"{float(request.final_density):.6f}"
+        )
     automatic_note = (
         f"Cloned final frame {source_frame_id} from Run_ID "
-        f"{request.source_run_id}; box rescaled isotropically with density "
-        f"changing linearly from "
-        f"{float(source_thermalization['Density_End']):.6f} to "
-        f"{float(request.final_density):.6f} over {int(request.nsteps)} steps. "
-        f"Clone evolved in {request.normalized_ensemble}; all other simulation "
-        "settings inherited from the source run."
+        f"{request.source_run_id}; {resize_note} over {int(request.nsteps)} "
+        f"steps. Clone evolved in {request.normalized_ensemble}; all other "
+        "simulation settings inherited from the source run."
     )
     return (
         source_master,
@@ -842,12 +963,21 @@ def run_thermalization(
                 thermalize_momenta=False,
                 ensemble=clone_request.normalized_ensemble,
             )
-            _add_linear_density_resize(
-                simulation,
-                clone_request.final_density,
-                source_state.n_particles,
-                clone_request.nsteps,
-            )
+            if clone_request.normalized_resize_mode == "linear_density":
+                _add_linear_density_resize(
+                    simulation,
+                    clone_request.final_density,
+                    source_state.n_particles,
+                    clone_request.nsteps,
+                )
+            else:
+                _add_linear_volume_axis_resize(
+                    simulation,
+                    clone_request.final_density,
+                    source_state.n_particles,
+                    clone_request.nsteps,
+                    clone_request.normalized_resize_axis,
+                )
             density_start = float(source_state.density)
             box_length_start = float(source_state.box[0])
             prior_lj_time = float(
@@ -1258,6 +1388,40 @@ def run_clone_rescale_ensemble(
         final_density=float(final_density),
         nsteps=int(nsteps),
         ensemble=str(ensemble),
+        notes=notes,
+    )
+    return run_thermalization(
+        request,
+        project_paths=project_paths,
+        database=database,
+    )
+
+
+def run_clone_rescale_constant_volume_rate(
+    source_run_id: str,
+    final_density: float,
+    nsteps: int,
+    *,
+    axis: str = "x",
+    ensemble: str = "NVE",
+    notes: str | None = None,
+    project_paths: ProjectPaths | None = None,
+    database: SQLiteRunDatabase | None = None,
+) -> dict[str, Any]:
+    """Clone a state and obtain constant dV/dt by ramping one box length.
+
+    The two unselected box lengths remain fixed. Since the selected length is
+    linear in timestep, the volume is linear as well. Particle positions along
+    the selected direction are rescaled by HOOMD and velocities are retained.
+    """
+
+    request = CloneRescaleThermalizationConfig(
+        source_run_id=str(source_run_id),
+        final_density=float(final_density),
+        nsteps=int(nsteps),
+        ensemble=str(ensemble),
+        resize_mode="linear_volume_axis",
+        resize_axis=str(axis),
         notes=notes,
     )
     return run_thermalization(

@@ -26,6 +26,7 @@ from md_Helpers.thermalization import (
     ThermalizationConfig,
     _clone_request_context,
     _inherited_clone_config,
+    _single_axis_final_box,
     clone_final_density_is_acceptable,
     thermalization_log_steps,
     thermalization_phase_frame_schedule,
@@ -85,6 +86,42 @@ class SignatureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "NVT.*NVE"):
             config.validate()
 
+    def test_constant_volume_rate_signature_records_axis(self):
+        request = CloneRescaleThermalizationConfig(
+            "source",
+            0.4,
+            200_000,
+            ensemble="NVE",
+            resize_mode="linear_volume_axis",
+            resize_axis="z",
+        )
+        request.validate()
+        parameters = request.signature_parameters(5)
+        self.assertEqual(parameters["resize_axis"], "z")
+        self.assertEqual(
+            parameters["density_schedule"],
+            "linear_volume_single_axis_v1",
+        )
+
+    def test_constant_volume_rate_signature_distinguishes_axes(self):
+        x_axis = CloneRescaleThermalizationConfig(
+            "source", 0.4, 200_000,
+            resize_mode="linear_volume_axis", resize_axis="x",
+        )
+        y_axis = CloneRescaleThermalizationConfig(
+            "source", 0.4, 200_000,
+            resize_mode="linear_volume_axis", resize_axis="y",
+        )
+        self.assertNotEqual(x_axis.run_signature(5), y_axis.run_signature(5))
+
+    def test_clone_rejects_unknown_resize_axis(self):
+        request = CloneRescaleThermalizationConfig(
+            "source", 0.4, 200_000,
+            resize_mode="linear_volume_axis", resize_axis="q",
+        )
+        with self.assertRaisesRegex(ValueError, "'x'.*'y'.*'z'"):
+            request.validate()
+
 
 class LatticeTests(unittest.TestCase):
     def test_fcc_count_and_density(self):
@@ -92,6 +129,14 @@ class LatticeTests(unittest.TestCase):
         self.assertEqual(lattice.n_particles, 4 * 3**3)
         self.assertEqual(lattice.positions.shape, (4 * 3**3, 3))
         self.assertAlmostEqual(lattice.actual_density, 0.5)
+
+
+class SingleAxisResizeTests(unittest.TestCase):
+    def test_changes_only_selected_length_and_reaches_volume(self):
+        initial = [8.0, 9.0, 10.0, 0.1, 0.2, 0.3]
+        final = _single_axis_final_box(initial, final_volume=900.0, axis="y")
+        self.assertEqual(final, [8.0, 11.25, 10.0, 0.1, 0.2, 0.3])
+        self.assertAlmostEqual(np.prod(final[:3]), 900.0)
 
 
 class PhaseFitPolicyTests(unittest.TestCase):
@@ -630,6 +675,36 @@ class DatabaseTests(unittest.TestCase):
         self.assertNotIn("EndTime", table.columns)
         self.assertNotIn("Last_Update_Time", table.columns)
         self.assertIn("ElapsedTime", table.columns)
+
+    @patch(
+        "md_Helpers.database._display_dataframe",
+        side_effect=lambda table, **_: table,
+    )
+    def test_master_display_limit_returns_latest_rows(self, _display):
+        with self.database.connection() as connection:
+            connection.executemany(
+                "INSERT INTO MD_Master (Run_ID) VALUES (?)",
+                [
+                    ("20260910000001",),
+                    ("20260910000002",),
+                    ("20260910000003",),
+                ],
+            )
+
+        table = display_master_table(self.database, limit=2)
+
+        self.assertEqual(
+            table["Run_ID"].tolist(),
+            ["20260910000002", "20260910000003"],
+        )
+
+    @patch(
+        "md_Helpers.database._display_dataframe",
+        side_effect=lambda table, **_: table,
+    )
+    def test_master_display_rejects_nonpositive_limit(self, _display):
+        with self.assertRaisesRegex(ValueError, "limit must be positive"):
+            display_master_table(self.database, limit=0)
 
 
 if __name__ == "__main__":
