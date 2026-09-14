@@ -356,16 +356,34 @@ def _add_linear_density_resize(
 
     import hoomd
 
-    final_volume = int(n_particles) / float(final_density)
+    state_box = simulation.state.box
+    initial_volume = float(state_box.volume)
+    initial_density = int(n_particles) / initial_volume
+    final_density = float(final_density)
+    final_volume = int(n_particles) / final_density
+
     # During run(nsteps), updaters execute at timesteps t through
-    # t + nsteps - 1. Start the variant one tick earlier so those nsteps
-    # updates span fractions 1/nsteps through 1 and reach the target box.
-    ramp_start = int(simulation.timestep) - 1
+    # t + nsteps - 1. Make the box at t the first of nsteps equal density
+    # increments, then interpolate over the remaining nsteps - 1 updates.
+    # This also works when a cloned simulation resets its timestep to zero.
+    first_density = initial_density + (
+        final_density - initial_density
+    ) / int(nsteps)
+    first_volume = int(n_particles) / first_density
+    length_scale = (first_volume / initial_volume) ** (1.0 / 3.0)
+    first_box = [
+        float(state_box.Lx) * length_scale,
+        float(state_box.Ly) * length_scale,
+        float(state_box.Lz) * length_scale,
+        float(state_box.xy),
+        float(state_box.xz),
+        float(state_box.yz),
+    ]
     box_variant = hoomd.variant.box.InverseVolumeRamp(
-        initial_box=simulation.state.box,
+        initial_box=first_box,
         final_volume=final_volume,
-        t_start=ramp_start,
-        t_ramp=int(nsteps),
+        t_start=int(simulation.timestep),
+        t_ramp=max(1, int(nsteps) - 1),
     )
     updater = hoomd.update.BoxResize(
         trigger=hoomd.trigger.Periodic(1),
@@ -431,16 +449,23 @@ def _add_linear_volume_axis_resize(
     final_volume = int(n_particles) / float(final_density)
     final_box = _single_axis_final_box(initial_box, final_volume, axis)
 
-    # See _add_linear_density_resize for the updater/variant timing.
-    ramp_start = int(simulation.timestep) - 1
+    initial_volume = float(np.prod(initial_box[:3]))
+    first_volume = initial_volume + (
+        final_volume - initial_volume
+    ) / int(nsteps)
+    first_box = _single_axis_final_box(initial_box, first_volume, axis)
+
+    # See _add_linear_density_resize for the updater/variant timing. Starting
+    # from the first increment avoids an invalid t_start=-1 when clones reset
+    # the HOOMD timestep to zero.
     ramp = hoomd.variant.Ramp(
         0.0,
         1.0,
-        ramp_start,
-        int(nsteps),
+        int(simulation.timestep),
+        max(1, int(nsteps) - 1),
     )
     box_variant = hoomd.variant.box.Interpolate(
-        initial_box=initial_box,
+        initial_box=first_box,
         final_box=final_box,
         variant=ramp,
     )
