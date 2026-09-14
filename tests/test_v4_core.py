@@ -100,7 +100,7 @@ class SignatureTests(unittest.TestCase):
         self.assertEqual(parameters["resize_axis"], "z")
         self.assertEqual(
             parameters["density_schedule"],
-            "linear_volume_single_axis_v1",
+            "linear_volume_single_axis_v2",
         )
 
     def test_constant_volume_rate_signature_distinguishes_axes(self):

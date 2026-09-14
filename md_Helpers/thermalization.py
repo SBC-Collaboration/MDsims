@@ -26,8 +26,8 @@ from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
 THERMALIZATION_METHOD_VERSION = "thermalization_v4_3"
 CLONE_RESCALE_METHOD_VERSION = "clone_rescale_thermalization_v4"
 CLONE_FINAL_FRAME_METHOD_VERSION = "clone_final_frame_v1"
-LINEAR_DENSITY_METHOD_VERSION = "linear_density_v1"
-LINEAR_VOLUME_AXIS_METHOD_VERSION = "linear_volume_single_axis_v1"
+LINEAR_DENSITY_METHOD_VERSION = "linear_density_v2"
+LINEAR_VOLUME_AXIS_METHOD_VERSION = "linear_volume_single_axis_v2"
 CLONE_FINAL_DENSITY_RELATIVE_TOLERANCE = 1e-3
 THERMALIZATION_TRAJECTORY_METHOD_VERSION = "initial_plus_terminal_5_stride_10_v1"
 THERMALIZATION_PHASE_FRAME_COUNT = 5
@@ -357,10 +357,14 @@ def _add_linear_density_resize(
     import hoomd
 
     final_volume = int(n_particles) / float(final_density)
+    # During run(nsteps), updaters execute at timesteps t through
+    # t + nsteps - 1. Start the variant one tick earlier so those nsteps
+    # updates span fractions 1/nsteps through 1 and reach the target box.
+    ramp_start = int(simulation.timestep) - 1
     box_variant = hoomd.variant.box.InverseVolumeRamp(
         initial_box=simulation.state.box,
         final_volume=final_volume,
-        t_start=int(simulation.timestep),
+        t_start=ramp_start,
         t_ramp=int(nsteps),
     )
     updater = hoomd.update.BoxResize(
@@ -427,10 +431,12 @@ def _add_linear_volume_axis_resize(
     final_volume = int(n_particles) / float(final_density)
     final_box = _single_axis_final_box(initial_box, final_volume, axis)
 
+    # See _add_linear_density_resize for the updater/variant timing.
+    ramp_start = int(simulation.timestep) - 1
     ramp = hoomd.variant.Ramp(
         0.0,
         1.0,
-        int(simulation.timestep),
+        ramp_start,
         int(nsteps),
     )
     box_variant = hoomd.variant.box.Interpolate(
