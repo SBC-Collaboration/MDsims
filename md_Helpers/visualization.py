@@ -225,13 +225,27 @@ def animate_xy_frames(
 
 
 def plot_phase_histogram(fit: dict, title: str | None = None):
-    """Plot an averaged voxel histogram and any available mixture components."""
+    """Plot an averaged voxel histogram, fit, and fit residual when available."""
 
     import matplotlib.pyplot as plt
 
     x = np.asarray(fit["density_axis"], dtype=float)
     observed = np.asarray(fit["observed_counts"], dtype=float)
-    figure, axis = plt.subplots(figsize=(8, 5))
+    model = fit.get("model_counts")
+    model = np.asarray(model, dtype=float) if model is not None else None
+    if len(x) != len(observed) or (model is not None and len(x) != len(model)):
+        raise ValueError("Phase histogram and fit arrays must have equal lengths")
+    if model is None:
+        figure, axis = plt.subplots(figsize=(8, 5))
+        residual_axis = None
+    else:
+        figure, (axis, residual_axis) = plt.subplots(
+            2,
+            1,
+            figsize=(8, 7),
+            sharex=True,
+            gridspec_kw={"height_ratios": [3, 1]},
+        )
     individual = fit.get("individual_histograms")
     if individual is not None:
         for index, histogram in enumerate(np.atleast_2d(individual)):
@@ -253,7 +267,20 @@ def plot_phase_histogram(fit: dict, title: str | None = None):
     for key, label, style in curves:
         if key in fit and fit[key] is not None:
             axis.plot(x, np.asarray(fit[key]), style, linewidth=2, label=label)
-    axis.set_xlabel("Voxel density")
+    if residual_axis is not None:
+        residual_axis.axhline(0, color="black", linestyle="--", linewidth=1)
+        residual_axis.step(
+            x,
+            observed - model,
+            where="mid",
+            color="tab:purple",
+            linewidth=1.5,
+        )
+        residual_axis.set_ylabel("Average − fit\n(voxels)")
+        residual_axis.set_xlabel("Voxel density")
+        residual_axis.grid(alpha=0.25)
+    else:
+        axis.set_xlabel("Voxel density")
     axis.set_ylabel("Average number of voxels")
     axis.set_title(title or "Averaged voxel histogram and phase fit")
     axis.grid(alpha=0.25)
