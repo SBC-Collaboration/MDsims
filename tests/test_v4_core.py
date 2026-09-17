@@ -10,9 +10,16 @@ import numpy as np
 
 from md_Helpers.database import (
     SQLiteRunDatabase,
+    cavitation_dataframe,
     display_master_table,
     master_dataframe,
     thermalization_dataframe,
+)
+from md_Helpers.cavitation import (
+    CavitationConfig,
+    _source_context,
+    cavitation_frame_schedule,
+    shift_and_mask_positions,
 )
 from md_Helpers.analysis import thermodynamic_summary
 from md_Helpers.lattices import build_fcc_lattice
@@ -121,6 +128,71 @@ class SignatureTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "'x'.*'y'.*'z'"):
             request.validate()
+
+    def test_cavitation_signature_records_location_seed(self):
+        centered = CavitationConfig("source", 2.0, 100_000)
+        random = CavitationConfig(
+            "source", 2.0, 100_000,
+            random_location=True, location_seed=7,
+        )
+        self.assertNotEqual(centered.run_signature(5), random.run_signature(5))
+
+    def test_random_cavitation_requires_seed(self):
+        with self.assertRaisesRegex(ValueError, "location_seed is required"):
+            CavitationConfig(
+                "source", 2.0, 100_000, random_location=True
+            ).validate()
+
+
+class CavitationScheduleAndMaskTests(unittest.TestCase):
+    def test_bulk_and_terminal_frame_schedule_is_a_union(self):
+        schedule = cavitation_frame_schedule(100_000, 1_000)
+        self.assertEqual(
+            [item["log_ordinal"] for item in schedule],
+            [20, 40, 60, 70, 80, 90, 100],
+        )
+        self.assertEqual(
+            [item["log_ordinal"] for item in schedule if item["phase_frame"]],
+            [60, 70, 80, 90, 100],
+        )
+
+    def test_centered_mask_removes_inside_and_keeps_velocities_addressable(self):
+        result = shift_and_mask_positions(
+            positions=np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+            box=np.array([10.0, 10.0, 10.0, 0.0, 0.0, 0.0]),
+            mask_radius=1.0,
+        )
+        self.assertEqual(result["particles_removed"], 1)
+        np.testing.assert_array_equal(result["keep_mask"], [False, True])
+        np.testing.assert_allclose(result["sampled_center"], [0.0, 0.0, 0.0])
+
+    def test_random_center_is_reproducible_and_shifted_to_origin(self):
+        positions = np.array([[1.0, 1.0, 1.0], [-3.0, -3.0, -3.0]])
+        kwargs = dict(
+            positions=positions,
+            box=np.array([10.0, 10.0, 10.0, 0.0, 0.0, 0.0]),
+            mask_radius=0.5,
+            random_location=True,
+            location_seed=17,
+        )
+        # Put one particle at the generated center so the mask is non-empty.
+        center = np.random.default_rng(17).uniform(-5.0, 5.0, 3)
+        kwargs["positions"] = np.vstack([center, positions[1]])
+        first = shift_and_mask_positions(**kwargs)
+        second = shift_and_mask_positions(**kwargs)
+        np.testing.assert_allclose(first["sampled_center"], center)
+        np.testing.assert_allclose(
+            first["sampled_center"], second["sampled_center"]
+        )
+        np.testing.assert_allclose(first["shifted_positions"][0], 0.0)
+
+    def test_mask_diameter_cannot_exceed_eighty_five_percent(self):
+        with self.assertRaisesRegex(ValueError, "85%"):
+            shift_and_mask_positions(
+                positions=np.array([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]]),
+                box=np.array([10.0, 10.0, 10.0, 0.0, 0.0, 0.0]),
+                mask_radius=4.26,
+            )
 
 
 class LatticeTests(unittest.TestCase):
@@ -338,6 +410,66 @@ class DatabaseTests(unittest.TestCase):
         run_paths.hdf5.write_bytes(b"hdf5")
         return run_id, paths
 
+    def _create_complete_cavitation(
+        self,
+    ) -> tuple[str, str, ProjectPaths]:
+        source_run_id, paths = self._create_complete_thermalization()
+        run_id = f"{int(source_run_id) + 1:014d}"
+        with self.database.connection() as connection:
+            connection.execute(
+                "INSERT INTO MD_Master (Run_ID) VALUES (?)",
+                (run_id,),
+            )
+        self.database.update_master(
+            run_id,
+            Run_Signature="9" * 64,
+            N_Cells=4,
+            Nsteps=41_000,
+            Sim_Type="Cavitation",
+            Status="Running",
+        )
+        self.database.complete_cavitation(
+            run_id,
+            cavitation={
+                "File_Location": f"Cavitation/{run_id}",
+                "Source_Run_ID": source_run_id,
+                "Source_Frame_ID": 5,
+                "N_Cells": 4,
+                "Therm_kT": 0.9,
+                "Therm_Seed": 1,
+                "Source_Density": 0.5,
+                "Initial_Density": 0.49,
+                "BoxLength": 10.0,
+                "Mask_Radius": 1.0,
+                "Random_Location": 0,
+                "Location_Seed": None,
+                "dt": 0.005,
+                "Nsteps": 41_000,
+                "This_LJ_Time": 205.0,
+                "Cumulative_LJ_Time": 205.5,
+                "Ensemble": "NVT",
+                "T_Set": 0.9,
+                "P_Set": None,
+                "LJ_r_cut": 2.5,
+                "LJ_r_on": 2.0,
+                "LJ_Mode": "xplor",
+                "Phase_Separation_Status": "Not_Separated",
+                "Phase_Separation_Method": "voxel_histogram",
+                "Phase_Separation_Method_Version": "test",
+                "Phase_Fit_Status": "Skipped_Homogeneous",
+                "Summary_Start_Step": 0,
+                "Summary_End_Step": 41_000,
+                "Summary_Num_Samples": 42,
+                "Num_Frames": 7,
+            },
+            master={"Status": "Complete", "Current_Nstep": 41_000},
+        )
+        run_paths = paths.for_run("Cavitation", run_id)
+        run_paths.directory.mkdir(parents=True)
+        run_paths.trajectory.write_bytes(b"trajectory")
+        run_paths.hdf5.write_bytes(b"hdf5")
+        return source_run_id, run_id, paths
+
     def test_reserve_then_populate_master(self):
         run_id = self.database.reserve_run_id()
         reserved = self.database.get_run(run_id)
@@ -380,7 +512,55 @@ class DatabaseTests(unittest.TestCase):
             ]
             version = connection.execute("PRAGMA user_version").fetchone()[0]
         self.assertIn("N_Cells", columns)
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
+
+    def test_complete_and_query_cavitation(self):
+        source_run_id, run_id, _ = self._create_complete_cavitation()
+        row = self.database.get_cavitation(run_id)
+        self.assertEqual(row["Source_Run_ID"], source_run_id)
+        self.assertEqual(row["Initial_Density"], 0.49)
+        table = cavitation_dataframe(
+            self.database,
+            Source_Run_ID=source_run_id,
+            Mask_Radius=(0.5, 1.5),
+        )
+        self.assertEqual(table["Run_ID"].tolist(), [run_id])
+
+    def test_phase_separated_source_returns_structured_skip(self):
+        source_run_id, _ = self._create_complete_thermalization()
+        self.database.update_thermalization(
+            source_run_id,
+            Phase_Separation_Status="Separated",
+        )
+        result = _source_context(
+            CavitationConfig(source_run_id, 1.0, 41_000),
+            self.database,
+        )
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["skip_reason"], "source_phase_separated")
+
+    def test_source_deletion_is_blocked_by_cavitation_dependency(self):
+        source_run_id, cavitation_run_id, paths = (
+            self._create_complete_cavitation()
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            f"Cavitation:{cavitation_run_id}",
+        ):
+            delete_run(
+                source_run_id,
+                dry_run=False,
+                confirm_run_id=source_run_id,
+                project_paths=paths,
+                database=self.database,
+            )
+        self.assertIsNotNone(self.database.get_run(source_run_id))
+
+    def test_open_run_loads_cavitation_sql_row(self):
+        _, run_id, paths = self._create_complete_cavitation()
+        run = open_run(run_id, project_paths=paths, database=self.database)
+        self.assertEqual(run.sim_type, "Cavitation")
+        self.assertEqual(run.state_row["Mask_Radius"], 1.0)
 
     def test_complete_thermalization_updates_both_tables(self):
         run_id = self.database.reserve_run_id()

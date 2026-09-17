@@ -17,6 +17,7 @@ from typing import Any, Iterator
 
 MASTER_TABLE = "MD_Master"
 THERMALIZATION_TABLE = "Thermalization"
+CAVITATION_TABLE = "Cavitation"
 
 MASTER_COLUMN_ORDER = (
     "Run_ID",
@@ -84,6 +85,57 @@ THERMALIZATION_COLUMN_ORDER = (
     "Num_Frames",
 )
 THERMALIZATION_COLUMNS = set(THERMALIZATION_COLUMN_ORDER)
+
+CAVITATION_COLUMN_ORDER = (
+    "Run_ID",
+    "File_Location",
+    "Source_Run_ID",
+    "Source_Frame_ID",
+    "N_Cells",
+    "Therm_kT",
+    "Therm_Seed",
+    "Source_Density",
+    "Initial_Density",
+    "BoxLength",
+    "Mask_Radius",
+    "Random_Location",
+    "Location_Seed",
+    "dt",
+    "Nsteps",
+    "This_LJ_Time",
+    "Cumulative_LJ_Time",
+    "Ensemble",
+    "T_Set",
+    "P_Set",
+    "LJ_r_cut",
+    "LJ_r_on",
+    "LJ_Mode",
+    "Phase_Separation_Status",
+    "Phase_Separation_Method",
+    "Phase_Separation_Method_Version",
+    "rho_liquid",
+    "rho_liquid_unc",
+    "rho_gas",
+    "rho_gas_unc",
+    "V_liquid",
+    "V_liquid_unc",
+    "V_gas",
+    "V_gas_unc",
+    "Phase_Fit_Status",
+    "Phase_Fit_Method",
+    "Phase_Fit_Method_Version",
+    "Summary_Start_Step",
+    "Summary_End_Step",
+    "Summary_Num_Samples",
+    "Pressure_Mean",
+    "Pressure_Std",
+    "Pressure_SEM",
+    "PE_Per_Particle_Mean",
+    "PE_Per_Particle_Std",
+    "PE_Per_Particle_SEM",
+    "Num_Frames",
+)
+CAVITATION_COLUMNS = set(CAVITATION_COLUMN_ORDER)
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS MD_Master (
@@ -184,6 +236,91 @@ CREATE TABLE IF NOT EXISTS Thermalization (
     CHECK (Summary_Num_Samples > 0),
     CHECK (Num_Frames >= 2)
 );
+
+CREATE TABLE IF NOT EXISTS Cavitation (
+    Run_ID TEXT PRIMARY KEY,
+    File_Location TEXT NOT NULL,
+    Source_Run_ID TEXT NOT NULL,
+    Source_Frame_ID INTEGER NOT NULL,
+    N_Cells INTEGER NOT NULL,
+    Therm_kT REAL NOT NULL,
+    Therm_Seed INTEGER NOT NULL,
+    Source_Density REAL NOT NULL,
+    Initial_Density REAL NOT NULL,
+    BoxLength REAL NOT NULL,
+    Mask_Radius REAL NOT NULL,
+    Random_Location INTEGER NOT NULL,
+    Location_Seed INTEGER,
+    dt REAL NOT NULL,
+    Nsteps INTEGER NOT NULL,
+    This_LJ_Time REAL NOT NULL,
+    Cumulative_LJ_Time REAL NOT NULL,
+    Ensemble TEXT NOT NULL,
+    T_Set REAL,
+    P_Set REAL,
+    LJ_r_cut REAL NOT NULL,
+    LJ_r_on REAL,
+    LJ_Mode TEXT NOT NULL,
+    Phase_Separation_Status TEXT NOT NULL,
+    Phase_Separation_Method TEXT NOT NULL,
+    Phase_Separation_Method_Version TEXT NOT NULL,
+    rho_liquid REAL,
+    rho_liquid_unc REAL,
+    rho_gas REAL,
+    rho_gas_unc REAL,
+    V_liquid REAL,
+    V_liquid_unc REAL,
+    V_gas REAL,
+    V_gas_unc REAL,
+    Phase_Fit_Status TEXT NOT NULL,
+    Phase_Fit_Method TEXT,
+    Phase_Fit_Method_Version TEXT,
+    Summary_Start_Step INTEGER NOT NULL,
+    Summary_End_Step INTEGER NOT NULL,
+    Summary_Num_Samples INTEGER NOT NULL,
+    Pressure_Mean REAL,
+    Pressure_Std REAL,
+    Pressure_SEM REAL,
+    PE_Per_Particle_Mean REAL,
+    PE_Per_Particle_Std REAL,
+    PE_Per_Particle_SEM REAL,
+    Num_Frames INTEGER NOT NULL,
+    FOREIGN KEY (Run_ID) REFERENCES MD_Master (Run_ID),
+    FOREIGN KEY (Source_Run_ID) REFERENCES MD_Master (Run_ID),
+    CHECK (Source_Frame_ID >= 0),
+    CHECK (N_Cells > 0),
+    CHECK (Therm_kT > 0),
+    CHECK (Source_Density > 0 AND Initial_Density > 0),
+    CHECK (BoxLength > 0),
+    CHECK (Mask_Radius > 0),
+    CHECK (2.0 * Mask_Radius <= 0.85 * BoxLength),
+    CHECK (Random_Location IN (0, 1)),
+    CHECK (
+        (Random_Location = 0 AND Location_Seed IS NULL) OR
+        (Random_Location = 1 AND Location_Seed IS NOT NULL)
+    ),
+    CHECK (dt > 0),
+    CHECK (Nsteps > 0),
+    CHECK (Ensemble = 'NVT'),
+    CHECK (Summary_Num_Samples > 0),
+    CHECK (Num_Frames >= 2)
+);
+
+CREATE INDEX IF NOT EXISTS idx_Cavitation_Source_Run_ID
+    ON Cavitation (Source_Run_ID);
+
+CREATE TABLE IF NOT EXISTS Run_Dependencies (
+    Parent_Run_ID TEXT NOT NULL,
+    Child_Run_ID TEXT NOT NULL,
+    Relationship TEXT NOT NULL,
+    PRIMARY KEY (Parent_Run_ID, Child_Run_ID, Relationship),
+    FOREIGN KEY (Parent_Run_ID) REFERENCES MD_Master (Run_ID),
+    FOREIGN KEY (Child_Run_ID) REFERENCES MD_Master (Run_ID),
+    CHECK (Parent_Run_ID != Child_Run_ID)
+);
+
+CREATE INDEX IF NOT EXISTS idx_Run_Dependencies_Child
+    ON Run_Dependencies (Child_Run_ID);
 """
 
 
@@ -246,7 +383,53 @@ class SQLiteRunDatabase:
                     "ALTER TABLE Thermalization ADD COLUMN N_Cells INTEGER "
                     "CHECK (N_Cells IS NULL OR N_Cells > 0)"
                 )
-            connection.execute("PRAGMA user_version = 2")
+            if "Clone_Run_ID" in thermalization_columns:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO Run_Dependencies (
+                        Parent_Run_ID, Child_Run_ID, Relationship
+                    )
+                    SELECT Clone_Run_ID, Run_ID, 'thermalization_clone'
+                    FROM Thermalization
+                    WHERE Clone_Run_ID IS NOT NULL AND Clone_Run_ID != Run_ID
+                    """
+                )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO Run_Dependencies (
+                    Parent_Run_ID, Child_Run_ID, Relationship
+                )
+                SELECT Source_Run_ID, Run_ID, 'cavitation_source'
+                FROM Cavitation
+                WHERE Source_Run_ID != Run_ID
+                """
+            )
+            connection.execute("PRAGMA user_version = 3")
+
+    def add_run_dependency(
+        self,
+        parent_run_id: str,
+        child_run_id: str,
+        relationship: str,
+    ) -> None:
+        """Register a parent-child state dependency idempotently."""
+
+        parent_run_id = str(parent_run_id)
+        child_run_id = str(child_run_id)
+        relationship = str(relationship).strip()
+        if not relationship:
+            raise ValueError("relationship is required")
+        if parent_run_id == child_run_id:
+            raise ValueError("a run cannot depend on itself")
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO Run_Dependencies (
+                    Parent_Run_ID, Child_Run_ID, Relationship
+                ) VALUES (?, ?, ?)
+                """,
+                (parent_run_id, child_run_id, relationship),
+            )
 
     def backfill_thermalization_n_cells(self) -> dict[str, int]:
         """Copy N_Cells from Master into every matching Thermalization row."""
@@ -371,6 +554,26 @@ class SQLiteRunDatabase:
                     f"Completed Thermalization Run_ID was not found: {run_id}"
                 )
 
+    def update_cavitation(self, run_id: str, **values: Any) -> None:
+        """Update selected result fields for one completed cavitation."""
+
+        if not values:
+            return
+        unknown = set(values) - (CAVITATION_COLUMNS - {"Run_ID"})
+        if unknown:
+            raise ValueError(f"Unknown Cavitation columns: {sorted(unknown)}")
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        parameters = [*values.values(), str(run_id)]
+        with self.connection() as connection:
+            cursor = connection.execute(
+                f"UPDATE Cavitation SET {assignments} WHERE Run_ID = ?",
+                parameters,
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(
+                    f"Completed Cavitation Run_ID was not found: {run_id}"
+                )
+
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(
@@ -389,13 +592,23 @@ class SQLiteRunDatabase:
             ).fetchone()
         return _row_dict(row)
 
+    def get_cavitation(self, run_id: str) -> dict[str, Any] | None:
+        """Return one completed Cavitation row, if present."""
+
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM Cavitation WHERE Run_ID = ?",
+                (str(run_id),),
+            ).fetchone()
+        return _row_dict(row)
+
     def delete_run_records(
         self,
         run_id: str,
         *,
         allow_active: bool = False,
     ) -> dict[str, int]:
-        """Delete a Thermalization row and its Master row atomically.
+        """Delete a state row and its Master row atomically.
 
         This method only changes SQL. Filesystem removal is coordinated by
         :func:`md_Helpers.delete_run`.
@@ -420,24 +633,37 @@ class SQLiteRunDatabase:
 
             dependents = connection.execute(
                 """
-                SELECT Run_ID
-                FROM Thermalization
-                WHERE Clone_Run_ID = ? AND Run_ID != ?
-                ORDER BY Run_ID
+                SELECT d.Child_Run_ID, d.Relationship, m.Sim_Type
+                FROM Run_Dependencies AS d
+                JOIN MD_Master AS m ON m.Run_ID = d.Child_Run_ID
+                WHERE d.Parent_Run_ID = ? AND d.Child_Run_ID != ?
+                ORDER BY d.Child_Run_ID, d.Relationship
                 """,
                 (run_id, run_id),
             ).fetchall()
             if dependents:
-                dependent_ids = ", ".join(row["Run_ID"] for row in dependents)
+                descriptions = [
+                    f"{row['Sim_Type']}:{row['Child_Run_ID']}"
+                    f" ({row['Relationship']})"
+                    for row in dependents
+                ]
                 raise RuntimeError(
-                    f"Cannot delete {run_id}; it is the clone source for: "
-                    f"{dependent_ids}"
+                    f"Cannot delete {run_id}; it is referenced by: "
+                    + ", ".join(descriptions)
                 )
 
+            cavitation_count = connection.execute(
+                "DELETE FROM Cavitation WHERE Run_ID = ?",
+                (run_id,),
+            ).rowcount
             thermalization_count = connection.execute(
                 "DELETE FROM Thermalization WHERE Run_ID = ?",
                 (run_id,),
             ).rowcount
+            connection.execute(
+                "DELETE FROM Run_Dependencies WHERE Child_Run_ID = ?",
+                (run_id,),
+            )
             master_count = connection.execute(
                 "DELETE FROM MD_Master WHERE Run_ID = ?",
                 (run_id,),
@@ -449,6 +675,7 @@ class SQLiteRunDatabase:
                 )
 
         return {
+            "cavitation_rows_deleted": cavitation_count,
             "thermalization_rows_deleted": thermalization_count,
             "master_rows_deleted": master_count,
         }
@@ -542,6 +769,64 @@ class SQLiteRunDatabase:
             rows = connection.execute(sql, parameters).fetchall()
         return [dict(row) for row in rows]
 
+    def query_cavitations(
+        self,
+        limit: int | None = None,
+        **filters: Any,
+    ) -> list[dict[str, Any]]:
+        """Query completed Cavitation rows with flexible filters."""
+
+        unknown = set(filters) - CAVITATION_COLUMNS
+        if unknown:
+            raise ValueError(f"Unknown Cavitation filters: {sorted(unknown)}")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        for column, value in filters.items():
+            if value is None:
+                clauses.append(f"{column} IS NULL")
+            elif isinstance(value, tuple):
+                if len(value) != 2:
+                    raise ValueError(
+                        f"Range filter for {column} must have two items"
+                    )
+                minimum, maximum = value
+                if minimum is None and maximum is None:
+                    raise ValueError(
+                        f"Range filter for {column} cannot be (None, None)"
+                    )
+                if minimum is not None:
+                    clauses.append(f"{column} >= ?")
+                    parameters.append(minimum)
+                if maximum is not None:
+                    clauses.append(f"{column} <= ?")
+                    parameters.append(maximum)
+            elif isinstance(value, (list, set, frozenset)):
+                accepted = list(value)
+                if not accepted:
+                    clauses.append("0 = 1")
+                else:
+                    placeholders = ", ".join("?" for _ in accepted)
+                    clauses.append(f"{column} IN ({placeholders})")
+                    parameters.extend(accepted)
+            else:
+                clauses.append(f"{column} = ?")
+                parameters.append(value)
+
+        sql = "SELECT * FROM Cavitation"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY Run_ID"
+        if limit is not None:
+            limit = int(limit)
+            if limit <= 0:
+                raise ValueError("limit must be positive or None")
+            sql += " LIMIT ?"
+            parameters.append(limit)
+
+        with self.connection() as connection:
+            rows = connection.execute(sql, parameters).fetchall()
+        return [dict(row) for row in rows]
+
     def complete_thermalization(
         self,
         run_id: str,
@@ -590,12 +875,76 @@ class SQLiteRunDatabase:
                 """,
                 list(thermalization.values()),
             )
+            clone_run_id = thermalization.get("Clone_Run_ID")
+            if clone_run_id is not None and str(clone_run_id) != str(run_id):
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO Run_Dependencies (
+                        Parent_Run_ID, Child_Run_ID, Relationship
+                    ) VALUES (?, ?, 'thermalization_clone')
+                    """,
+                    (str(clone_run_id), str(run_id)),
+                )
             cursor = connection.execute(
                 f"""
                 UPDATE MD_Master
                 SET {master_assignments}
                 WHERE Run_ID = ?
                 """,
+                [*master.values(), str(run_id)],
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Run_ID was not found: {run_id}")
+
+    def complete_cavitation(
+        self,
+        run_id: str,
+        cavitation: dict[str, Any],
+        master: dict[str, Any],
+    ) -> None:
+        """Insert cavitation results and mark Master complete atomically."""
+
+        cavitation = {"Run_ID": str(run_id), **cavitation}
+        unknown_cavitation = set(cavitation) - CAVITATION_COLUMNS
+        unknown_master = set(master) - (MASTER_COLUMNS - {"Run_ID"})
+        if unknown_cavitation:
+            raise ValueError(
+                f"Unknown Cavitation columns: {sorted(unknown_cavitation)}"
+            )
+        if unknown_master:
+            raise ValueError(f"Unknown Master columns: {sorted(unknown_master)}")
+        if "N_Cells" not in cavitation or int(cavitation["N_Cells"]) <= 0:
+            raise ValueError("Cavitation N_Cells must be positive")
+
+        columns = list(cavitation)
+        placeholders = ", ".join("?" for _ in columns)
+        master_assignments = ", ".join(f"{column} = ?" for column in master)
+        with self.connection() as connection:
+            master_row = connection.execute(
+                "SELECT N_Cells FROM MD_Master WHERE Run_ID = ?",
+                (str(run_id),),
+            ).fetchone()
+            if master_row is None:
+                raise KeyError(f"Run_ID was not found: {run_id}")
+            if master_row["N_Cells"] is None:
+                raise ValueError("Master N_Cells must be set before completion")
+            if int(master_row["N_Cells"]) != int(cavitation["N_Cells"]):
+                raise ValueError("Cavitation N_Cells must match MD_Master.N_Cells")
+            connection.execute(
+                f"INSERT INTO Cavitation ({', '.join(columns)}) "
+                f"VALUES ({placeholders})",
+                list(cavitation.values()),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO Run_Dependencies (
+                    Parent_Run_ID, Child_Run_ID, Relationship
+                ) VALUES (?, ?, 'cavitation_source')
+                """,
+                (str(cavitation["Source_Run_ID"]), str(run_id)),
+            )
+            cursor = connection.execute(
+                f"UPDATE MD_Master SET {master_assignments} WHERE Run_ID = ?",
                 [*master.values(), str(run_id)],
             )
             if cursor.rowcount != 1:
@@ -627,6 +976,22 @@ def thermalization_dataframe(
     return pd.DataFrame.from_records(
         rows,
         columns=THERMALIZATION_COLUMN_ORDER,
+    ).convert_dtypes()
+
+
+def cavitation_dataframe(
+    database: SQLiteRunDatabase,
+    limit: int | None = None,
+    **filters: Any,
+):
+    """Return selected Cavitation rows as a pandas table."""
+
+    import pandas as pd
+
+    rows = database.query_cavitations(limit=limit, **filters)
+    return pd.DataFrame.from_records(
+        rows,
+        columns=CAVITATION_COLUMN_ORDER,
     ).convert_dtypes()
 
 
@@ -761,5 +1126,53 @@ def display_thermalization_table(
             "Phase_Fit_Method",
             "Phase_Fit_Method_Version",
         }
+    ]
+    return _display_dataframe(table, integer_columns, float_columns)
+
+
+def display_cavitation_table(
+    database: SQLiteRunDatabase | None = None,
+    project_paths=None,
+    limit: int | None = None,
+    **filters: Any,
+):
+    """Display all or selected Cavitation rows in Jupyter."""
+
+    if database is None:
+        from .paths import ProjectPaths
+
+        project_paths = project_paths or ProjectPaths()
+        database = SQLiteRunDatabase(project_paths.database)
+    database.initialize()
+    table = cavitation_dataframe(database, limit=limit, **filters)
+    integer_columns = [
+        "Source_Frame_ID",
+        "N_Cells",
+        "Therm_Seed",
+        "Random_Location",
+        "Location_Seed",
+        "Nsteps",
+        "Summary_Start_Step",
+        "Summary_End_Step",
+        "Summary_Num_Samples",
+        "Num_Frames",
+    ]
+    text_columns = {
+        "Run_ID",
+        "File_Location",
+        "Source_Run_ID",
+        "Ensemble",
+        "LJ_Mode",
+        "Phase_Separation_Status",
+        "Phase_Separation_Method",
+        "Phase_Separation_Method_Version",
+        "Phase_Fit_Status",
+        "Phase_Fit_Method",
+        "Phase_Fit_Method_Version",
+    }
+    float_columns = [
+        column
+        for column in CAVITATION_COLUMN_ORDER
+        if column not in integer_columns and column not in text_columns
     ]
     return _display_dataframe(table, integer_columns, float_columns)

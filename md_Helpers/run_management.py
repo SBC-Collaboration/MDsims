@@ -20,19 +20,19 @@ _MISSING_DIRECTORY_CLEANUP_STATUSES = {"Failed", "Cancelled"}
 def _validated_run_directory(
     run_id: str,
     master: dict[str, Any],
-    thermalization: dict[str, Any] | None,
+    state_row: dict[str, Any] | None,
     project_paths: ProjectPaths,
 ) -> Path:
     sim_type = master.get("Sim_Type")
-    if sim_type != "Thermalization":
+    if sim_type not in {"Thermalization", "Cavitation"}:
         raise NotImplementedError(
-            "delete_run currently supports Thermalization runs only"
+            "delete_run currently supports Thermalization and Cavitation runs only"
         )
 
     top_directory = project_paths.top_directory.resolve()
     expected = project_paths.for_run(sim_type, run_id).directory.resolve()
     stored_location = (
-        thermalization.get("File_Location") if thermalization else None
+        state_row.get("File_Location") if state_row else None
     )
     if stored_location:
         stored_path = Path(stored_location).expanduser()
@@ -66,7 +66,7 @@ def delete_run(
     project_paths: ProjectPaths | None = None,
     database: SQLiteRunDatabase | None = None,
 ) -> dict[str, Any]:
-    """Delete one run directory and its Thermalization and Master rows.
+    """Delete one run directory and its state and Master rows.
 
     ``dry_run=True`` only reports the exact targets. Permanent deletion
     requires ``confirm_run_id`` to exactly match ``run_id``. Initializing and
@@ -87,10 +87,12 @@ def delete_run(
     if master is None:
         raise KeyError(f"Run_ID was not found: {run_id}")
     thermalization = database.get_thermalization(run_id)
+    cavitation = database.get_cavitation(run_id)
+    state_row = thermalization if thermalization is not None else cavitation
     run_directory = _validated_run_directory(
         run_id,
         master,
-        thermalization,
+        state_row,
         project_paths,
     )
 
@@ -106,6 +108,7 @@ def delete_run(
         "hdf5_exists": (run_directory / "run.hdf5").is_file(),
         "master_rows": 1,
         "thermalization_rows": int(thermalization is not None),
+        "cavitation_rows": int(cavitation is not None),
         "dry_run": bool(dry_run),
     }
     if dry_run:

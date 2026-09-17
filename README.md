@@ -88,6 +88,56 @@ averaged voxel histogram.
 Running the same cell again returns the existing SQL record with
 `result["skipped"] == True`; it does not open or load its GSD/HDF5 files.
 
+## Cavitation states
+
+Cavitation starts from the final frame of a completed, explicitly homogeneous
+thermalization. It translates an optional reproducibly sampled location to the
+box center, wraps all particles, removes particles inside a centered spherical
+mask, and evolves the surviving particles in NVT without changing their
+velocities. The source temperature, seed, integration timestep, Lennard-Jones
+settings, device preference, log period, and progress period are inherited.
+
+```python
+from md_Helpers import CavitationConfig, run_cavitation
+
+config = CavitationConfig(
+    source_run_id="THERMALIZATION_RUN_ID",
+    mask_radius=5.0,
+    nsteps=100_000,
+    ensemble="NVT",
+    random_location=False,
+    location_seed=None,
+    notes=None,
+)
+
+result = run_cavitation(config)
+```
+
+For a random reproducible source location, set `random_location=True` and pass
+a nonnegative `location_seed`. The mask diameter may not exceed 85% of the
+smallest box length, and initialization fails if the mask removes zero or all
+particles. Cavitation requires at least `41 * inherited_log_period` steps.
+
+The trajectory saves frame 0 after translation and masking, every twentieth
+evolved log, and the same five terminal logs used by thermalization. With 100
+logs, the evolved frames are `20, 40, 60, 70, 80, 90, 100`; only the final five
+are used for the averaged voxel histogram. Finished homogeneous states remain
+completed Cavitation records, preventing accidental reruns. A phase-separated
+source returns `skip_reason == "source_phase_separated"` without creating a
+new Master row.
+
+Use the same inspection tools as thermalization:
+
+```python
+from md_Helpers import display_cavitation_table, open_run
+
+display_cavitation_table()
+run = open_run(result["run_id"])
+run.render(frame=0)
+run.plot_logs()
+run.plot_phase_fit()
+```
+
 `N_Cells` is stored in both `MD_Master` and `Thermalization`. New
 thermalization writes require the values to match. To migrate and populate an
 older database, run:

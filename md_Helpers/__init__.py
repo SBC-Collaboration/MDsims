@@ -2,11 +2,14 @@
 
 from .database import (
     SQLiteRunDatabase,
+    cavitation_dataframe,
+    display_cavitation_table,
     display_master_table,
     display_thermalization_table,
     master_dataframe,
     thermalization_dataframe,
 )
+from .cavitation import CavitationConfig, run_cavitation
 from .paths import ProjectPaths
 from .run_analysis import RunAnalysis, open_run
 from .run_management import delete_run
@@ -24,7 +27,10 @@ __all__ = [
     "RunAnalysis",
     "SQLiteRunDatabase",
     "CloneRescaleThermalizationConfig",
+    "CavitationConfig",
     "ThermalizationConfig",
+    "cavitation_dataframe",
+    "display_cavitation_table",
     "display_master_table",
     "display_thermalization_table",
     "delete_run",
@@ -35,4 +41,5 @@ __all__ = [
     "run_clone_rescale_ensemble",
     "run_clone_rescale_thermalization",
     "run_thermalization",
+    "run_cavitation",
 ]

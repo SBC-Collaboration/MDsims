@@ -932,6 +932,12 @@ def run_thermalization(
         Status="Initializing",
         Notes=master_note,
     )
+    if clone_request is not None:
+        database.add_run_dependency(
+            clone_request.source_run_id,
+            run_id,
+            "thermalization_clone",
+        )
 
     current_step = 0
     elapsed_time = 0.0

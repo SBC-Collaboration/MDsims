@@ -87,8 +87,10 @@ class RunAnalysis:
         if self.sim_type == "Thermalization":
             rows = self.database.query_thermalizations(Run_ID=self.run_id, limit=1)
             return rows[0] if rows else None
-        # Cavitation and Excitation tables will use the same lookup contract
-        # when those workflow tables are added.
+        if self.sim_type == "Cavitation":
+            rows = self.database.query_cavitations(Run_ID=self.run_id, limit=1)
+            return rows[0] if rows else None
+        # Excitation tables will use the same lookup contract when added.
         return None
 
     def _require_trajectory(self) -> None:
