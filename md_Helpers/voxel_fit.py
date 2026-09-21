@@ -289,6 +289,9 @@ def fit_averaged_voxel_mixture(
         mixture = sum(weight * component for weight, component in zip(fitted_weights, components))
         # why is this not:
         # return float(np.clip(mixture, 1e-300, None) - np.dot(observed, np.log(np.clip(mixture, 1e-300, None))))
+        # Oh -- it's because 'mixture' is normalized, not in counts.  This works as long as
+        # the histograms cover the entire distribution (i.e. you can't do this if you're only fitting
+        # a portion of the distribution)
         return float(-np.dot(observed, np.log(np.clip(mixture, 1e-300, None))))
 
     maximum_count = max(2.0, float(count_axis[-1]))
