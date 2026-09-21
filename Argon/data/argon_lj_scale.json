@@ -1,0 +1,22 @@
+{
+  "epsilon_over_kB_K": 128.5995507884122,
+  "epsilon_over_kB_uncertainty_K": 0.04210981133938457,
+  "epsilon_J": 1.775508411964705e-21,
+  "epsilon_eV": 0.011081851865059125,
+  "sigma_nm": 0.33585470206734763,
+  "sigma_uncertainty_nm": 9.749997282766784e-06,
+  "mass_u": 39.948,
+  "mass_kg": 6.63352146325368e-26,
+  "time_ps": 2.0528732475325384,
+  "pressure_bar": 468.6713819873131,
+  "density_mol_L": 43.83235439561305,
+  "velocity_m_s": 163.60225964804692,
+  "force_N": 5.286537306268438e-12,
+  "temperature_chi2": 318.60294812642854,
+  "temperature_dof": 43,
+  "temperature_reduced_chi2": 7.4093708866611285,
+  "density_chi2": 15085.19009858302,
+  "density_dof": 87,
+  "density_reduced_chi2": 173.3929896388853,
+  "number_of_selected_states": 44
+}
