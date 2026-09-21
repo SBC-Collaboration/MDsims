@@ -391,13 +391,18 @@ def plot_cavitation_seitz(
     temperature_atol: float = 1e-8,
     figure_size=(10, 6),
     dpi: int = 120,
-    title: str = "Seitz Q vs liquid density",
+    title: str | None = None,
+    physical_scale=None,
+    energy_unit: str = "eV",
+    density_unit: str = "mol/L",
 ):
     """Calculate and plot Seitz ``Q`` for a cavitation DataFrame.
 
     If ``eos_states`` is omitted, homogeneous thermalization states are queried
     from ``database`` using ``eos_n_cells`` (45 by default) and any additional
-    ``eos_filters``.  Return ``(figure, axis, results)``.
+    ``eos_filters``.  Pass an ``ArgonLJScale`` as ``physical_scale`` to plot
+    physical density and energy, including scale-fit uncertainty in both error
+    bars.  Return ``(figure, axis, results)``.
     """
 
     import matplotlib.pyplot as plt
@@ -421,6 +426,42 @@ def plot_cavitation_seitz(
     if results.empty:
         raise ValueError("No cavitation rows were provided")
 
+    x_column = "rho_liquid"
+    x_uncertainty_column = "rho_liquid_uncertainty"
+    y_column = "Q"
+    y_uncertainty_column = "Q_uncertainty"
+    x_label = r"$\rho_\mathrm{liquid}$"
+    y_label = "Q"
+    if physical_scale is not None:
+        x_column = f"rho_liquid_{density_unit}"
+        x_uncertainty_column = f"rho_liquid_uncertainty_{density_unit}"
+        y_column = f"Q_{energy_unit}"
+        y_uncertainty_column = f"Q_uncertainty_{energy_unit}"
+        results[x_column] = physical_scale.number_density(
+            results["rho_liquid"].to_numpy(dtype=float), unit=density_unit
+        )
+        results[x_uncertainty_column] = (
+            physical_scale.number_density_uncertainty(
+                results["rho_liquid"].to_numpy(dtype=float),
+                results["rho_liquid_uncertainty"].to_numpy(dtype=float),
+                unit=density_unit,
+            )
+        )
+        results[y_column] = physical_scale.energy(
+            results["Q"].to_numpy(dtype=float), unit=energy_unit
+        )
+        results[y_uncertainty_column] = physical_scale.energy_uncertainty(
+            results["Q"].to_numpy(dtype=float),
+            results["Q_uncertainty"].to_numpy(dtype=float),
+            unit=energy_unit,
+        )
+        x_label = rf"$\rho_\mathrm{{liquid}}$ ({density_unit})"
+        y_label = f"Seitz Q ({energy_unit})"
+        if title is None:
+            title = "Argon-scaled Seitz Q vs liquid density"
+    elif title is None:
+        title = "Seitz Q vs liquid density"
+
     figure, axis = plt.subplots(
         figsize=figure_size, dpi=int(dpi), constrained_layout=True
     )
@@ -440,12 +481,12 @@ def plot_cavitation_seitz(
     for (temperature, n_cells, nsteps), group in results.groupby(
         ["Therm_kT", "N_Cells", "Nsteps"], sort=True
     ):
-        group = group.sort_values("rho_liquid")
+        group = group.sort_values(x_column)
         axis.errorbar(
-            group["rho_liquid"],
-            group["Q"],
-            xerr=group["rho_liquid_uncertainty"],
-            yerr=group["Q_uncertainty"],
+            group[x_column],
+            group[y_column],
+            xerr=group[x_uncertainty_column],
+            yerr=group[y_uncertainty_column],
             color=cell_colors[n_cells],
             marker=temperature_markers[temperature],
             linestyle="-",
@@ -483,8 +524,8 @@ def plot_cavitation_seitz(
         bbox_to_anchor=(1.02, 0.55),
         loc="upper left",
     )
-    axis.set_xlabel(r"$\rho_\mathrm{liquid}$")
-    axis.set_ylabel("Q")
+    axis.set_xlabel(x_label)
+    axis.set_ylabel(y_label)
     axis.set_title(title)
     axis.grid(True, alpha=0.3)
     return figure, axis, results

@@ -1,5 +1,12 @@
 """Small, reusable helpers for the V4 molecular-dynamics workflows."""
 
+from .argon_scaling import (
+    ArgonLJScale,
+    ArgonScaleFit,
+    fit_argon_lj_scale,
+    query_argon_scaling_states,
+)
+
 from .database import (
     SQLiteRunDatabase,
     cavitation_dataframe,
@@ -30,6 +37,8 @@ from .thermalization import (
 )
 
 __all__ = [
+    "ArgonLJScale",
+    "ArgonScaleFit",
     "ProjectPaths",
     "RunAnalysis",
     "SQLiteRunDatabase",
@@ -43,9 +52,11 @@ __all__ = [
     "display_thermalization_table",
     "delete_run",
     "master_dataframe",
+    "fit_argon_lj_scale",
     "open_run",
     "plot_cavitation_seitz",
     "query_seitz_eos_states",
+    "query_argon_scaling_states",
     "seitz_threshold",
     "seitz_threshold_uncertainty",
     "thermalization_dataframe",
