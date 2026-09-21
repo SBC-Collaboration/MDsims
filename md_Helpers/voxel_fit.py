@@ -287,6 +287,8 @@ def fit_averaged_voxel_mixture(
         gas_mean, _, liquid_mean, liquid_sigma, fitted_weights = unpack(parameters)
         components = component_probabilities(gas_mean, liquid_mean, liquid_sigma)
         mixture = sum(weight * component for weight, component in zip(fitted_weights, components))
+        # why is this not:
+        # return float(np.clip(mixture, 1e-300, None) - np.dot(observed, np.log(np.clip(mixture, 1e-300, None))))
         return float(-np.dot(observed, np.log(np.clip(mixture, 1e-300, None))))
 
     maximum_count = max(2.0, float(count_axis[-1]))
