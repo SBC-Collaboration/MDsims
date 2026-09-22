@@ -331,7 +331,7 @@ class RunAnalysis:
         skip_lattice_transient: bool = True,
         lattice_skip_points: int = 10,
     ):
-        """Plot logs, omitting early lattice relaxation from P and PE/N."""
+        """Plot logs and mark the frames used by the averaged voxel histogram."""
 
         if quantities is None:
             quantities = [
@@ -351,11 +351,18 @@ class RunAnalysis:
                 "potential_energy_per_particle": lattice_skip_points,
                 "PE_per_particle": lattice_skip_points,
             }
+        logs = self.logs_dataframe()
+        try:
+            phase_frame_ids = self.phase_average_frame_ids()
+        except (FileNotFoundError, KeyError):
+            # In-progress and legacy runs may not have phase-average metadata yet.
+            phase_frame_ids = []
         return plot_log_dataframe(
-            self.logs_dataframe(),
+            logs,
             quantities,
             x=x,
             skip_initial_by_quantity=skipped,
+            highlight_frame_ids=phase_frame_ids,
         )
 
     def _phase_fit_attributes(self) -> dict[str, Any]:

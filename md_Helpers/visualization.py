@@ -295,8 +295,9 @@ def plot_log_dataframe(
     quantities,
     x="run_step",
     skip_initial_by_quantity: dict[str, int] | None = None,
+    highlight_frame_ids: Sequence[int] | None = None,
 ):
-    """Plot selected synchronized HDF5 log quantities."""
+    """Plot synchronized logs, optionally marking selected trajectory frames."""
 
     import matplotlib.pyplot as plt
 
@@ -306,6 +307,13 @@ def plot_log_dataframe(
     missing = [name for name in [x, *quantities] if name not in dataframe.columns]
     if missing:
         raise KeyError(f"Log columns are unavailable: {missing}")
+    highlight_frame_ids = (
+        [] if highlight_frame_ids is None else list(highlight_frame_ids)
+    )
+    if highlight_frame_ids and "trajectory_frame_id" not in dataframe.columns:
+        raise KeyError(
+            "Log column 'trajectory_frame_id' is required to highlight frames"
+        )
     figure, axes = plt.subplots(
         len(quantities),
         1,
@@ -320,6 +328,19 @@ def plot_log_dataframe(
             raise ValueError("Initial log points to skip cannot be negative")
         plotted = dataframe.iloc[skip:]
         axis.plot(plotted[x], plotted[quantity])
+        if highlight_frame_ids:
+            highlighted = plotted.loc[
+                plotted["trajectory_frame_id"].isin(highlight_frame_ids)
+            ]
+            axis.scatter(
+                highlighted[x],
+                highlighted[quantity],
+                color="red",
+                s=28,
+                zorder=3,
+                label="Voxel histogram frames",
+            )
+            axis.legend()
         axis.set_ylabel(quantity)
         axis.grid(alpha=0.3)
     axes[-1].set_xlabel(x)

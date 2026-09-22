@@ -28,6 +28,7 @@ from md_Helpers.run_analysis import RunAnalysis, open_run
 from md_Helpers.run_management import delete_run
 from md_Helpers.signatures import create_run_signature
 from md_Helpers.storage import StateData
+from md_Helpers.visualization import plot_log_dataframe
 from md_Helpers.thermalization import (
     CloneRescaleThermalizationConfig,
     ThermalizationConfig,
@@ -332,12 +333,37 @@ class PathTests(unittest.TestCase):
 
 
 class RunPlotPolicyTests(unittest.TestCase):
+    @patch("matplotlib.pyplot.show")
+    def test_plot_marks_voxel_histogram_frames_in_red(self, _show):
+        import matplotlib.pyplot as plt
+        import pandas as pd
+
+        logs = pd.DataFrame(
+            {
+                "run_step": [10, 20, 30, 40],
+                "pressure": [1.0, 2.0, 3.0, 4.0],
+                "trajectory_frame_id": [-1, 1, -1, 2],
+            }
+        )
+
+        figure = plot_log_dataframe(
+            logs,
+            ["pressure"],
+            highlight_frame_ids=[1, 2],
+        )
+
+        marker = figure.axes[0].collections[0]
+        np.testing.assert_array_equal(marker.get_offsets(), [[20, 2.0], [40, 4.0]])
+        np.testing.assert_array_equal(marker.get_facecolors()[0], [1.0, 0.0, 0.0, 1.0])
+        plt.close(figure)
+
     @patch("md_Helpers.run_analysis.plot_log_dataframe", return_value="figure")
     def test_fresh_lattice_skips_first_ten_pressure_and_pe_points(self, plot):
         run = RunAnalysis.__new__(RunAnalysis)
         run.sim_type = "Thermalization"
         run.state_row = {"Clone_Run_ID": None}
         run.logs_dataframe = lambda: "logs"
+        run.phase_average_frame_ids = lambda: [1, 2, 3, 4, 5]
 
         result = run.plot_logs(
             quantities=["pressure", "potential_energy_per_particle"]
@@ -352,6 +378,10 @@ class RunPlotPolicyTests(unittest.TestCase):
                 "PE_per_particle": 10,
             },
         )
+        self.assertEqual(
+            plot.call_args.kwargs["highlight_frame_ids"],
+            [1, 2, 3, 4, 5],
+        )
 
     @patch("md_Helpers.run_analysis.plot_log_dataframe", return_value="figure")
     def test_cloned_state_keeps_all_log_points(self, plot):
@@ -359,6 +389,7 @@ class RunPlotPolicyTests(unittest.TestCase):
         run.sim_type = "Thermalization"
         run.state_row = {"Clone_Run_ID": "20260903214936"}
         run.logs_dataframe = lambda: "logs"
+        run.phase_average_frame_ids = lambda: [2, 3, 4, 5, 6]
 
         run.plot_logs(quantities=["pressure"])
 
