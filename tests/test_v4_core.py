@@ -218,6 +218,23 @@ class PhaseFitPolicyTests(unittest.TestCase):
     def test_six_frame_trajectory_excludes_initial_frame(self):
         self.assertEqual(phase_fit_frame_indices(6), [1, 2, 3, 4, 5])
 
+    def test_explicit_nbins_overrides_ncells_rule(self):
+        from md_Helpers.voxel_fit import fit_averaged_voxel_mixture
+
+        rng = np.random.default_rng(7)
+        positions = [rng.uniform(-4, 4, size=(500, 3)) for _ in range(2)]
+        boxes = [np.array([8, 8, 8, 0, 0, 0], dtype=float)] * 2
+        fit = fit_averaged_voxel_mixture(
+            positions,
+            boxes,
+            n_cells=30,
+            nbins=7,
+            interface_points=4,
+            max_iterations=10,
+        )
+        self.assertEqual(fit["voxel_nbins"], 7)
+        self.assertEqual(fit["n_voxels_per_frame"], 7**3)
+
     def test_incomplete_trajectory_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "one initial frame"):
             phase_fit_frame_indices(5)

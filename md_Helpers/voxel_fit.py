@@ -100,12 +100,15 @@ def averaged_trajectory_voxel_histogram(
     n_cells: int,
     num_frames: int = PHASE_FIT_NUM_FRAMES,
     frame_indices: Sequence[int] | None = None,
+    nbins: int | None = None,
 ) -> dict[str, Any]:
     """Return the exact multi-frame histogram used as phase-fit input."""
 
     import gsd.hoomd
 
-    nbins = voxel_bins_for_ncells(n_cells)
+    nbins = voxel_bins_for_ncells(n_cells) if nbins is None else int(nbins)
+    if nbins <= 0:
+        raise ValueError("nbins must be positive")
     histograms = []
     voxel_volumes = []
     box_volumes = []
@@ -165,6 +168,7 @@ def fit_averaged_voxel_mixture(
     interface_void_fraction: float = 0.5,
     interface_points: int = 40,
     max_iterations: int = 500,
+    nbins: int | None = None,
 ) -> dict[str, Any]:
     """Fit V3's model once to the average of several voxel histograms."""
 
@@ -184,7 +188,9 @@ def fit_averaged_voxel_mixture(
     if not positions_by_frame or len(positions_by_frame) != len(boxes_by_frame):
         raise ValueError("positions_by_frame and boxes_by_frame must have equal length")
 
-    nbins = voxel_bins_for_ncells(n_cells)
+    nbins = voxel_bins_for_ncells(n_cells) if nbins is None else int(nbins)
+    if nbins <= 0:
+        raise ValueError("nbins must be positive")
     histograms = []
     voxel_volumes = []
     box_volumes = []
