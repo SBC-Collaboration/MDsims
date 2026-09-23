@@ -17,6 +17,12 @@ from .database import (
     thermalization_dataframe,
 )
 from .cavitation import CavitationConfig, run_cavitation
+from .expanded_fcc import (
+    ExpandedFCCConfig,
+    build_expanded_fcc_lattice,
+    recenter_snapshot_arrays,
+    run_expanded_fcc,
+)
 from .paths import ProjectPaths
 from .run_analysis import RunAnalysis, open_run
 from .run_management import delete_run
@@ -50,9 +56,11 @@ __all__ = [
     "SQLiteRunDatabase",
     "CloneRescaleThermalizationConfig",
     "CavitationConfig",
+    "ExpandedFCCConfig",
     "ThermalizationConfig",
     "cavitation_dataframe",
     "calculate_cavitation_seitz",
+    "build_expanded_fcc_lattice",
     "cavitations_with_nbins_fit",
     "display_cavitation_table",
     "display_master_table",
@@ -67,6 +75,7 @@ __all__ = [
     "query_seitz_eos_states",
     "query_argon_scaling_states",
     "refit_cavitation_nbins",
+    "recenter_snapshot_arrays",
     "seitz_threshold",
     "seitz_threshold_uncertainty",
     "thermalization_dataframe",
@@ -75,4 +84,5 @@ __all__ = [
     "run_clone_rescale_thermalization",
     "run_thermalization",
     "run_cavitation",
+    "run_expanded_fcc",
 ]

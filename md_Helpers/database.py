@@ -18,6 +18,7 @@ from typing import Any, Iterator
 MASTER_TABLE = "MD_Master"
 THERMALIZATION_TABLE = "Thermalization"
 CAVITATION_TABLE = "Cavitation"
+EXPANDED_FCC_SIM_TYPE = "Expanded_FCC"
 
 MASTER_COLUMN_ORDER = (
     "Run_ID",
@@ -161,7 +162,7 @@ CREATE TABLE IF NOT EXISTS MD_Master (
     CHECK (
         Sim_Type IS NULL OR Sim_Type IN (
             'Thermalization', 'Cavitation',
-            'Excitation_NVE', 'Excitation_NPH'
+            'Excitation_NVE', 'Excitation_NPH', 'Expanded_FCC'
         )
     ),
     CHECK (
@@ -367,6 +368,63 @@ class SQLiteRunDatabase:
 
     def initialize(self) -> None:
         with self.connection() as connection:
+            master_sql_row = connection.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'MD_Master'"
+            ).fetchone()
+            if (
+                master_sql_row is not None
+                and EXPANDED_FCC_SIM_TYPE not in master_sql_row["sql"]
+            ):
+                # SQLite cannot alter a CHECK constraint. Rebuild only the
+                # Master table, preserving its rows and its public name so
+                # existing child-table foreign keys remain valid.
+                connection.commit()
+                connection.execute("PRAGMA foreign_keys = OFF")
+                connection.executescript(
+                    """
+                    CREATE TABLE MD_Master_expanded_fcc_migration (
+                        Run_ID TEXT PRIMARY KEY,
+                        Run_Signature TEXT,
+                        N_Cells INTEGER,
+                        Nsteps INTEGER,
+                        Current_Nstep INTEGER,
+                        ElapsedTime REAL,
+                        StartTime TEXT,
+                        EndTime TEXT,
+                        Last_Update_Time TEXT,
+                        Sim_Type TEXT,
+                        Status TEXT,
+                        Stop_Reason TEXT,
+                        Status_Message TEXT,
+                        Notes TEXT,
+                        CHECK (Run_ID GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'),
+                        CHECK (N_Cells IS NULL OR N_Cells > 0),
+                        CHECK (Nsteps IS NULL OR Nsteps >= 0),
+                        CHECK (Current_Nstep IS NULL OR Current_Nstep >= 0),
+                        CHECK (ElapsedTime IS NULL OR ElapsedTime >= 0),
+                        CHECK (
+                            Sim_Type IS NULL OR Sim_Type IN (
+                                'Thermalization', 'Cavitation',
+                                'Excitation_NVE', 'Excitation_NPH',
+                                'Expanded_FCC'
+                            )
+                        ),
+                        CHECK (
+                            Status IS NULL OR Status IN (
+                                'Initializing', 'Running', 'Complete',
+                                'Safety_Stopped', 'Failed', 'Cancelled'
+                            )
+                        )
+                    );
+                    INSERT INTO MD_Master_expanded_fcc_migration
+                    SELECT * FROM MD_Master;
+                    DROP TABLE MD_Master;
+                    ALTER TABLE MD_Master_expanded_fcc_migration
+                        RENAME TO MD_Master;
+                    """
+                )
+                connection.execute("PRAGMA foreign_keys = ON")
             connection.executescript(SQLITE_SCHEMA)
             thermalization_columns = {
                 row["name"]
@@ -404,7 +462,7 @@ class SQLiteRunDatabase:
                 WHERE Source_Run_ID != Run_ID
                 """
             )
-            connection.execute("PRAGMA user_version = 3")
+            connection.execute("PRAGMA user_version = 4")
 
     def add_run_dependency(
         self,

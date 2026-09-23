@@ -27,6 +27,7 @@ from .voxel_fit import (
 SIM_TYPE_DIRECTORIES = {
     "Thermalization": "Thermalization",
     "Cavitation": "Cavitation",
+    "Expanded_FCC": "Expanded_FCC",
     "Excitation_NVE": "Excitation",
     "Excitation_NPH": "Excitation",
 }

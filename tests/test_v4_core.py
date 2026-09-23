@@ -23,6 +23,11 @@ from md_Helpers.cavitation import (
 )
 from md_Helpers.analysis import thermodynamic_summary
 from md_Helpers.lattices import build_fcc_lattice
+from md_Helpers.expanded_fcc import (
+    ExpandedFCCConfig,
+    build_expanded_fcc_lattice,
+    recenter_snapshot_arrays,
+)
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.run_analysis import RunAnalysis, open_run
 from md_Helpers.run_management import delete_run
@@ -202,6 +207,49 @@ class LatticeTests(unittest.TestCase):
         self.assertEqual(lattice.n_particles, 4 * 3**3)
         self.assertEqual(lattice.positions.shape, (4 * 3**3, 3))
         self.assertAlmostEqual(lattice.actual_density, 0.5)
+
+    def test_expanded_fcc_default_geometry_and_density(self):
+        lattice = build_expanded_fcc_lattice(n_cells=3, density=0.6)
+        central_count = 4 * 3**3
+        self.assertEqual(lattice.central_particles, central_count)
+        self.assertEqual(lattice.particles_per_side, central_count // 2)
+        self.assertEqual(lattice.n_particles, 2 * central_count)
+        self.assertAlmostEqual(
+            lattice.box[0], 3.0 * lattice.original_box_length
+        )
+        self.assertAlmostEqual(lattice.box[1], lattice.original_box_length)
+        self.assertAlmostEqual(lattice.box[2], lattice.original_box_length)
+        self.assertAlmostEqual(lattice.side_density, 0.3)
+
+        length = lattice.original_box_length
+        left = lattice.positions[: lattice.particles_per_side].copy()
+        right = lattice.positions[-lattice.particles_per_side :].copy()
+        left[:, 0] += 2.0 * length
+        np.testing.assert_allclose(left, right)
+
+    def test_expanded_signature_includes_side_controls(self):
+        first = ExpandedFCCConfig(3, 0.6, 100, side_extension=1.0)
+        second = ExpandedFCCConfig(3, 0.6, 100, side_extension=2.0)
+        first.validate()
+        self.assertNotEqual(first.run_signature, second.run_signature)
+        self.assertEqual(first.signature_parameters()["sim_type"], "Expanded_FCC")
+
+    def test_recenter_uses_unwrapped_mass_weighted_com(self):
+        positions = np.array([[4.0, 0.0, 0.0], [-4.0, 0.0, 0.0]])
+        images = np.array([[0, 0, 0], [1, 0, 0]])
+        wrapped, centered_images, com = recenter_snapshot_arrays(
+            positions,
+            images,
+            np.array([10.0, 10.0, 10.0, 0.0, 0.0, 0.0]),
+            masses=np.array([1.0, 3.0]),
+        )
+        unwrapped = wrapped + centered_images * 10.0
+        np.testing.assert_allclose(com, [5.5, 0.0, 0.0])
+        np.testing.assert_allclose(
+            np.average(unwrapped, axis=0, weights=[1.0, 3.0]),
+            0.0,
+            atol=1e-14,
+        )
 
 
 class SingleAxisResizeTests(unittest.TestCase):
@@ -560,7 +608,59 @@ class DatabaseTests(unittest.TestCase):
             ]
             version = connection.execute("PRAGMA user_version").fetchone()[0]
         self.assertIn("N_Cells", columns)
-        self.assertEqual(version, 3)
+        self.assertEqual(version, 4)
+
+    def test_master_accepts_expanded_fcc_sim_type(self):
+        run_id = self.database.reserve_run_id()
+        self.database.update_master(
+            run_id,
+            N_Cells=3,
+            Nsteps=10_000,
+            Sim_Type="Expanded_FCC",
+            Status="Initializing",
+        )
+        self.assertEqual(self.database.get_run(run_id)["Sim_Type"], "Expanded_FCC")
+
+    def test_initialize_migrates_existing_master_sim_type_constraint(self):
+        legacy_path = Path(self.temp_directory.name) / "old-master.sqlite3"
+        with sqlite3.connect(legacy_path) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE MD_Master (
+                    Run_ID TEXT PRIMARY KEY,
+                    Run_Signature TEXT,
+                    N_Cells INTEGER,
+                    Nsteps INTEGER,
+                    Current_Nstep INTEGER,
+                    ElapsedTime REAL,
+                    StartTime TEXT,
+                    EndTime TEXT,
+                    Last_Update_Time TEXT,
+                    Sim_Type TEXT,
+                    Status TEXT,
+                    Stop_Reason TEXT,
+                    Status_Message TEXT,
+                    Notes TEXT,
+                    CHECK (Sim_Type IS NULL OR Sim_Type IN (
+                        'Thermalization', 'Cavitation',
+                        'Excitation_NVE', 'Excitation_NPH'
+                    ))
+                );
+                INSERT INTO MD_Master (Run_ID, Sim_Type, Status)
+                VALUES ('20260923000000', 'Thermalization', 'Complete');
+                """
+            )
+
+        legacy_database = SQLiteRunDatabase(legacy_path)
+        legacy_database.initialize()
+        legacy_database.update_master(
+            "20260923000000",
+            Sim_Type="Expanded_FCC",
+        )
+        self.assertEqual(
+            legacy_database.get_run("20260923000000")["Sim_Type"],
+            "Expanded_FCC",
+        )
 
     def test_complete_and_query_cavitation(self):
         source_run_id, run_id, _ = self._create_complete_cavitation()

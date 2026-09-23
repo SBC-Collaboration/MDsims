@@ -88,6 +88,40 @@ averaged voxel histogram.
 Running the same cell again returns the existing SQL record with
 `result["skipped"] == True`; it does not open or load its GSD/HDF5 files.
 
+## Expanded FCC states
+
+`Expanded_FCC` starts from the same central FCC lattice and NVT inputs as
+thermalization, extends the box along x, and places identical lower-density
+particle patterns on the left and right. By default, each side is one original
+box length wide and contains half as many particles as the center, so the full
+box is `3L x L x L`. This workflow is indexed in `MD_Master`; its dedicated SQL
+result table is intentionally deferred, while complete protocol and state
+metadata are retained in `run.hdf5`.
+
+```python
+from md_Helpers import ExpandedFCCConfig, run_expanded_fcc
+
+config = ExpandedFCCConfig(
+    n_fcc_cells=45,
+    target_rho=0.5,
+    nsteps=100_000,
+    kT=0.9,
+    log_period=1_000,
+    seed=1,
+    dt=0.005,
+    side_extension=1.0,
+    side_density_divisor=2.0,
+    com_recenter_period=10_000,
+)
+
+result = run_expanded_fcc(config)
+```
+
+The mass-weighted COM is computed from unwrapped coordinates and translated to
+the box center initially and every `com_recenter_period` steps. A trajectory
+frame is saved immediately after each recenter; the initial state and a distinct
+final step are also saved.
+
 ## Cavitation states
 
 Cavitation starts from the final frame of a completed, explicitly homogeneous

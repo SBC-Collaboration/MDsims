@@ -125,7 +125,9 @@ class ThermalizationConfig:
     phase_fit_max_iterations: int = 500
     notes: str | None = None
 
-    def validate(self) -> None:
+    def _validate_common(self) -> None:
+        """Validate dynamics inputs shared by lattice-based workflows."""
+
         positive_ints = {
             "n_fcc_cells": self.n_fcc_cells,
             "nsteps": self.nsteps,
@@ -163,6 +165,9 @@ class ThermalizationConfig:
             raise ValueError(
                 "phase_fit_interface_void_fraction must be between 0 and 1"
             )
+
+    def validate(self) -> None:
+        self._validate_common()
         thermalization_phase_frame_schedule(self.nsteps, self.log_period)
 
     def signature_parameters(self) -> dict[str, Any]:
