@@ -493,6 +493,27 @@ class RunPlotPolicyTests(unittest.TestCase):
             {},
         )
 
+    @patch("md_Helpers.run_analysis.plot_log_dataframe", return_value="figure")
+    def test_expanded_fcc_skips_first_three_pressure_and_pe_points(self, plot):
+        run = RunAnalysis.__new__(RunAnalysis)
+        run.sim_type = "Expanded_FCC"
+        run.state_row = None
+        run.logs_dataframe = lambda: "logs"
+        run.phase_average_frame_ids = lambda: [1, 2, 3, 4, 5]
+
+        run.plot_logs(
+            quantities=["pressure", "potential_energy_per_particle"]
+        )
+
+        self.assertEqual(
+            plot.call_args.kwargs["skip_initial_by_quantity"],
+            {
+                "pressure": 3,
+                "potential_energy_per_particle": 3,
+                "PE_per_particle": 3,
+            },
+        )
+
     def test_density_profile_counts_equal_volume_x_slabs(self):
         run = RunAnalysis.__new__(RunAnalysis)
         frame = SimpleNamespace(

@@ -143,6 +143,11 @@ figure, density_slices = run.plot_density_profile(
 display(density_slices)
 ```
 
+For `Expanded_FCC`, `plot_logs()` skips the first three pressure and
+potential-energy-per-particle points by default to suppress the initial lattice
+transient. Pass `skip_lattice_transient=False` to show them, or set
+`expanded_lattice_skip_points` to choose a different cutoff.
+
 ## Cavitation states
 
 Cavitation starts from the final frame of a completed, explicitly homogeneous

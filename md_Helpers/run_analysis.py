@@ -331,6 +331,7 @@ class RunAnalysis:
         x: str = "run_step",
         skip_lattice_transient: bool = True,
         lattice_skip_points: int = 10,
+        expanded_lattice_skip_points: int = 3,
     ):
         """Plot logs and mark the frames used by the averaged voxel histogram."""
 
@@ -345,12 +346,24 @@ class RunAnalysis:
         lattice_skip_points = int(lattice_skip_points)
         if lattice_skip_points < 0:
             raise ValueError("lattice_skip_points cannot be negative")
+        expanded_lattice_skip_points = int(expanded_lattice_skip_points)
+        if expanded_lattice_skip_points < 0:
+            raise ValueError(
+                "expanded_lattice_skip_points cannot be negative"
+            )
         skipped = {}
-        if skip_lattice_transient and self.started_from_lattice:
+        if skip_lattice_transient and (
+            self.started_from_lattice or self.sim_type == "Expanded_FCC"
+        ):
+            skip_points = (
+                expanded_lattice_skip_points
+                if self.sim_type == "Expanded_FCC"
+                else lattice_skip_points
+            )
             skipped = {
-                "pressure": lattice_skip_points,
-                "potential_energy_per_particle": lattice_skip_points,
-                "PE_per_particle": lattice_skip_points,
+                "pressure": skip_points,
+                "potential_energy_per_particle": skip_points,
+                "PE_per_particle": skip_points,
             }
         logs = self.logs_dataframe()
         try:
