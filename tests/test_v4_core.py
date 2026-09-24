@@ -236,6 +236,32 @@ class LatticeTests(unittest.TestCase):
         self.assertNotEqual(first.run_signature, second.run_signature)
         self.assertEqual(first.signature_parameters()["sim_type"], "Expanded_FCC")
 
+    def test_expanded_center_length_is_independently_scalable(self):
+        lattice = build_expanded_fcc_lattice(
+            n_cells=3,
+            density=0.6,
+            side_extension=1.0,
+            side_density_divisor=2.0,
+            center_length_scale=2.0,
+        )
+        original_count = 4 * 3**3
+        self.assertEqual(lattice.central_particles, 2 * original_count)
+        self.assertEqual(lattice.particles_per_side, original_count // 2)
+        self.assertEqual(lattice.n_particles, 3 * original_count)
+        self.assertAlmostEqual(
+            lattice.box[0], 4.0 * lattice.original_box_length
+        )
+        self.assertAlmostEqual(lattice.center_density, 0.6)
+
+        default = ExpandedFCCConfig(3, 0.6, 41_000)
+        extended = ExpandedFCCConfig(
+            3,
+            0.6,
+            41_000,
+            center_length_scale=2.0,
+        )
+        self.assertNotEqual(default.run_signature, extended.run_signature)
+
     def test_recenter_uses_unwrapped_mass_weighted_com(self):
         positions = np.array([[4.0, 0.0, 0.0], [-4.0, 0.0, 0.0]])
         images = np.array([[0, 0, 0], [1, 0, 0]])

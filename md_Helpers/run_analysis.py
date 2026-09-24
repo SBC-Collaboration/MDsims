@@ -502,17 +502,19 @@ class RunAnalysis:
 
         if show_reference and self.sim_type == "Expanded_FCC" and axis == "x":
             metadata = self.metadata()
-            original_length = metadata.get(
-                "mdsims/states/source/Original_Box_Length"
+            center_length = metadata.get(
+                "mdsims/protocol/Center_Length",
+                metadata.get("mdsims/states/source/Original_Box_Length"),
             )
             center_density = metadata.get(
-                "mdsims/protocol/Density_Target_Center"
+                "mdsims/protocol/Center_Density_Actual",
+                metadata.get("mdsims/protocol/Density_Target_Center"),
             )
             side_density = metadata.get(
                 "mdsims/protocol/Side_Density_Actual"
             )
-            if original_length is not None:
-                half = float(original_length) / 2.0
+            if center_length is not None:
+                half = float(center_length) / 2.0
                 plot_axis.axvline(
                     -half,
                     color="tab:blue",

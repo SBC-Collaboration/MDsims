@@ -22,8 +22,8 @@ from .thermalization import (
 )
 
 
-EXPANDED_FCC_METHOD_VERSION = "expanded_fcc_side_reservoirs_v2"
-EXPANDED_FCC_LATTICE_VERSION = "fcc_center_thinned_identical_sides_v1"
+EXPANDED_FCC_METHOD_VERSION = "expanded_fcc_side_reservoirs_v3"
+EXPANDED_FCC_LATTICE_VERSION = "scaled_fcc_center_thinned_sides_v2"
 COM_RECENTER_METHOD_VERSION = "mass_weighted_unwrapped_com_v1"
 EXPANDED_FCC_TRAJECTORY_VERSION = "initial_recenter_phase_and_final_v2"
 
@@ -38,6 +38,8 @@ class ExpandedFCCLattice:
     particles_per_side: int
     n_particles: int
     target_density: float
+    center_density: float
+    center_length_scale: float
     side_density: float
     side_extension: float
     side_density_divisor: float
@@ -65,6 +67,7 @@ class ExpandedFCCConfig(ThermalizationConfig):
     side_extension: float = 1.0
     side_density_divisor: float = 2.0
     com_recenter_period: int = 10_000
+    center_length_scale: float = 1.0
 
     def validate(self) -> None:
         self._validate_common()
@@ -74,6 +77,8 @@ class ExpandedFCCConfig(ThermalizationConfig):
             raise ValueError("side_density_divisor must be at least 1")
         if int(self.com_recenter_period) <= 0:
             raise ValueError("com_recenter_period must be positive")
+        if float(self.center_length_scale) <= 0:
+            raise ValueError("center_length_scale must be positive")
         thermalization_phase_frame_schedule(self.nsteps, self.log_period)
 
     def signature_parameters(self) -> dict[str, Any]:
@@ -84,6 +89,7 @@ class ExpandedFCCConfig(ThermalizationConfig):
             "state_creation_version": EXPANDED_FCC_LATTICE_VERSION,
             "side_extension": float(self.side_extension),
             "side_density_divisor": float(self.side_density_divisor),
+            "center_length_scale": float(self.center_length_scale),
             "com_recenter_period": int(self.com_recenter_period),
             "com_recenter_method": COM_RECENTER_METHOD_VERSION,
             "trajectory_storage": EXPANDED_FCC_TRAJECTORY_VERSION,
@@ -147,35 +153,49 @@ def build_expanded_fcc_lattice(
     density: float,
     side_extension: float = 1.0,
     side_density_divisor: float = 2.0,
+    center_length_scale: float = 1.0,
 ) -> ExpandedFCCLattice:
     """Build a central FCC box with identical lower-density boxes beside it."""
 
     side_extension = float(side_extension)
     side_density_divisor = float(side_density_divisor)
+    center_length_scale = float(center_length_scale)
     if side_extension <= 0:
         raise ValueError("side_extension must be positive")
     if side_density_divisor < 1:
         raise ValueError("side_density_divisor must be at least 1")
+    if center_length_scale <= 0:
+        raise ValueError("center_length_scale must be positive")
 
     center = build_fcc_lattice(n_cells, density)
     length = float(center.box_length)
+    center_length = center_length_scale * length
     side_length = side_extension * length
-    tile_count = int(np.ceil(side_extension))
+
+    def tiled_local_sites(length_scale: float) -> np.ndarray:
+        """Repeat the original FCC box into a local x interval."""
+
+        region_length = length_scale * length
+        tiles = []
+        for tile in range(int(np.ceil(length_scale))):
+            local = center.positions.copy()
+            local[:, 0] += length / 2.0 + tile * length
+            tiles.append(local)
+        candidates = np.concatenate(tiles, axis=0)
+        candidates = candidates[candidates[:, 0] < region_length]
+        order = np.lexsort(
+            (candidates[:, 2], candidates[:, 1], candidates[:, 0])
+        )
+        return candidates[order]
+
+    center_local = tiled_local_sites(center_length_scale)
+    center_positions = center_local.copy()
+    center_positions[:, 0] -= center_length / 2.0
 
     # Express repeated FCC sites in coordinates local to a side region. The
     # same selected local sites are then translated into both side boxes,
     # making their initial particle arrangements exactly identical.
-    local_tiles = []
-    for tile in range(tile_count):
-        local = center.positions.copy()
-        local[:, 0] += length / 2.0 + tile * length
-        local_tiles.append(local)
-    candidates = np.concatenate(local_tiles, axis=0)
-    candidates = candidates[candidates[:, 0] < side_length]
-    candidate_order = np.lexsort(
-        (candidates[:, 2], candidates[:, 1], candidates[:, 0])
-    )
-    candidates = candidates[candidate_order]
+    candidates = tiled_local_sites(side_extension)
 
     particles_per_side = int(round(
         center.n_particles * side_extension / side_density_divisor
@@ -191,12 +211,12 @@ def build_expanded_fcc_lattice(
     ]
 
     left = selected.copy()
-    left[:, 0] += -length / 2.0 - side_length
+    left[:, 0] += -center_length / 2.0 - side_length
     right = selected.copy()
-    right[:, 0] += length / 2.0
-    positions = np.concatenate((left, center.positions, right), axis=0)
+    right[:, 0] += center_length / 2.0
+    positions = np.concatenate((left, center_positions, right), axis=0)
     box = np.array([
-        length + 2.0 * side_length,
+        center_length + 2.0 * side_length,
         length,
         length,
         0.0,
@@ -204,13 +224,16 @@ def build_expanded_fcc_lattice(
         0.0,
     ])
     side_density = particles_per_side / (side_length * length**2)
+    center_density = len(center_positions) / (center_length * length**2)
     return ExpandedFCCLattice(
         positions=positions,
         n_cells=int(n_cells),
-        central_particles=int(center.n_particles),
+        central_particles=len(center_positions),
         particles_per_side=particles_per_side,
         n_particles=len(positions),
         target_density=float(density),
+        center_density=float(center_density),
+        center_length_scale=center_length_scale,
         side_density=float(side_density),
         side_extension=side_extension,
         side_density_divisor=side_density_divisor,
@@ -326,6 +349,12 @@ def _metadata(
             "Therm_kT": float(config.kT),
             "Therm_Seed": int(config.seed),
             "Density_Target_Center": float(config.target_rho),
+            "Center_Length_Scale": float(config.center_length_scale),
+            "Center_Length": (
+                float(config.center_length_scale)
+                * float(lattice.original_box_length)
+            ),
+            "Center_Density_Actual": float(lattice.center_density),
             "Side_Extension_Per_Side": float(config.side_extension),
             "Side_Density_Divisor": float(config.side_density_divisor),
             "Side_Density_Actual": float(lattice.side_density),
@@ -394,8 +423,9 @@ def run_expanded_fcc(
     run_id = database.reserve_run_id(max_attempts=3)
     run_paths = project_paths.for_run(EXPANDED_FCC_SIM_TYPE, run_id)
     note = (
-        f"Expanded FCC: {config.side_extension:g} original box length(s) "
-        "added per side; side density divided by "
+        f"Expanded FCC: center length {config.center_length_scale:g}L; "
+        f"{config.side_extension:g} original box length(s) added per side; "
+        "side density divided by "
         f"{config.side_density_divisor:g}."
     )
     if config.notes and str(config.notes).strip():
@@ -422,6 +452,7 @@ def run_expanded_fcc(
             config.target_rho,
             config.side_extension,
             config.side_density_divisor,
+            config.center_length_scale,
         )
         frame = make_expanded_fcc_frame(lattice, config.particle_type)
         simulation, thermo, device_name = _make_simulation_from_frame(
@@ -620,6 +651,8 @@ def run_expanded_fcc(
             "hdf5_path": run_paths.hdf5,
             "n_particles": lattice.n_particles,
             "central_particles": lattice.central_particles,
+            "center_density": lattice.center_density,
+            "center_length_scale": lattice.center_length_scale,
             "particles_per_side": lattice.particles_per_side,
             "side_density": lattice.side_density,
             "num_frames": storage.frame_count,

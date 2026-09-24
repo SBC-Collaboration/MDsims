@@ -92,11 +92,12 @@ Running the same cell again returns the existing SQL record with
 
 `Expanded_FCC` starts from the same central FCC lattice and NVT inputs as
 thermalization, extends the box along x, and places identical lower-density
-particle patterns on the left and right. By default, each side is one original
-box length wide and contains half as many particles as the center, so the full
-box is `3L x L x L`. This workflow is indexed in `MD_Master`; its dedicated SQL
-result table is intentionally deferred, while complete protocol and state
-metadata are retained in `run.hdf5`.
+particle patterns on the left and right. `center_length_scale` controls the
+liquid-region length in units of the original box length, independently of the
+width added on each side. Defaults of `center_length_scale=1` and
+`side_extension=1` produce a `3L x L x L` box. This workflow is indexed in
+`MD_Master`; its dedicated SQL result table is intentionally deferred, while
+complete protocol and state metadata are retained in `run.hdf5`.
 
 ```python
 from md_Helpers import ExpandedFCCConfig, run_expanded_fcc
@@ -109,6 +110,7 @@ config = ExpandedFCCConfig(
     log_period=1_000,
     seed=1,
     dt=0.005,
+    center_length_scale=1.0,
     side_extension=1.0,
     side_density_divisor=2.0,
     com_recenter_period=10_000,
