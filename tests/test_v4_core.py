@@ -48,6 +48,7 @@ from md_Helpers.thermalization import (
 )
 from md_Helpers.voxel_fit import (
     conditional_phase_fit,
+    fit_averaged_voxel_gaussian,
     phase_fit_frame_indices,
     phase_fit_sql_values,
 )
@@ -330,6 +331,29 @@ class PhaseFitPolicyTests(unittest.TestCase):
         )
         self.assertEqual(fit["voxel_nbins"], 7)
         self.assertEqual(fit["n_voxels_per_frame"], 7**3)
+
+    def test_liquid_gaussian_fit_reports_count_and_density_means(self):
+        rng = np.random.default_rng(11)
+        positions = [rng.uniform(-4, 4, size=(4_000, 3)) for _ in range(5)]
+        boxes = [np.array([8, 8, 8, 0, 0, 0], dtype=float)] * 5
+        fit = fit_averaged_voxel_gaussian(
+            positions,
+            boxes,
+            n_cells=30,
+            nbins=10,
+        )
+        self.assertTrue(fit["success"])
+        self.assertEqual(fit["frames_used"], 5)
+        self.assertEqual(fit["n_voxels_per_frame"], 10**3)
+        self.assertEqual(fit["n_voxel_samples"], 5 * 10**3)
+        self.assertAlmostEqual(
+            fit["gaussian_mean_density"],
+            fit["gaussian_mean"] / fit["voxel_volume"],
+        )
+        self.assertEqual(
+            len(fit["gaussian_counts"]),
+            len(fit["observed_counts"]),
+        )
 
     def test_incomplete_trajectory_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "one initial frame"):

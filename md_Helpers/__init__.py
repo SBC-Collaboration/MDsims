@@ -36,6 +36,9 @@ from .seitz import (
 )
 from .nbins_tuning import (
     cavitations_with_nbins_fit,
+    fit_liquid_nbins,
+    plot_liquid_gaussian_mean_vs_nbins,
+    plot_liquid_nbins_gaussians,
     plot_nbins_phase_fits,
     plot_nbins_seitz,
     refit_cavitation_nbins,
@@ -70,8 +73,11 @@ __all__ = [
     "delete_run",
     "master_dataframe",
     "fit_argon_lj_scale",
+    "fit_liquid_nbins",
     "open_run",
     "plot_cavitation_seitz",
+    "plot_liquid_gaussian_mean_vs_nbins",
+    "plot_liquid_nbins_gaussians",
     "plot_nbins_phase_fits",
     "plot_nbins_seitz",
     "query_seitz_eos_states",

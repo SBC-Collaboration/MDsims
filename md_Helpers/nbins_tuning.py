@@ -9,7 +9,11 @@ import numpy as np
 
 from .paths import ProjectPaths
 from .seitz import calculate_cavitation_seitz, query_seitz_eos_states
-from .voxel_fit import PHASE_FIT_SQL_FIELDS, fit_trajectory_voxel_mixture
+from .voxel_fit import (
+    PHASE_FIT_SQL_FIELDS,
+    fit_trajectory_voxel_gaussian,
+    fit_trajectory_voxel_mixture,
+)
 
 
 def _validated_nbins(nbins_values: Iterable[int]) -> list[int]:
@@ -141,6 +145,127 @@ def plot_nbins_phase_fits(fit_results, run_id: str | None = None):
     flat_axes[0].legend(fontsize="small")
     figure.suptitle(f"Voxel-mixture sensitivity: {run_id}")
     return figure, axes
+
+
+def fit_liquid_nbins(
+    state,
+    nbins_values: Iterable[int],
+    *,
+    project_paths: ProjectPaths | None = None,
+    num_frames: int = 5,
+    frame_indices=None,
+    **fit_options: Any,
+):
+    """Fit one Gaussian to a liquid state for each requested voxel resolution.
+
+    ``state`` may be a row-like mapping/Series or a one-row DataFrame with
+    ``Run_ID``, ``N_Cells``, and ``File_Location``.  The trajectory and database
+    remain unchanged; all results are returned in memory.
+    """
+
+    import pandas as pd
+
+    if hasattr(state, "columns"):
+        if len(state) != 1:
+            raise ValueError("state must contain exactly one liquid-state row")
+        row = state.iloc[0]
+    else:
+        row = state
+    required = {"Run_ID", "N_Cells", "File_Location"}
+    missing = required - set(row.index if hasattr(row, "index") else row)
+    if missing:
+        raise ValueError(f"state is missing fields: {sorted(missing)}")
+
+    bins = _validated_nbins(nbins_values)
+    paths = project_paths or ProjectPaths()
+    trajectory_path = _trajectory_path(row, paths)
+    records = []
+    for nbins in bins:
+        fit = fit_trajectory_voxel_gaussian(
+            trajectory_path,
+            int(row["N_Cells"]),
+            num_frames=num_frames,
+            frame_indices=frame_indices,
+            nbins=nbins,
+            **fit_options,
+        )
+        records.append({"Run_ID": str(row["Run_ID"]), **fit})
+    return pd.DataFrame.from_records(records).sort_values("voxel_nbins").reset_index(
+        drop=True
+    )
+
+
+def plot_liquid_nbins_gaussians(fit_results):
+    """Show the averaged histogram and fitted Gaussian for every ``nbins``."""
+
+    import matplotlib.pyplot as plt
+
+    selected = fit_results.sort_values("voxel_nbins")
+    if selected.empty:
+        raise ValueError("fit_results is empty")
+    columns = min(3, len(selected))
+    rows = int(np.ceil(len(selected) / columns))
+    figure, axes = plt.subplots(
+        rows,
+        columns,
+        figsize=(5.2 * columns, 4.0 * rows),
+        squeeze=False,
+        constrained_layout=True,
+    )
+    flat_axes = axes.ravel()
+    for axis, (_, fit) in zip(flat_axes, selected.iterrows()):
+        counts = np.asarray(fit["count_axis"], dtype=float)
+        axis.step(
+            counts,
+            np.asarray(fit["observed_counts"], dtype=float),
+            where="mid",
+            color="black",
+            label="last-5-frame average",
+        )
+        axis.plot(counts, fit["gaussian_counts"], color="tab:red", label="Gaussian")
+        axis.set(
+            title=(
+                f"nbins={int(fit['voxel_nbins'])}, "
+                rf"$\mu$={fit['gaussian_mean']:.4g}, "
+                rf"$\sigma$={fit['gaussian_sigma']:.4g}"
+            ),
+            xlabel="Particles per voxel",
+            ylabel="Mean number of voxels",
+        )
+        axis.grid(alpha=0.25)
+    for axis in flat_axes[len(selected):]:
+        axis.set_visible(False)
+    flat_axes[0].legend(fontsize="small")
+    figure.suptitle(f"Liquid voxel Gaussian fits: {selected.iloc[0]['Run_ID']}")
+    return figure, axes
+
+
+def plot_liquid_gaussian_mean_vs_nbins(fit_results, *, density: bool = False):
+    """Plot fitted Gaussian mean (and its uncertainty) against ``nbins``."""
+
+    import matplotlib.pyplot as plt
+
+    selected = fit_results.sort_values("voxel_nbins")
+    if selected.empty:
+        raise ValueError("fit_results is empty")
+    mean_column = "gaussian_mean_density" if density else "gaussian_mean"
+    uncertainty_column = f"{mean_column}_unc"
+    y_label = "Gaussian mean density" if density else "Gaussian mean (particles/voxel)"
+    figure, axis = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
+    axis.errorbar(
+        selected["voxel_nbins"],
+        selected[mean_column],
+        yerr=selected[uncertainty_column],
+        marker="o",
+        capsize=3,
+    )
+    axis.set(
+        xlabel="nbins (per box dimension)",
+        ylabel=y_label,
+        title="Liquid Gaussian mean vs voxel resolution",
+    )
+    axis.grid(alpha=0.3)
+    return figure, axis
 
 
 def plot_nbins_seitz(

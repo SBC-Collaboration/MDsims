@@ -462,6 +462,182 @@ def fit_trajectory_voxel_mixture(
     return fit
 
 
+def fit_averaged_voxel_gaussian(
+    positions_by_frame: Sequence[np.ndarray],
+    boxes_by_frame: Sequence[np.ndarray],
+    n_cells: int,
+    frame_indices: Sequence[int] | None = None,
+    max_iterations: int = 500,
+    nbins: int | None = None,
+) -> dict[str, Any]:
+    """Fit one Gaussian to a homogeneous liquid's averaged voxel histogram.
+
+    The fit is performed in particle-count space with a bin-integrated normal
+    distribution.  Density-space parameters are also returned so studies at
+    different voxel resolutions can distinguish occupancy changes from actual
+    density changes.
+    """
+
+    from scipy.optimize import minimize
+    from scipy.stats import norm
+
+    positions_by_frame = list(positions_by_frame)
+    boxes_by_frame = list(boxes_by_frame)
+    if not positions_by_frame or len(positions_by_frame) != len(boxes_by_frame):
+        raise ValueError("positions_by_frame and boxes_by_frame must have equal length")
+    if int(max_iterations) <= 0:
+        raise ValueError("max_iterations must be positive")
+
+    nbins = voxel_bins_for_ncells(n_cells) if nbins is None else int(nbins)
+    if nbins <= 0:
+        raise ValueError("nbins must be positive")
+
+    histograms = []
+    voxel_volumes = []
+    box_volumes = []
+    for positions, box in zip(positions_by_frame, boxes_by_frame):
+        histogram, voxel_volume, box_volume = _voxel_count_histogram(
+            positions,
+            box,
+            nbins,
+        )
+        histograms.append(histogram)
+        voxel_volumes.append(voxel_volume)
+        box_volumes.append(box_volume)
+
+    max_count_bins = max(len(histogram) for histogram in histograms)
+    padded = np.zeros((len(histograms), max_count_bins), dtype=float)
+    for row, histogram in enumerate(histograms):
+        padded[row, : len(histogram)] = histogram
+    observed_average = np.mean(padded, axis=0)
+    observed = observed_average * len(histograms)
+    count_axis = np.arange(max_count_bins, dtype=float)
+    voxel_volume = float(np.mean(voxel_volumes))
+
+    sample_count = float(observed.sum())
+    mean_guess = float(np.average(count_axis, weights=observed))
+    variance_guess = float(
+        np.average((count_axis - mean_guess) ** 2, weights=observed)
+    )
+    sigma_guess = max(0.1, np.sqrt(variance_guess))
+
+    def probabilities(mean, sigma):
+        lower = count_axis - 0.5
+        lower[count_axis == 0] = -np.inf
+        return norm.cdf(count_axis + 0.5, mean, sigma) - norm.cdf(
+            lower,
+            mean,
+            sigma,
+        )
+
+    def objective(parameters):
+        mean = parameters[0]
+        sigma = np.exp(parameters[1])
+        probability = probabilities(mean, sigma)
+        return float(-np.dot(observed, np.log(np.clip(probability, 1e-300, None))))
+
+    maximum_count = max(2.0, float(count_axis[-1]))
+    optimum = minimize(
+        objective,
+        np.array([mean_guess, np.log(sigma_guess)]),
+        method="L-BFGS-B",
+        bounds=[
+            (0.0, 2.0 * maximum_count),
+            (np.log(0.05), np.log(maximum_count)),
+        ],
+        options={"maxiter": int(max_iterations)},
+    )
+    gaussian_mean = float(optimum.x[0])
+    gaussian_sigma = float(np.exp(optimum.x[1]))
+    hessian = _finite_difference_hessian(objective, optimum.x)
+    try:
+        covariance = np.linalg.inv(hessian)
+        covariance_method = "inverse_hessian"
+    except np.linalg.LinAlgError:
+        covariance = np.linalg.pinv(hessian)
+        covariance_method = "pseudo_inverse_hessian"
+    covariance = 0.5 * (covariance + covariance.T)
+    mean_uncertainty = _standard_uncertainty(np.array([1.0, 0.0]), covariance)
+    sigma_uncertainty = _standard_uncertainty(
+        np.array([0.0, gaussian_sigma]), covariance
+    )
+    gaussian_counts = float(nbins**3) * probabilities(
+        gaussian_mean,
+        gaussian_sigma,
+    )
+
+    return {
+        "success": bool(optimum.success),
+        "message": str(optimum.message),
+        "method": "averaged_voxel_histogram_single_gaussian",
+        "method_version": PHASE_FIT_METHOD_VERSION,
+        "voxel_nbins": int(nbins),
+        "frames_used": int(len(histograms)),
+        "frame_indices": list(frame_indices) if frame_indices is not None else None,
+        "trajectory_frame_selection": "terminal_saved_frames",
+        "histogram_aggregation": "arithmetic_mean",
+        "count_axis": count_axis,
+        "density_axis": count_axis / voxel_volume,
+        "individual_histograms": padded,
+        "observed_counts": observed_average,
+        "gaussian_counts": gaussian_counts,
+        "gaussian_mean": gaussian_mean,
+        "gaussian_mean_unc": mean_uncertainty,
+        "gaussian_sigma": gaussian_sigma,
+        "gaussian_sigma_unc": sigma_uncertainty,
+        "gaussian_mean_density": gaussian_mean / voxel_volume,
+        "gaussian_mean_density_unc": mean_uncertainty / voxel_volume,
+        "gaussian_sigma_density": gaussian_sigma / voxel_volume,
+        "gaussian_sigma_density_unc": sigma_uncertainty / voxel_volume,
+        "n_voxels_per_frame": int(nbins**3),
+        "n_voxel_samples": int(sample_count),
+        "voxel_volume": voxel_volume,
+        "box_volume": float(np.mean(box_volumes)),
+        "max_iterations": int(max_iterations),
+        "uncertainty_method": covariance_method,
+        "parameter_covariance": covariance,
+        "log_likelihood": -float(optimum.fun),
+    }
+
+
+def fit_trajectory_voxel_gaussian(
+    trajectory_path: str | Path,
+    n_cells: int,
+    num_frames: int = PHASE_FIT_NUM_FRAMES,
+    frame_indices: Sequence[int] | None = None,
+    **fit_options: Any,
+) -> dict[str, Any]:
+    """Fit one Gaussian to selected frames of a homogeneous-liquid trajectory."""
+
+    import gsd.hoomd
+
+    with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
+        indices = (
+            phase_fit_frame_indices(len(trajectory), num_frames)
+            if frame_indices is None
+            else [int(index) for index in frame_indices]
+        )
+        if not indices:
+            raise ValueError("At least one Gaussian-fit frame is required")
+        if any(index < 0 or index >= len(trajectory) for index in indices):
+            raise IndexError("A Gaussian-fit frame index is outside the trajectory")
+        positions = []
+        boxes = []
+        for index in indices:
+            frame = trajectory[index]
+            positions.append(np.asarray(frame.particles.position, dtype=np.float64))
+            boxes.append(np.asarray(frame.configuration.box, dtype=np.float64))
+    fit = fit_averaged_voxel_gaussian(
+        positions,
+        boxes,
+        n_cells,
+        frame_indices=indices,
+        **fit_options,
+    )
+    fit["requested_frames"] = int(num_frames) if frame_indices is None else len(indices)
+    return fit
+
+
 def conditional_phase_fit(
     voxel_classification: dict[str, Any],
     trajectory_path: str | Path,
