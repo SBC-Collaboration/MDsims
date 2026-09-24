@@ -196,7 +196,7 @@ def fit_liquid_nbins(
 
 
 def plot_liquid_nbins_gaussians(fit_results):
-    """Show each density histogram, fitted Gaussian, and data-minus-fit residual."""
+    """Show each Gaussian fit with raw and standardized residuals."""
 
     import matplotlib.pyplot as plt
 
@@ -206,25 +206,46 @@ def plot_liquid_nbins_gaussians(fit_results):
     columns = min(3, len(selected))
     rows = int(np.ceil(len(selected) / columns))
     figure, axes = plt.subplots(
-        2 * rows,
+        3 * rows,
         columns,
-        figsize=(5.2 * columns, 5.2 * rows),
+        figsize=(5.2 * columns, 6.8 * rows),
         squeeze=False,
         constrained_layout=True,
         gridspec_kw={
             "height_ratios": [
-                value for _ in range(rows) for value in (3, 1)
+                value for _ in range(rows) for value in (3, 1, 1)
             ]
         },
     )
     panel_axes = []
     for panel_index, (_, fit) in enumerate(selected.iterrows()):
         panel_row, column = divmod(panel_index, columns)
-        axis = axes[2 * panel_row, column]
-        residual_axis = axes[2 * panel_row + 1, column]
+        axis = axes[3 * panel_row, column]
+        residual_axis = axes[3 * panel_row + 1, column]
+        standardized_axis = axes[3 * panel_row + 2, column]
         density = np.asarray(fit["density_axis"], dtype=float)
         observed = np.asarray(fit["observed_counts"], dtype=float)
         fitted = np.asarray(fit["gaussian_counts"], dtype=float)
+        residual = observed - fitted
+        frames_used = int(fit["frames_used"])
+        voxels_per_frame = int(fit["n_voxels_per_frame"])
+        fitted_probability = fitted / voxels_per_frame
+        residual_variance = (
+            voxels_per_frame
+            * fitted_probability
+            * (1.0 - fitted_probability)
+            / frames_used
+        )
+        expected_total = fitted * frames_used
+        standardized = np.full_like(residual, np.nan, dtype=float)
+        valid = (
+            (expected_total >= 5.0)
+            & np.isfinite(residual_variance)
+            & (residual_variance > 0.0)
+        )
+        standardized[valid] = residual[valid] / np.sqrt(
+            residual_variance[valid]
+        )
         axis.step(
             density,
             observed,
@@ -244,21 +265,45 @@ def plot_liquid_nbins_gaussians(fit_results):
         axis.grid(alpha=0.25)
         residual_axis.step(
             density,
-            observed - fitted,
+            residual,
             where="mid",
             color="tab:blue",
         )
         residual_axis.axhline(0.0, color="black", linewidth=0.8)
         residual_axis.set(
-            xlabel="Voxel density",
             ylabel="Data − fit\n(voxels)",
         )
         residual_axis.grid(alpha=0.25)
-        panel_axes.append((axis, residual_axis))
+        standardized_axis.step(
+            density,
+            standardized,
+            where="mid",
+            color="tab:green",
+        )
+        standardized_axis.axhline(0.0, color="black", linewidth=0.8)
+        standardized_axis.axhline(
+            2.0,
+            color="tab:orange",
+            linestyle="--",
+            linewidth=0.9,
+        )
+        standardized_axis.axhline(
+            -2.0,
+            color="tab:orange",
+            linestyle="--",
+            linewidth=0.9,
+        )
+        standardized_axis.set(
+            xlabel="Voxel density",
+            ylabel="Standardized\nresidual",
+        )
+        standardized_axis.grid(alpha=0.25)
+        panel_axes.append((axis, residual_axis, standardized_axis))
     for panel_index in range(len(selected), rows * columns):
         panel_row, column = divmod(panel_index, columns)
-        axes[2 * panel_row, column].set_visible(False)
-        axes[2 * panel_row + 1, column].set_visible(False)
+        axes[3 * panel_row, column].set_visible(False)
+        axes[3 * panel_row + 1, column].set_visible(False)
+        axes[3 * panel_row + 2, column].set_visible(False)
     panel_axes[0][0].legend(fontsize="small")
     figure.suptitle(f"Liquid voxel Gaussian fits: {selected.iloc[0]['Run_ID']}")
     return figure, axes
