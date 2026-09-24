@@ -400,13 +400,21 @@ class RunAnalysis:
             phase_fit_status = (
                 self.state_row.get("Phase_Fit_Status") if self.state_row else fit.get("status")
             )
-            if phase_fit_status == "Complete" and recompute_missing:
+            should_recompute = (
+                phase_fit_status == "Complete"
+                or self.sim_type == "Expanded_FCC"
+            )
+            if should_recompute and recompute_missing:
                 fit = fit_trajectory_voxel_mixture(
                     self.trajectory_path,
                     int(self.master_row["N_Cells"]),
                     frame_indices=frame_ids,
                 )
-                title = "Reconstructed averaged histogram and fit"
+                title = (
+                    "Expanded FCC averaged histogram and on-demand fit"
+                    if self.sim_type == "Expanded_FCC"
+                    else "Reconstructed averaged histogram and fit"
+                )
             else:
                 fit = averaged_trajectory_voxel_histogram(
                     self.trajectory_path,
@@ -418,6 +426,131 @@ class RunAnalysis:
         else:
             title = "Saved averaged voxel histogram and phase fit"
         return plot_phase_histogram(fit, title=title)
+
+    def density_profile(
+        self,
+        frame: int = -1,
+        num_slices: int = 60,
+        axis: str = "x",
+    ):
+        """Return number density in equal-volume slabs of one saved frame."""
+
+        import pandas as pd
+
+        axis = str(axis).lower()
+        if axis not in {"x", "y", "z"}:
+            raise ValueError("axis must be 'x', 'y', or 'z'")
+        num_slices = int(num_slices)
+        if num_slices <= 0:
+            raise ValueError("num_slices must be positive")
+
+        saved = self.load_frame(frame)
+        box = np.asarray(saved.configuration.box, dtype=float)
+        if box.shape != (6,) or np.any(box[:3] <= 0):
+            raise ValueError("frame has an invalid HOOMD box")
+        if not np.allclose(box[3:], 0.0):
+            raise ValueError(
+                "density_profile currently requires an orthorhombic box"
+            )
+
+        axis_index = {"x": 0, "y": 1, "z": 2}[axis]
+        length = float(box[axis_index])
+        positions = np.asarray(saved.particles.position, dtype=float)
+        coordinate = (
+            positions[:, axis_index] + length / 2.0
+        ) % length - length / 2.0
+        edges = np.linspace(-length / 2.0, length / 2.0, num_slices + 1)
+        counts, _ = np.histogram(coordinate, bins=edges)
+        slice_volume = float(np.prod(box[:3])) / num_slices
+        return pd.DataFrame({
+            "slice": np.arange(num_slices, dtype=int),
+            f"{axis}_lower": edges[:-1],
+            f"{axis}_center": 0.5 * (edges[:-1] + edges[1:]),
+            f"{axis}_upper": edges[1:],
+            "particle_count": counts.astype(int),
+            "slice_volume": np.full(num_slices, slice_volume),
+            "number_density": counts / slice_volume,
+        })
+
+    def plot_density_profile(
+        self,
+        frame: int = -1,
+        num_slices: int = 60,
+        axis: str = "x",
+        show_reference: bool = True,
+    ):
+        """Plot slab number density and return ``(figure, profile_table)``."""
+
+        import matplotlib.pyplot as plt
+
+        axis = str(axis).lower()
+        profile = self.density_profile(
+            frame=frame,
+            num_slices=num_slices,
+            axis=axis,
+        )
+        center_column = f"{axis}_center"
+        figure, plot_axis = plt.subplots(figsize=(10, 4.5))
+        plot_axis.step(
+            profile[center_column].to_numpy(),
+            profile["number_density"].to_numpy(),
+            where="mid",
+            color="black",
+            linewidth=1.7,
+            label="Saved-frame slab density",
+        )
+
+        if show_reference and self.sim_type == "Expanded_FCC" and axis == "x":
+            metadata = self.metadata()
+            original_length = metadata.get(
+                "mdsims/states/source/Original_Box_Length"
+            )
+            center_density = metadata.get(
+                "mdsims/protocol/Density_Target_Center"
+            )
+            side_density = metadata.get(
+                "mdsims/protocol/Side_Density_Actual"
+            )
+            if original_length is not None:
+                half = float(original_length) / 2.0
+                plot_axis.axvline(
+                    -half,
+                    color="tab:blue",
+                    linestyle="--",
+                    linewidth=1.2,
+                    label="Initial center-region boundaries",
+                )
+                plot_axis.axvline(
+                    half,
+                    color="tab:blue",
+                    linestyle="--",
+                    linewidth=1.2,
+                )
+            if center_density is not None:
+                plot_axis.axhline(
+                    float(center_density),
+                    color="tab:green",
+                    linestyle=":",
+                    linewidth=1.4,
+                    label="Initial center density",
+                )
+            if side_density is not None:
+                plot_axis.axhline(
+                    float(side_density),
+                    color="tab:orange",
+                    linestyle=":",
+                    linewidth=1.4,
+                    label="Initial side density",
+                )
+
+        plot_axis.set_xlabel(f"{axis} position")
+        plot_axis.set_ylabel("Number density")
+        plot_axis.set_title(f"Frame {frame}: density in {num_slices} {axis}-slabs")
+        plot_axis.grid(alpha=0.3)
+        plot_axis.legend()
+        figure.tight_layout()
+        plt.show()
+        return figure, profile
 
 
 def open_run(

@@ -327,14 +327,17 @@ def plot_log_dataframe(
         if skip < 0:
             raise ValueError("Initial log points to skip cannot be negative")
         plotted = dataframe.iloc[skip:]
-        axis.plot(plotted[x], plotted[quantity])
+        axis.plot(
+            plotted[x].to_numpy(),
+            plotted[quantity].to_numpy(),
+        )
         if highlight_frame_ids:
             highlighted = plotted.loc[
                 plotted["trajectory_frame_id"].isin(highlight_frame_ids)
             ]
             axis.scatter(
-                highlighted[x],
-                highlighted[quantity],
+                highlighted[x].to_numpy(),
+                highlighted[quantity].to_numpy(),
                 color="red",
                 s=28,
                 zorder=3,

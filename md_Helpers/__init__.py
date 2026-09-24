@@ -20,6 +20,7 @@ from .cavitation import CavitationConfig, run_cavitation
 from .expanded_fcc import (
     ExpandedFCCConfig,
     build_expanded_fcc_lattice,
+    expanded_fcc_frame_schedule,
     recenter_snapshot_arrays,
     run_expanded_fcc,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "cavitation_dataframe",
     "calculate_cavitation_seitz",
     "build_expanded_fcc_lattice",
+    "expanded_fcc_frame_schedule",
     "cavitations_with_nbins_fit",
     "display_cavitation_table",
     "display_master_table",

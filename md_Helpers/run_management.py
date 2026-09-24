@@ -49,7 +49,9 @@ def _validated_run_directory(
             "Refusing deletion because File_Location does not match the "
             f"canonical run directory: {candidate} != {expected}"
         )
-    if not candidate.is_relative_to(top_directory):
+    try:
+        candidate.relative_to(top_directory)
+    except ValueError:
         raise RuntimeError(
             f"Refusing to delete a directory outside {top_directory}"
         )

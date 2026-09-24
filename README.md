@@ -122,6 +122,25 @@ the box center initially and every `com_recenter_period` steps. A trajectory
 frame is saved immediately after each recenter; the initial state and a distinct
 final step are also saved.
 
+Existing inspection calls work for these runs. As in thermalization,
+`plot_phase_fit()` uses exactly five scheduled terminal log frames separated by
+ten log intervals; these frames are saved in addition to COM-recenter frames,
+and their exact trajectory IDs are recorded in HDF5. The fit is computed on
+demand. The final-frame density along the extended x direction is available as
+both a table and a plot:
+
+```python
+run = open_run(result["run_id"])
+run.plot_logs()
+run.plot_phase_fit()
+
+figure, density_slices = run.plot_density_profile(
+    frame=-1,
+    num_slices=60,
+)
+display(density_slices)
+```
+
 ## Cavitation states
 
 Cavitation starts from the final frame of a completed, explicitly homogeneous

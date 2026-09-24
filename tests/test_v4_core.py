@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -26,6 +27,7 @@ from md_Helpers.lattices import build_fcc_lattice
 from md_Helpers.expanded_fcc import (
     ExpandedFCCConfig,
     build_expanded_fcc_lattice,
+    expanded_fcc_frame_schedule,
     recenter_snapshot_arrays,
 )
 from md_Helpers.paths import ProjectPaths
@@ -228,8 +230,8 @@ class LatticeTests(unittest.TestCase):
         np.testing.assert_allclose(left, right)
 
     def test_expanded_signature_includes_side_controls(self):
-        first = ExpandedFCCConfig(3, 0.6, 100, side_extension=1.0)
-        second = ExpandedFCCConfig(3, 0.6, 100, side_extension=2.0)
+        first = ExpandedFCCConfig(3, 0.6, 41_000, side_extension=1.0)
+        second = ExpandedFCCConfig(3, 0.6, 41_000, side_extension=2.0)
         first.validate()
         self.assertNotEqual(first.run_signature, second.run_signature)
         self.assertEqual(first.signature_parameters()["sim_type"], "Expanded_FCC")
@@ -249,6 +251,25 @@ class LatticeTests(unittest.TestCase):
             np.average(unwrapped, axis=0, weights=[1.0, 3.0]),
             0.0,
             atol=1e-14,
+        )
+
+    def test_expanded_schedule_unions_com_and_exact_phase_frames(self):
+        schedule = expanded_fcc_frame_schedule(
+            nsteps=100_000,
+            log_period=1_000,
+            com_recenter_period=15_000,
+        )
+        self.assertEqual(
+            [item["run_step"] for item in schedule if item["phase_frame"]],
+            [60_000, 70_000, 80_000, 90_000, 100_000],
+        )
+        self.assertEqual(
+            [
+                item["run_step"]
+                for item in schedule
+                if item["com_recenter_frame"]
+            ],
+            [15_000, 30_000, 45_000, 60_000, 75_000, 90_000],
         )
 
 
@@ -445,6 +466,29 @@ class RunPlotPolicyTests(unittest.TestCase):
             plot.call_args.kwargs["skip_initial_by_quantity"],
             {},
         )
+
+    def test_density_profile_counts_equal_volume_x_slabs(self):
+        run = RunAnalysis.__new__(RunAnalysis)
+        frame = SimpleNamespace(
+            configuration=SimpleNamespace(
+                box=np.array([10.0, 2.0, 2.0, 0.0, 0.0, 0.0])
+            ),
+            particles=SimpleNamespace(
+                position=np.array([
+                    [-4.0, 0.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [4.0, 0.0, 0.0],
+                ])
+            ),
+        )
+        run.load_frame = lambda _frame: frame
+
+        profile = run.density_profile(frame=-1, num_slices=2)
+
+        self.assertEqual(profile["particle_count"].tolist(), [2, 2])
+        np.testing.assert_allclose(profile["slice_volume"], [20.0, 20.0])
+        np.testing.assert_allclose(profile["number_density"], [0.1, 0.1])
 
 
 class DatabaseTests(unittest.TestCase):

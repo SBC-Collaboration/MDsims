@@ -18,12 +18,14 @@ from .thermalization import (
     _failure_update,
     _make_simulation_from_frame,
     _state_metadata,
+    thermalization_phase_frame_schedule,
 )
 
 
-EXPANDED_FCC_METHOD_VERSION = "expanded_fcc_side_reservoirs_v1"
+EXPANDED_FCC_METHOD_VERSION = "expanded_fcc_side_reservoirs_v2"
 EXPANDED_FCC_LATTICE_VERSION = "fcc_center_thinned_identical_sides_v1"
 COM_RECENTER_METHOD_VERSION = "mass_weighted_unwrapped_com_v1"
+EXPANDED_FCC_TRAJECTORY_VERSION = "initial_recenter_phase_and_final_v2"
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class ExpandedFCCConfig(ThermalizationConfig):
             raise ValueError("side_density_divisor must be at least 1")
         if int(self.com_recenter_period) <= 0:
             raise ValueError("com_recenter_period must be positive")
+        thermalization_phase_frame_schedule(self.nsteps, self.log_period)
 
     def signature_parameters(self) -> dict[str, Any]:
         parameters = super().signature_parameters()
@@ -83,7 +86,7 @@ class ExpandedFCCConfig(ThermalizationConfig):
             "side_density_divisor": float(self.side_density_divisor),
             "com_recenter_period": int(self.com_recenter_period),
             "com_recenter_method": COM_RECENTER_METHOD_VERSION,
-            "trajectory_storage": "initial_recenter_events_and_final_v1",
+            "trajectory_storage": EXPANDED_FCC_TRAJECTORY_VERSION,
         })
         return parameters
 
@@ -104,6 +107,39 @@ def _evenly_spaced_indices(candidate_count: int, selected_count: int) -> np.ndar
         * candidate_count
         / selected_count
     ).astype(np.int64)
+
+
+def expanded_fcc_frame_schedule(
+    nsteps: int,
+    log_period: int,
+    com_recenter_period: int = 10_000,
+) -> list[dict[str, Any]]:
+    """Return the union of COM, phase-analysis, and final saved frames."""
+
+    nsteps = int(nsteps)
+    com_recenter_period = int(com_recenter_period)
+    if com_recenter_period <= 0:
+        raise ValueError("com_recenter_period must be positive")
+    phase_steps = {
+        int(item["run_step"])
+        for item in thermalization_phase_frame_schedule(nsteps, log_period)
+    }
+    recenter_steps = set(range(
+        com_recenter_period,
+        nsteps + 1,
+        com_recenter_period,
+    ))
+    saved_steps = sorted(phase_steps | recenter_steps | {nsteps})
+    return [
+        {
+            "trajectory_frame_id": frame_id,
+            "run_step": step,
+            "com_recenter_frame": step in recenter_steps,
+            "phase_frame": step in phase_steps,
+            "final_frame": step == nsteps,
+        }
+        for frame_id, step in enumerate(saved_steps, start=1)
+    ]
 
 
 def build_expanded_fcc_lattice(
@@ -317,9 +353,7 @@ def _metadata(
             "HDF5_Path": f"{relative}/run.hdf5",
             "Log_Period": int(config.log_period),
             "Progress_Update_Period": int(config.progress_period),
-            "Trajectory_Storage_Method": (
-                "initial_recenter_events_and_final_v1"
-            ),
+            "Trajectory_Storage_Method": EXPANDED_FCC_TRAJECTORY_VERSION,
         },
         "mdsims/states/source": {
             "N_Particles": int(lattice.n_particles),
@@ -396,6 +430,20 @@ def run_expanded_fcc(
             thermalize_momenta=True,
             ensemble="NVT",
         )
+        frame_schedule = expanded_fcc_frame_schedule(
+            config.nsteps,
+            config.log_period,
+            config.com_recenter_period,
+        )
+        phase_frame_steps = {
+            int(item["run_step"])
+            for item in frame_schedule
+            if item["phase_frame"]
+        }
+        saved_frame_steps = {
+            int(item["run_step"])
+            for item in frame_schedule
+        }
         storage = RunStorage(run_paths)
         storage.open(_metadata(
             run_id, config, run_paths, lattice, device_name
@@ -466,7 +514,7 @@ def run_expanded_fcc(
                     thermo,
                     current_step,
                     config.dt,
-                    save_frame=recenter_now or final_now,
+                    save_frame=current_step in saved_frame_steps,
                 )
                 while next_log <= current_step:
                     next_log += int(config.log_period)
@@ -483,14 +531,27 @@ def run_expanded_fcc(
                 while next_progress <= current_step:
                     next_progress += int(config.progress_period)
 
-        expected_frames = 1 + len(recenter_steps)
-        if not recenter_steps or recenter_steps[-1] != int(config.nsteps):
-            expected_frames += 1
+        expected_frames = 1 + len(frame_schedule)
         if storage.frame_count != expected_frames:
             raise RuntimeError(
                 f"Expanded FCC saved {storage.frame_count} frames; "
                 f"expected {expected_frames}"
             )
+
+        phase_records = [
+            record
+            for record in storage.frame_records
+            if int(record["run_step"]) in phase_frame_steps
+        ]
+        if len(phase_records) != 5:
+            raise RuntimeError(
+                "Expanded FCC did not save the five scheduled phase-analysis "
+                "frames"
+            )
+        phase_frame_ids = [
+            int(record["trajectory_frame_id"])
+            for record in phase_records
+        ]
 
         end_time = utc_now()
         storage.write_metadata({
@@ -530,6 +591,11 @@ def run_expanded_fcc(
                     for record in storage.frame_records
                 ],
                 "Num_Frames": int(storage.frame_count),
+                "Phase_Average_Trajectory_Frame_IDs": phase_frame_ids,
+                "Phase_Average_Run_Steps": [
+                    int(record["run_step"])
+                    for record in phase_records
+                ],
             },
         })
         storage.close()
