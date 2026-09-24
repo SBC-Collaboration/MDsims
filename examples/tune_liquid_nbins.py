@@ -33,7 +33,7 @@ trial_fits = fit_liquid_nbins(
 shape_figure, shape_axes = plot_liquid_nbins_gaussians(trial_fits)
 plt.show()
 
-# Requested summary: fitted Gaussian mean on y, nbins on x.
+# Requested summary: fitted Gaussian mean density on y, nbins on x.
 mean_figure, mean_axis = plot_liquid_gaussian_mean_vs_nbins(trial_fits)
 plt.show()
 

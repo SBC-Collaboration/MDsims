@@ -196,7 +196,7 @@ def fit_liquid_nbins(
 
 
 def plot_liquid_nbins_gaussians(fit_results):
-    """Show the averaged histogram and fitted Gaussian for every ``nbins``."""
+    """Show each density histogram, fitted Gaussian, and data-minus-fit residual."""
 
     import matplotlib.pyplot as plt
 
@@ -206,41 +206,65 @@ def plot_liquid_nbins_gaussians(fit_results):
     columns = min(3, len(selected))
     rows = int(np.ceil(len(selected) / columns))
     figure, axes = plt.subplots(
-        rows,
+        2 * rows,
         columns,
-        figsize=(5.2 * columns, 4.0 * rows),
+        figsize=(5.2 * columns, 5.2 * rows),
         squeeze=False,
         constrained_layout=True,
+        gridspec_kw={
+            "height_ratios": [
+                value for _ in range(rows) for value in (3, 1)
+            ]
+        },
     )
-    flat_axes = axes.ravel()
-    for axis, (_, fit) in zip(flat_axes, selected.iterrows()):
-        counts = np.asarray(fit["count_axis"], dtype=float)
+    panel_axes = []
+    for panel_index, (_, fit) in enumerate(selected.iterrows()):
+        panel_row, column = divmod(panel_index, columns)
+        axis = axes[2 * panel_row, column]
+        residual_axis = axes[2 * panel_row + 1, column]
+        density = np.asarray(fit["density_axis"], dtype=float)
+        observed = np.asarray(fit["observed_counts"], dtype=float)
+        fitted = np.asarray(fit["gaussian_counts"], dtype=float)
         axis.step(
-            counts,
-            np.asarray(fit["observed_counts"], dtype=float),
+            density,
+            observed,
             where="mid",
             color="black",
             label="last-5-frame average",
         )
-        axis.plot(counts, fit["gaussian_counts"], color="tab:red", label="Gaussian")
+        axis.plot(density, fitted, color="tab:red", label="Gaussian")
         axis.set(
             title=(
                 f"nbins={int(fit['voxel_nbins'])}, "
-                rf"$\mu$={fit['gaussian_mean']:.4g}, "
-                rf"$\sigma$={fit['gaussian_sigma']:.4g}"
+                rf"$\mu_\rho$={fit['gaussian_mean_density']:.4g}, "
+                rf"$\sigma_\rho$={fit['gaussian_sigma_density']:.4g}"
             ),
-            xlabel="Particles per voxel",
             ylabel="Mean number of voxels",
         )
         axis.grid(alpha=0.25)
-    for axis in flat_axes[len(selected):]:
-        axis.set_visible(False)
-    flat_axes[0].legend(fontsize="small")
+        residual_axis.step(
+            density,
+            observed - fitted,
+            where="mid",
+            color="tab:blue",
+        )
+        residual_axis.axhline(0.0, color="black", linewidth=0.8)
+        residual_axis.set(
+            xlabel="Voxel density",
+            ylabel="Data − fit\n(voxels)",
+        )
+        residual_axis.grid(alpha=0.25)
+        panel_axes.append((axis, residual_axis))
+    for panel_index in range(len(selected), rows * columns):
+        panel_row, column = divmod(panel_index, columns)
+        axes[2 * panel_row, column].set_visible(False)
+        axes[2 * panel_row + 1, column].set_visible(False)
+    panel_axes[0][0].legend(fontsize="small")
     figure.suptitle(f"Liquid voxel Gaussian fits: {selected.iloc[0]['Run_ID']}")
     return figure, axes
 
 
-def plot_liquid_gaussian_mean_vs_nbins(fit_results, *, density: bool = False):
+def plot_liquid_gaussian_mean_vs_nbins(fit_results, *, density: bool = True):
     """Plot fitted Gaussian mean (and its uncertainty) against ``nbins``."""
 
     import matplotlib.pyplot as plt
@@ -250,7 +274,7 @@ def plot_liquid_gaussian_mean_vs_nbins(fit_results, *, density: bool = False):
         raise ValueError("fit_results is empty")
     mean_column = "gaussian_mean_density" if density else "gaussian_mean"
     uncertainty_column = f"{mean_column}_unc"
-    y_label = "Gaussian mean density" if density else "Gaussian mean (particles/voxel)"
+    y_label = "Gaussian mean voxel density" if density else "Gaussian mean occupancy"
     figure, axis = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
     axis.errorbar(
         selected["voxel_nbins"],
