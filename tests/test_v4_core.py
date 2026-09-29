@@ -237,6 +237,64 @@ class LatticeTests(unittest.TestCase):
         self.assertNotEqual(first.run_signature, second.run_signature)
         self.assertEqual(first.signature_parameters()["sim_type"], "Expanded_FCC")
 
+    def test_expanded_linear_interface_only_thins_center_edges(self):
+        sharp = build_expanded_fcc_lattice(
+            n_cells=4,
+            density=0.6,
+            side_extension=1.0,
+            side_density_divisor=4.0,
+            center_length_scale=2.0,
+        )
+        width = sharp.original_box_length / 2.0
+        linear = build_expanded_fcc_lattice(
+            n_cells=4,
+            density=0.6,
+            side_extension=1.0,
+            side_density_divisor=4.0,
+            center_length_scale=2.0,
+            interface="Linear",
+            interface_width=width,
+        )
+
+        self.assertEqual(linear.interface, "Linear")
+        self.assertAlmostEqual(linear.interface_width, width)
+        self.assertGreater(linear.interface_particles_removed, 0)
+        self.assertEqual(
+            linear.central_particles,
+            sharp.central_particles - linear.interface_particles_removed,
+        )
+        self.assertEqual(linear.particles_per_side, sharp.particles_per_side)
+        self.assertAlmostEqual(linear.side_density, sharp.side_density)
+        np.testing.assert_allclose(linear.box, sharp.box)
+
+        side_count = sharp.particles_per_side
+        np.testing.assert_allclose(
+            linear.positions[:side_count], sharp.positions[:side_count]
+        )
+        np.testing.assert_allclose(
+            linear.positions[-side_count:], sharp.positions[-side_count:]
+        )
+
+        half_center = (
+            linear.center_length_scale * linear.original_box_length / 2.0
+        )
+        inner_edge = half_center - width
+        sharp_center = sharp.positions[side_count:-side_count]
+        linear_center = linear.positions[side_count:-side_count]
+        sharp_core = sharp_center[np.abs(sharp_center[:, 0]) <= inner_edge]
+        linear_core = linear_center[np.abs(linear_center[:, 0]) <= inner_edge]
+        np.testing.assert_allclose(linear_core, sharp_core)
+
+    def test_expanded_linear_interface_validation(self):
+        with self.assertRaisesRegex(ValueError, "interface_width"):
+            ExpandedFCCConfig(
+                3, 0.6, 41_000, interface="Linear"
+            ).validate()
+        with self.assertRaisesRegex(ValueError, "None.*Linear"):
+            ExpandedFCCConfig(
+                3, 0.6, 41_000, interface="curved"
+            ).validate()
+
     def test_expanded_center_length_is_independently_scalable(self):
         lattice = build_expanded_fcc_lattice(
             n_cells=3,

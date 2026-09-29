@@ -114,10 +114,18 @@ config = ExpandedFCCConfig(
     side_extension=1.0,
     side_density_divisor=2.0,
     com_recenter_period=10_000,
+    interface="Linear",
+    interface_width=10.0,
 )
 
 result = run_expanded_fcc(config)
 ```
+
+Set `interface="None"` (the default) for the original sharp boundary and omit
+`interface_width`. With `interface="Linear"`, the side boxes retain their
+original dimensions and density. Only the outer `interface_width` of the
+central liquid is thinned: its density decreases linearly from the full center
+density at the inner edge to the side density at the original center boundary.
 
 The mass-weighted COM is computed from unwrapped coordinates and translated to
 the box center initially and every `com_recenter_period` steps. A trajectory

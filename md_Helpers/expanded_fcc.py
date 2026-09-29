@@ -22,8 +22,8 @@ from .thermalization import (
 )
 
 
-EXPANDED_FCC_METHOD_VERSION = "expanded_fcc_side_reservoirs_v3"
-EXPANDED_FCC_LATTICE_VERSION = "scaled_fcc_center_thinned_sides_v2"
+EXPANDED_FCC_METHOD_VERSION = "expanded_fcc_side_reservoirs_v4"
+EXPANDED_FCC_LATTICE_VERSION = "scaled_fcc_center_linear_interface_v3"
 COM_RECENTER_METHOD_VERSION = "mass_weighted_unwrapped_com_v1"
 EXPANDED_FCC_TRAJECTORY_VERSION = "initial_recenter_phase_and_final_v2"
 
@@ -39,10 +39,14 @@ class ExpandedFCCLattice:
     n_particles: int
     target_density: float
     center_density: float
+    center_region_density: float
     center_length_scale: float
     side_density: float
     side_extension: float
     side_density_divisor: float
+    interface: str
+    interface_width: float
+    interface_particles_removed: int
     original_box_length: float
     box: np.ndarray
 
@@ -68,6 +72,8 @@ class ExpandedFCCConfig(ThermalizationConfig):
     side_density_divisor: float = 2.0
     com_recenter_period: int = 10_000
     center_length_scale: float = 1.0
+    interface: str = "None"
+    interface_width: float = 0.0
 
     def validate(self) -> None:
         self._validate_common()
@@ -79,6 +85,15 @@ class ExpandedFCCConfig(ThermalizationConfig):
             raise ValueError("com_recenter_period must be positive")
         if float(self.center_length_scale) <= 0:
             raise ValueError("center_length_scale must be positive")
+        interface = str(self.interface).strip().lower()
+        if interface not in {"none", "linear"}:
+            raise ValueError("interface must be 'None' or 'Linear'")
+        if interface == "linear" and float(self.interface_width) <= 0:
+            raise ValueError(
+                "interface_width must be positive when interface='Linear'"
+            )
+        if interface == "none" and float(self.interface_width) < 0:
+            raise ValueError("interface_width cannot be negative")
         thermalization_phase_frame_schedule(self.nsteps, self.log_period)
 
     def signature_parameters(self) -> dict[str, Any]:
@@ -90,6 +105,12 @@ class ExpandedFCCConfig(ThermalizationConfig):
             "side_extension": float(self.side_extension),
             "side_density_divisor": float(self.side_density_divisor),
             "center_length_scale": float(self.center_length_scale),
+            "interface": str(self.interface).strip().title(),
+            "interface_width": (
+                float(self.interface_width)
+                if str(self.interface).strip().lower() == "linear"
+                else 0.0
+            ),
             "com_recenter_period": int(self.com_recenter_period),
             "com_recenter_method": COM_RECENTER_METHOD_VERSION,
             "trajectory_storage": EXPANDED_FCC_TRAJECTORY_VERSION,
@@ -154,23 +175,46 @@ def build_expanded_fcc_lattice(
     side_extension: float = 1.0,
     side_density_divisor: float = 2.0,
     center_length_scale: float = 1.0,
+    interface: str = "None",
+    interface_width: float = 0.0,
 ) -> ExpandedFCCLattice:
-    """Build a central FCC box with identical lower-density boxes beside it."""
+    """Build an FCC center with sparse sides and an optional linear interface.
+
+    A linear interface is made only by removing sites from the outer part of
+    the central region. Its retention fraction falls from one at
+    ``interface_width`` inside the center boundary to
+    ``1 / side_density_divisor`` at that boundary. The side-region geometry
+    and particle count are unchanged.
+    """
 
     side_extension = float(side_extension)
     side_density_divisor = float(side_density_divisor)
     center_length_scale = float(center_length_scale)
+    interface = str(interface).strip().lower()
+    interface_width = float(interface_width)
     if side_extension <= 0:
         raise ValueError("side_extension must be positive")
     if side_density_divisor < 1:
         raise ValueError("side_density_divisor must be at least 1")
     if center_length_scale <= 0:
         raise ValueError("center_length_scale must be positive")
+    if interface not in {"none", "linear"}:
+        raise ValueError("interface must be 'None' or 'Linear'")
+    if interface == "linear" and interface_width <= 0:
+        raise ValueError(
+            "interface_width must be positive when interface='Linear'"
+        )
+    if interface == "none" and interface_width < 0:
+        raise ValueError("interface_width cannot be negative")
 
     center = build_fcc_lattice(n_cells, density)
     length = float(center.box_length)
     center_length = center_length_scale * length
     side_length = side_extension * length
+    if interface == "linear" and interface_width > center_length / 2.0:
+        raise ValueError(
+            "interface_width cannot exceed half of the center length"
+        )
 
     def tiled_local_sites(length_scale: float) -> np.ndarray:
         """Repeat the original FCC box into a local x interval."""
@@ -191,6 +235,37 @@ def build_expanded_fcc_lattice(
     center_local = tiled_local_sites(center_length_scale)
     center_positions = center_local.copy()
     center_positions[:, 0] -= center_length / 2.0
+    full_center_particles = len(center_positions)
+
+    if interface == "linear":
+        half_center = center_length / 2.0
+        inner_edge = half_center - interface_width
+        retained_indices = []
+        # Select an exact, evenly distributed number of sites in each x plane.
+        # This avoids adding another user-facing randomization parameter and
+        # gives a clean linear density profile across either interface.
+        for x_value in np.unique(center_positions[:, 0]):
+            plane = np.flatnonzero(center_positions[:, 0] == x_value)
+            distance = abs(float(x_value))
+            if distance <= inner_edge:
+                retained_indices.append(plane)
+                continue
+            progress = np.clip(
+                (distance - inner_edge) / interface_width,
+                0.0,
+                1.0,
+            )
+            keep_fraction = 1.0 - progress * (
+                1.0 - 1.0 / side_density_divisor
+            )
+            keep_count = int(round(len(plane) * keep_fraction))
+            if keep_count > 0:
+                retained_indices.append(
+                    plane[_evenly_spaced_indices(len(plane), keep_count)]
+                )
+        center_positions = center_positions[np.concatenate(retained_indices)]
+
+    interface_particles_removed = full_center_particles - len(center_positions)
 
     # Express repeated FCC sites in coordinates local to a side region. The
     # same selected local sites are then translated into both side boxes,
@@ -224,7 +299,8 @@ def build_expanded_fcc_lattice(
         0.0,
     ])
     side_density = particles_per_side / (side_length * length**2)
-    center_density = len(center_positions) / (center_length * length**2)
+    center_density = full_center_particles / (center_length * length**2)
+    center_region_density = len(center_positions) / (center_length * length**2)
     return ExpandedFCCLattice(
         positions=positions,
         n_cells=int(n_cells),
@@ -233,10 +309,14 @@ def build_expanded_fcc_lattice(
         n_particles=len(positions),
         target_density=float(density),
         center_density=float(center_density),
+        center_region_density=float(center_region_density),
         center_length_scale=center_length_scale,
         side_density=float(side_density),
         side_extension=side_extension,
         side_density_divisor=side_density_divisor,
+        interface=interface.title(),
+        interface_width=interface_width if interface == "linear" else 0.0,
+        interface_particles_removed=interface_particles_removed,
         original_box_length=length,
         box=box,
     )
@@ -355,9 +435,17 @@ def _metadata(
                 * float(lattice.original_box_length)
             ),
             "Center_Density_Actual": float(lattice.center_density),
+            "Center_Region_Average_Density": float(
+                lattice.center_region_density
+            ),
             "Side_Extension_Per_Side": float(config.side_extension),
             "Side_Density_Divisor": float(config.side_density_divisor),
             "Side_Density_Actual": float(lattice.side_density),
+            "Interface": lattice.interface,
+            "Interface_Width": float(lattice.interface_width),
+            "Interface_Particles_Removed": int(
+                lattice.interface_particles_removed
+            ),
             "COM_Recenter_Period": int(config.com_recenter_period),
             "COM_Recenter_Method": COM_RECENTER_METHOD_VERSION,
             "Nsteps": int(config.nsteps),
@@ -387,6 +475,9 @@ def _metadata(
         "mdsims/states/source": {
             "N_Particles": int(lattice.n_particles),
             "Central_Particles": int(lattice.central_particles),
+            "Interface_Particles_Removed": int(
+                lattice.interface_particles_removed
+            ),
             "Particles_Per_Side": int(lattice.particles_per_side),
             "Original_Box_Length": float(lattice.original_box_length),
             "Box": lattice.box,
@@ -426,7 +517,13 @@ def run_expanded_fcc(
         f"Expanded FCC: center length {config.center_length_scale:g}L; "
         f"{config.side_extension:g} original box length(s) added per side; "
         "side density divided by "
-        f"{config.side_density_divisor:g}."
+        f"{config.side_density_divisor:g}; interface "
+        f"{str(config.interface).strip().title()}"
+        + (
+            f" with width {float(config.interface_width):g}."
+            if str(config.interface).strip().lower() == "linear"
+            else "."
+        )
     )
     if config.notes and str(config.notes).strip():
         note += f" User note: {str(config.notes).strip()}"
@@ -453,6 +550,8 @@ def run_expanded_fcc(
             config.side_extension,
             config.side_density_divisor,
             config.center_length_scale,
+            config.interface,
+            config.interface_width,
         )
         frame = make_expanded_fcc_frame(lattice, config.particle_type)
         simulation, thermo, device_name = _make_simulation_from_frame(
@@ -652,9 +751,15 @@ def run_expanded_fcc(
             "n_particles": lattice.n_particles,
             "central_particles": lattice.central_particles,
             "center_density": lattice.center_density,
+            "center_region_density": lattice.center_region_density,
             "center_length_scale": lattice.center_length_scale,
             "particles_per_side": lattice.particles_per_side,
             "side_density": lattice.side_density,
+            "interface": lattice.interface,
+            "interface_width": lattice.interface_width,
+            "interface_particles_removed": (
+                lattice.interface_particles_removed
+            ),
             "num_frames": storage.frame_count,
             "recenter_steps": recenter_steps,
         }
