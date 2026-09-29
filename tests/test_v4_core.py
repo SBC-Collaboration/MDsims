@@ -619,6 +619,39 @@ class RunPlotPolicyTests(unittest.TestCase):
         np.testing.assert_allclose(profile["slice_volume"], [20.0, 20.0])
         np.testing.assert_allclose(profile["number_density"], [0.1, 0.1])
 
+    @patch("matplotlib.pyplot.show")
+    def test_density_plot_overlays_saved_linear_initial_profile(self, _show):
+        import pandas as pd
+        import matplotlib.pyplot as plt
+
+        run = RunAnalysis.__new__(RunAnalysis)
+        run.sim_type = "Expanded_FCC"
+        x = np.array([-6.0, -4.0, -3.0, 0.0, 3.0, 4.0, 6.0])
+        profile = pd.DataFrame({
+            "x_center": x,
+            "number_density": np.zeros(len(x)),
+        })
+        run.density_profile = lambda **_kwargs: profile
+        run.metadata = lambda: {
+            "mdsims/protocol/Center_Length": 10.0,
+            "mdsims/protocol/Center_Density_Actual": 0.7,
+            "mdsims/protocol/Side_Density_Actual": 0.1,
+            "mdsims/protocol/Interface": "Linear",
+            "mdsims/protocol/Interface_Width": 2.0,
+        }
+
+        figure, _ = run.plot_density_profile(frame=-1, num_slices=7)
+        reference = next(
+            line
+            for line in figure.axes[0].lines
+            if line.get_label().startswith("Initial linear density profile")
+        )
+        np.testing.assert_allclose(
+            reference.get_ydata(),
+            [0.1, 0.4, 0.7, 0.7, 0.7, 0.4, 0.1],
+        )
+        plt.close(figure)
+
 
 class DatabaseTests(unittest.TestCase):
     def setUp(self):

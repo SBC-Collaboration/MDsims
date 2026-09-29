@@ -526,6 +526,12 @@ class RunAnalysis:
             side_density = metadata.get(
                 "mdsims/protocol/Side_Density_Actual"
             )
+            interface = str(_decode(metadata.get(
+                "mdsims/protocol/Interface", "None"
+            ))).strip().lower()
+            interface_width = metadata.get(
+                "mdsims/protocol/Interface_Width", 0.0
+            )
             if center_length is not None:
                 half = float(center_length) / 2.0
                 plot_axis.axvline(
@@ -541,7 +547,54 @@ class RunAnalysis:
                     linestyle="--",
                     linewidth=1.2,
                 )
-            if center_density is not None:
+            linear_reference = (
+                interface == "linear"
+                and center_length is not None
+                and center_density is not None
+                and side_density is not None
+                and float(interface_width) > 0
+            )
+            if linear_reference:
+                x = profile[center_column].to_numpy(dtype=float)
+                half = float(center_length) / 2.0
+                width = float(interface_width)
+                inner_edge = half - width
+                distance = np.abs(x)
+                progress = np.clip(
+                    (distance - inner_edge) / width,
+                    0.0,
+                    1.0,
+                )
+                initial_density = float(center_density) - progress * (
+                    float(center_density) - float(side_density)
+                )
+                plot_axis.plot(
+                    x,
+                    initial_density,
+                    color="tab:purple",
+                    linestyle=":",
+                    linewidth=2.0,
+                    label=(
+                        "Initial linear density profile "
+                        f"(width {width:g})"
+                    ),
+                )
+                plot_axis.axvline(
+                    -inner_edge,
+                    color="tab:purple",
+                    linestyle="-.",
+                    linewidth=1.0,
+                    alpha=0.75,
+                    label="Initial linear-interface inner edges",
+                )
+                plot_axis.axvline(
+                    inner_edge,
+                    color="tab:purple",
+                    linestyle="-.",
+                    linewidth=1.0,
+                    alpha=0.75,
+                )
+            elif center_density is not None:
                 plot_axis.axhline(
                     float(center_density),
                     color="tab:green",
@@ -549,7 +602,7 @@ class RunAnalysis:
                     linewidth=1.4,
                     label="Initial center density",
                 )
-            if side_density is not None:
+            if side_density is not None and not linear_reference:
                 plot_axis.axhline(
                     float(side_density),
                     color="tab:orange",
