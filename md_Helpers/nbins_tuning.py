@@ -493,7 +493,7 @@ def refit_skewed_phase_nbins(
                         (np.log(0.05), np.log(maximum_count)),
                         (-12.0, 12.0),
                         (-12.0, 12.0),
-                        (-20.0, 20.0),
+                        (-10.0, 10.0),
                     ],
                     options={"maxiter": int(max_iterations)},
                 )
