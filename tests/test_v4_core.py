@@ -30,6 +30,10 @@ from md_Helpers.expanded_fcc import (
     expanded_fcc_frame_schedule,
     recenter_snapshot_arrays,
 )
+from md_Helpers.expanded_clone import (
+    ExpandedCloneConfig,
+    build_expanded_clone_state,
+)
 from md_Helpers.paths import ProjectPaths
 from md_Helpers.run_analysis import RunAnalysis, open_run
 from md_Helpers.run_management import delete_run
@@ -293,6 +297,80 @@ class LatticeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "None.*Linear"):
             ExpandedFCCConfig(
                 3, 0.6, 41_000, interface="curved"
+            ).validate()
+
+    def test_expanded_clone_tiles_liquid_and_independently_thins_vapor(self):
+        positions = np.array([
+            [-1.5, -0.5, 0.0],
+            [-1.0, 0.5, 0.0],
+            [-0.5, -0.5, 0.0],
+            [0.0, 0.5, 0.0],
+            [0.5, -0.5, 0.0],
+            [1.0, 0.5, 0.0],
+        ])
+        frame = SimpleNamespace(
+            configuration=SimpleNamespace(
+                box=np.array([4.0, 2.0, 2.0, 0.0, 0.0, 0.0])
+            ),
+            particles=SimpleNamespace(
+                N=6,
+                types=["A"],
+                position=positions,
+                typeid=np.zeros(6, dtype=np.uint32),
+                mass=np.ones(6),
+            ),
+        )
+        state = build_expanded_clone_state(
+            frame,
+            liquid_scale=2,
+            vapor_scale=1,
+            vapor_density_divisor=3.0,
+            seed=11,
+        )
+        repeated = build_expanded_clone_state(
+            frame,
+            liquid_scale=2,
+            vapor_scale=1,
+            vapor_density_divisor=3.0,
+            seed=11,
+        )
+
+        self.assertEqual(state.particles_per_vapor_tile, 2)
+        self.assertEqual(state.liquid_particles, 12)
+        self.assertEqual(state.vapor_particles_per_side, 2)
+        self.assertEqual(state.n_particles, 16)
+        np.testing.assert_allclose(state.box, [16, 2, 2, 0, 0, 0])
+        self.assertAlmostEqual(state.source_density, 6 / 16)
+        self.assertAlmostEqual(state.vapor_density, 2 / 16)
+        np.testing.assert_allclose(state.positions, repeated.positions)
+
+        left_vapor = state.positions[:2].copy()
+        first_liquid = state.positions[2:8].copy()
+        second_liquid = state.positions[8:14].copy()
+        right_vapor = state.positions[14:].copy()
+        first_liquid[:, 0] += 2.0
+        second_liquid[:, 0] -= 2.0
+        np.testing.assert_allclose(first_liquid, positions)
+        np.testing.assert_allclose(second_liquid, positions)
+        left_vapor[:, 0] += 6.0
+        right_vapor[:, 0] -= 6.0
+        self.assertFalse(np.array_equal(left_vapor, right_vapor))
+
+    def test_expanded_clone_config_validation_and_signature(self):
+        config = ExpandedCloneConfig(
+            source_run_id="20260923000000",
+            liquid_scale=3,
+            vapor_scale=1,
+            vapor_density_divisor=25,
+            kT=0.9,
+            nsteps=41_000,
+        )
+        config.validate()
+        signature = config.run_signature(source_frame_id=5, effective_seed=7)
+        self.assertEqual(len(signature), 64)
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            ExpandedCloneConfig(
+                "20260923000000", 1.5, 1, 25, 0.9, 41_000
             ).validate()
 
     def test_expanded_center_length_is_independently_scalable(self):
@@ -814,7 +892,7 @@ class DatabaseTests(unittest.TestCase):
             ]
             version = connection.execute("PRAGMA user_version").fetchone()[0]
         self.assertIn("N_Cells", columns)
-        self.assertEqual(version, 4)
+        self.assertEqual(version, 5)
 
     def test_master_accepts_expanded_fcc_sim_type(self):
         run_id = self.database.reserve_run_id()
@@ -826,6 +904,19 @@ class DatabaseTests(unittest.TestCase):
             Status="Initializing",
         )
         self.assertEqual(self.database.get_run(run_id)["Sim_Type"], "Expanded_FCC")
+
+    def test_master_accepts_expanded_clone_sim_type(self):
+        run_id = self.database.reserve_run_id()
+        self.database.update_master(
+            run_id,
+            N_Cells=3,
+            Nsteps=10_000,
+            Sim_Type="Expanded_Clone",
+            Status="Initializing",
+        )
+        self.assertEqual(
+            self.database.get_run(run_id)["Sim_Type"], "Expanded_Clone"
+        )
 
     def test_initialize_migrates_existing_master_sim_type_constraint(self):
         legacy_path = Path(self.temp_directory.name) / "old-master.sqlite3"

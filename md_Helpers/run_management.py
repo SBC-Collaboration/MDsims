@@ -24,10 +24,12 @@ def _validated_run_directory(
     project_paths: ProjectPaths,
 ) -> Path:
     sim_type = master.get("Sim_Type")
-    if sim_type not in {"Thermalization", "Cavitation", "Expanded_FCC"}:
+    if sim_type not in {
+        "Thermalization", "Cavitation", "Expanded_FCC", "Expanded_Clone"
+    }:
         raise NotImplementedError(
             "delete_run currently supports Thermalization, Cavitation, and "
-            "Expanded_FCC runs only"
+            "Expanded_FCC, and Expanded_Clone runs only"
         )
 
     top_directory = project_paths.top_directory.resolve()

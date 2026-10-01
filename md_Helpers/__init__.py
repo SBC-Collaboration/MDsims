@@ -24,6 +24,11 @@ from .expanded_fcc import (
     recenter_snapshot_arrays,
     run_expanded_fcc,
 )
+from .expanded_clone import (
+    ExpandedCloneConfig,
+    build_expanded_clone_state,
+    run_expanded_clone,
+)
 from .paths import ProjectPaths
 from .run_analysis import RunAnalysis, open_run
 from .run_management import delete_run
@@ -64,10 +69,12 @@ __all__ = [
     "CloneRescaleThermalizationConfig",
     "CavitationConfig",
     "ExpandedFCCConfig",
+    "ExpandedCloneConfig",
     "ThermalizationConfig",
     "cavitation_dataframe",
     "calculate_cavitation_seitz",
     "build_expanded_fcc_lattice",
+    "build_expanded_clone_state",
     "expanded_fcc_frame_schedule",
     "cavitations_with_nbins_fit",
     "display_cavitation_table",
@@ -99,4 +106,5 @@ __all__ = [
     "run_thermalization",
     "run_cavitation",
     "run_expanded_fcc",
+    "run_expanded_clone",
 ]

@@ -19,6 +19,7 @@ MASTER_TABLE = "MD_Master"
 THERMALIZATION_TABLE = "Thermalization"
 CAVITATION_TABLE = "Cavitation"
 EXPANDED_FCC_SIM_TYPE = "Expanded_FCC"
+EXPANDED_CLONE_SIM_TYPE = "Expanded_Clone"
 
 MASTER_COLUMN_ORDER = (
     "Run_ID",
@@ -162,7 +163,8 @@ CREATE TABLE IF NOT EXISTS MD_Master (
     CHECK (
         Sim_Type IS NULL OR Sim_Type IN (
             'Thermalization', 'Cavitation',
-            'Excitation_NVE', 'Excitation_NPH', 'Expanded_FCC'
+            'Excitation_NVE', 'Excitation_NPH', 'Expanded_FCC',
+            'Expanded_Clone'
         )
     ),
     CHECK (
@@ -374,7 +376,10 @@ class SQLiteRunDatabase:
             ).fetchone()
             if (
                 master_sql_row is not None
-                and EXPANDED_FCC_SIM_TYPE not in master_sql_row["sql"]
+                and (
+                    EXPANDED_FCC_SIM_TYPE not in master_sql_row["sql"]
+                    or EXPANDED_CLONE_SIM_TYPE not in master_sql_row["sql"]
+                )
             ):
                 # SQLite cannot alter a CHECK constraint. Rebuild only the
                 # Master table, preserving its rows and its public name so
@@ -383,7 +388,7 @@ class SQLiteRunDatabase:
                 connection.execute("PRAGMA foreign_keys = OFF")
                 connection.executescript(
                     """
-                    CREATE TABLE MD_Master_expanded_fcc_migration (
+                    CREATE TABLE MD_Master_sim_type_migration (
                         Run_ID TEXT PRIMARY KEY,
                         Run_Signature TEXT,
                         N_Cells INTEGER,
@@ -407,7 +412,7 @@ class SQLiteRunDatabase:
                             Sim_Type IS NULL OR Sim_Type IN (
                                 'Thermalization', 'Cavitation',
                                 'Excitation_NVE', 'Excitation_NPH',
-                                'Expanded_FCC'
+                                'Expanded_FCC', 'Expanded_Clone'
                             )
                         ),
                         CHECK (
@@ -417,10 +422,10 @@ class SQLiteRunDatabase:
                             )
                         )
                     );
-                    INSERT INTO MD_Master_expanded_fcc_migration
+                    INSERT INTO MD_Master_sim_type_migration
                     SELECT * FROM MD_Master;
                     DROP TABLE MD_Master;
-                    ALTER TABLE MD_Master_expanded_fcc_migration
+                    ALTER TABLE MD_Master_sim_type_migration
                         RENAME TO MD_Master;
                     """
                 )
@@ -462,7 +467,7 @@ class SQLiteRunDatabase:
                 WHERE Source_Run_ID != Run_ID
                 """
             )
-            connection.execute("PRAGMA user_version = 4")
+            connection.execute("PRAGMA user_version = 5")
 
     def add_run_dependency(
         self,

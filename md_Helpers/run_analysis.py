@@ -28,6 +28,7 @@ SIM_TYPE_DIRECTORIES = {
     "Thermalization": "Thermalization",
     "Cavitation": "Cavitation",
     "Expanded_FCC": "Expanded_FCC",
+    "Expanded_Clone": "Expanded_Clone",
     "Excitation_NVE": "Excitation",
     "Excitation_NPH": "Excitation",
 }
@@ -415,7 +416,7 @@ class RunAnalysis:
             )
             should_recompute = (
                 phase_fit_status == "Complete"
-                or self.sim_type == "Expanded_FCC"
+                or self.sim_type in {"Expanded_FCC", "Expanded_Clone"}
             )
             if should_recompute and recompute_missing:
                 fit = fit_trajectory_voxel_mixture(
@@ -424,8 +425,8 @@ class RunAnalysis:
                     frame_indices=frame_ids,
                 )
                 title = (
-                    "Expanded FCC averaged histogram and on-demand fit"
-                    if self.sim_type == "Expanded_FCC"
+                    "Expanded-state averaged histogram and on-demand fit"
+                    if self.sim_type in {"Expanded_FCC", "Expanded_Clone"}
                     else "Reconstructed averaged histogram and fit"
                 )
             else:
@@ -513,7 +514,11 @@ class RunAnalysis:
             label="Saved-frame slab density",
         )
 
-        if show_reference and self.sim_type == "Expanded_FCC" and axis == "x":
+        if (
+            show_reference
+            and self.sim_type in {"Expanded_FCC", "Expanded_Clone"}
+            and axis == "x"
+        ):
             metadata = self.metadata()
             center_length = metadata.get(
                 "mdsims/protocol/Center_Length",

@@ -156,6 +156,55 @@ potential-energy-per-particle points by default to suppress the initial lattice
 transient. Pass `skip_lattice_transient=False` to show them, or set
 `expanded_lattice_skip_points` to choose a different cutoff.
 
+## Expanded clones of thermalized liquid
+
+`Expanded_Clone` uses the final frame of a completed thermalization as one
+whole periodic tile. It joins `liquid_scale` complete tiles along x, adds
+`vapor_scale` complete tile volumes on each side, and independently retains an
+exact fixed number of particles in every vapor tile. Positions, particle types,
+masses, timestep, LJ interaction, logging cadence, and analysis settings are
+inherited. Velocities are regenerated at the requested temperature and net
+momentum is removed. A preparation interval runs before the production clock
+and production logging begin.
+
+```python
+from md_Helpers import (
+    ExpandedCloneConfig,
+    ProjectPaths,
+    open_run,
+    run_expanded_clone,
+)
+
+paths = ProjectPaths()
+
+config = ExpandedCloneConfig(
+    source_run_id="PUT_THERMALIZATION_RUN_ID_HERE",
+    liquid_scale=3,
+    vapor_scale=1,
+    vapor_density_divisor=25.0,
+    kT=0.9,
+    nsteps=500_000,
+    preparation_steps=50_000,
+    seed=17,
+    com_recenter_period=10_000,
+)
+
+result = run_expanded_clone(config, project_paths=paths)
+run = open_run(result["run_id"], project_paths=paths)
+
+display(result)
+run.info()
+run.plot_density_profile(frame=0, num_slices=600)
+run.plot_density_profile(frame=-1, num_slices=600)
+run.plot_phase_fit()
+run.plot_logs()
+```
+
+`nsteps` counts production steps only. `preparation_steps` are integrated first
+without production logging; trajectory frame 0 is the post-preparation state.
+Omit `seed` to inherit the source thermalization seed. The source/child
+relationship and full construction statistics are recorded in SQL and HDF5.
+
 ## Cavitation states
 
 Cavitation starts from the final frame of a completed, explicitly homogeneous
