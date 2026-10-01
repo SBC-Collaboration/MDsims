@@ -20,7 +20,7 @@ from .visualization import (
 )
 from .voxel_fit import (
     averaged_trajectory_voxel_histogram,
-    fit_trajectory_voxel_mixture,
+    fit_trajectory_voxel_skew_mixture,
 )
 
 
@@ -419,7 +419,7 @@ class RunAnalysis:
                 or self.sim_type in {"Expanded_FCC", "Expanded_Clone"}
             )
             if should_recompute and recompute_missing:
-                fit = fit_trajectory_voxel_mixture(
+                fit = fit_trajectory_voxel_skew_mixture(
                     self.trajectory_path,
                     int(self.master_row["N_Cells"]),
                     frame_indices=frame_ids,

@@ -530,6 +530,27 @@ def refit_skewed_phase_nbins(
             [gas_mean / voxel_volume, gap / voxel_volume, 0, 0, 0, 0]
         )
         alpha_gradient = np.array([0, 0, 0, 0, 0, 1.0])
+        weight_jacobian = np.empty((3, 2), dtype=float)
+        for component in range(3):
+            weight_jacobian[component, 0] = weights[component] * (
+                (1.0 if component == 0 else 0.0) - weights[0]
+            )
+            weight_jacobian[component, 1] = weights[component] * (
+                (1.0 if component == 1 else 0.0) - weights[1]
+            )
+        interface_void_fraction = float(
+            normal_fit.get("interface_void_fraction", 0.5)
+        )
+        gas_volume_gradient = np.zeros(6)
+        gas_volume_gradient[3:5] = box_volume * (
+            weight_jacobian[0]
+            + interface_void_fraction * weight_jacobian[2]
+        )
+        liquid_volume_gradient = -gas_volume_gradient
+        gas_volume = box_volume * (
+            weights[0] + interface_void_fraction * weights[2]
+        )
+        liquid_volume = box_volume - gas_volume
         log_likelihood = -float(optimum.fun)
         records.append(
             {
@@ -537,6 +558,7 @@ def refit_skewed_phase_nbins(
                 "success": bool(optimum.success),
                 "message": str(optimum.message),
                 "method": "averaged_voxel_skew_liquid_mixture",
+                "method_version": "terminal_5_saved_frames_skew_liquid_v1",
                 "voxel_nbins": nbins,
                 "frames_used": frames_used,
                 "count_axis": count_axis,
@@ -550,12 +572,21 @@ def refit_skewed_phase_nbins(
                 "voxel_volume": voxel_volume,
                 "box_volume": box_volume,
                 "interface_points": points,
+                "interface_void_fraction": interface_void_fraction,
                 "rho_liquid": liquid_mean / voxel_volume,
                 "rho_liquid_unc": _standard_uncertainty(
                     liquid_gradient, covariance
                 ),
                 "rho_gas": gas_mean / voxel_volume,
                 "rho_gas_unc": _standard_uncertainty(gas_gradient, covariance),
+                "V_liquid": liquid_volume,
+                "V_liquid_unc": _standard_uncertainty(
+                    liquid_volume_gradient, covariance
+                ),
+                "V_gas": gas_volume,
+                "V_gas_unc": _standard_uncertainty(
+                    gas_volume_gradient, covariance
+                ),
                 "liquid_scale_density": liquid_scale / voxel_volume,
                 "liquid_shape_alpha": float(alpha),
                 "liquid_shape_alpha_unc": _standard_uncertainty(

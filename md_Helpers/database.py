@@ -139,6 +139,56 @@ CAVITATION_COLUMN_ORDER = (
 )
 CAVITATION_COLUMNS = set(CAVITATION_COLUMN_ORDER)
 
+PHASE_FIT_HISTORY_COLUMN_ORDER = (
+    "Run_ID",
+    "Sim_Table",
+    "Method",
+    "Method_Version",
+    "Status",
+    "Attempt_Count",
+    "Started_At",
+    "Completed_At",
+    "Error_Message",
+    "N_Bins",
+    "Frame_Indices",
+    "Frames_Used",
+    "Interface_Points",
+    "Interface_Void_Fraction",
+    "Alpha_Lower_Bound",
+    "Alpha_Upper_Bound",
+    "rho_liquid",
+    "rho_liquid_unc",
+    "rho_gas",
+    "rho_gas_unc",
+    "V_liquid",
+    "V_liquid_unc",
+    "V_gas",
+    "V_gas_unc",
+    "Liquid_Scale_Density",
+    "Liquid_Shape_Alpha",
+    "Liquid_Shape_Alpha_Unc",
+    "Gas_Weight",
+    "Liquid_Weight",
+    "Interface_Weight",
+    "Log_Likelihood",
+    "AIC",
+    "BIC",
+)
+PHASE_FIT_HISTORY_COLUMNS = set(PHASE_FIT_HISTORY_COLUMN_ORDER)
+PHASE_FIT_SQL_FIELDS_FOR_DATABASE = {
+    "rho_liquid",
+    "rho_liquid_unc",
+    "rho_gas",
+    "rho_gas_unc",
+    "V_liquid",
+    "V_liquid_unc",
+    "V_gas",
+    "V_gas_unc",
+    "Phase_Fit_Status",
+    "Phase_Fit_Method",
+    "Phase_Fit_Method_Version",
+}
+
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS MD_Master (
     Run_ID TEXT PRIMARY KEY,
@@ -324,6 +374,50 @@ CREATE TABLE IF NOT EXISTS Run_Dependencies (
 
 CREATE INDEX IF NOT EXISTS idx_Run_Dependencies_Child
     ON Run_Dependencies (Child_Run_ID);
+
+CREATE TABLE IF NOT EXISTS Phase_Fit_History (
+    Run_ID TEXT NOT NULL,
+    Sim_Table TEXT NOT NULL,
+    Method TEXT,
+    Method_Version TEXT NOT NULL,
+    Status TEXT NOT NULL,
+    Attempt_Count INTEGER NOT NULL DEFAULT 0,
+    Started_At TEXT,
+    Completed_At TEXT,
+    Error_Message TEXT,
+    N_Bins INTEGER,
+    Frame_Indices TEXT,
+    Frames_Used INTEGER,
+    Interface_Points INTEGER,
+    Interface_Void_Fraction REAL,
+    Alpha_Lower_Bound REAL,
+    Alpha_Upper_Bound REAL,
+    rho_liquid REAL,
+    rho_liquid_unc REAL,
+    rho_gas REAL,
+    rho_gas_unc REAL,
+    V_liquid REAL,
+    V_liquid_unc REAL,
+    V_gas REAL,
+    V_gas_unc REAL,
+    Liquid_Scale_Density REAL,
+    Liquid_Shape_Alpha REAL,
+    Liquid_Shape_Alpha_Unc REAL,
+    Gas_Weight REAL,
+    Liquid_Weight REAL,
+    Interface_Weight REAL,
+    Log_Likelihood REAL,
+    AIC REAL,
+    BIC REAL,
+    PRIMARY KEY (Run_ID, Sim_Table, Method_Version),
+    FOREIGN KEY (Run_ID) REFERENCES MD_Master (Run_ID),
+    CHECK (Attempt_Count >= 0),
+    CHECK (N_Bins IS NULL OR N_Bins > 0),
+    CHECK (Frames_Used IS NULL OR Frames_Used > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_Phase_Fit_History_Status
+    ON Phase_Fit_History (Method_Version, Status);
 """
 
 
@@ -637,6 +731,214 @@ class SQLiteRunDatabase:
                     f"Completed Cavitation Run_ID was not found: {run_id}"
                 )
 
+    @staticmethod
+    def _phase_fit_tables(connection) -> list[str]:
+        """Return every SQL result table carrying active phase-fit columns."""
+
+        required = {
+            "Run_ID",
+            "File_Location",
+            "N_Cells",
+            "Phase_Separation_Status",
+            "Phase_Fit_Status",
+            "Phase_Fit_Method",
+            "Phase_Fit_Method_Version",
+            "rho_liquid",
+            "rho_liquid_unc",
+            "rho_gas",
+            "rho_gas_unc",
+            "V_liquid",
+            "V_liquid_unc",
+            "V_gas",
+            "V_gas_unc",
+        }
+        names = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        ).fetchall()
+        result = []
+        for item in names:
+            name = str(item[0])
+            escaped = name.replace('"', '""')
+            columns = {
+                str(row[1])
+                for row in connection.execute(
+                    f'PRAGMA table_info("{escaped}")'
+                ).fetchall()
+            }
+            if required <= columns:
+                result.append(name)
+        return result
+
+    def phase_fit_targets(
+        self,
+        *,
+        run_ids: list[str] | None = None,
+        separated_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        """List refittable rows across every phase-fit-bearing SQL table."""
+
+        requested = None if run_ids is None else {str(value) for value in run_ids}
+        records = []
+        with self.connection() as connection:
+            for table in self._phase_fit_tables(connection):
+                escaped = table.replace('"', '""')
+                sql = f'SELECT * FROM "{escaped}"'
+                clauses = []
+                parameters: list[Any] = []
+                if separated_only:
+                    clauses.append("Phase_Separation_Status = 'Separated'")
+                if requested is not None:
+                    if not requested:
+                        continue
+                    placeholders = ", ".join("?" for _ in requested)
+                    clauses.append(f"Run_ID IN ({placeholders})")
+                    parameters.extend(sorted(requested))
+                if clauses:
+                    sql += " WHERE " + " AND ".join(clauses)
+                sql += " ORDER BY Run_ID"
+                for row in connection.execute(sql, parameters).fetchall():
+                    records.append({"Sim_Table": table, **dict(row)})
+        return records
+
+    @staticmethod
+    def _upsert_phase_fit_history(connection, values: dict[str, Any]) -> None:
+        unknown = set(values) - PHASE_FIT_HISTORY_COLUMNS
+        if unknown:
+            raise ValueError(f"Unknown phase-fit history fields: {sorted(unknown)}")
+        required = {"Run_ID", "Sim_Table", "Method_Version", "Status"}
+        missing = required - set(values)
+        if missing:
+            raise ValueError(f"Missing phase-fit history fields: {sorted(missing)}")
+        row = {column: values.get(column) for column in PHASE_FIT_HISTORY_COLUMN_ORDER}
+        columns = list(row)
+        updates = [
+            column
+            for column in columns
+            if column not in {"Run_ID", "Sim_Table", "Method_Version"}
+        ]
+        connection.execute(
+            f"""
+            INSERT INTO Phase_Fit_History ({', '.join(columns)})
+            VALUES ({', '.join('?' for _ in columns)})
+            ON CONFLICT (Run_ID, Sim_Table, Method_Version) DO UPDATE SET
+                {', '.join(f'{column} = excluded.{column}' for column in updates)}
+            """,
+            list(row.values()),
+        )
+
+    def upsert_phase_fit_history(self, **values: Any) -> None:
+        """Create or update one resumable phase-fit history record."""
+
+        with self.connection() as connection:
+            self._upsert_phase_fit_history(connection, values)
+
+    def query_phase_fit_history(
+        self,
+        *,
+        run_id: str | None = None,
+        method_version: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = []
+        parameters = []
+        if run_id is not None:
+            clauses.append("Run_ID = ?")
+            parameters.append(str(run_id))
+        if method_version is not None:
+            clauses.append("Method_Version = ?")
+            parameters.append(str(method_version))
+        sql = "SELECT * FROM Phase_Fit_History"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY Run_ID, Sim_Table, Method_Version"
+        with self.connection() as connection:
+            return [dict(row) for row in connection.execute(sql, parameters)]
+
+    def backup(self, destination: str | Path) -> Path:
+        """Create a consistent SQLite online backup."""
+
+        destination = Path(destination).expanduser().resolve()
+        if destination.exists():
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self.connection() as source:
+            with sqlite3.connect(destination) as target:
+                source.backup(target)
+        return destination
+
+    def apply_phase_fit_everywhere(
+        self,
+        run_id: str,
+        *,
+        active_values: dict[str, Any],
+        history_values: dict[str, Any],
+    ) -> list[str]:
+        """Atomically update all SQL result tables containing this Run_ID.
+
+        Each table's former active fit is first retained in Phase_Fit_History.
+        The validated replacement and its history record are then committed in
+        the same SQLite transaction.
+        """
+
+        allowed = set(PHASE_FIT_SQL_FIELDS_FOR_DATABASE)
+        unknown = set(active_values) - allowed
+        if unknown:
+            raise ValueError(f"Unknown active phase-fit fields: {sorted(unknown)}")
+        run_id = str(run_id)
+        updated = []
+        with self.connection() as connection:
+            for table in self._phase_fit_tables(connection):
+                escaped = table.replace('"', '""')
+                old = connection.execute(
+                    f'SELECT * FROM "{escaped}" WHERE Run_ID = ?',
+                    (run_id,),
+                ).fetchone()
+                if old is None:
+                    continue
+                old = dict(old)
+                if old.get("Phase_Separation_Status") != "Separated":
+                    continue
+                old_version = (
+                    old.get("Phase_Fit_Method_Version") or "unversioned_legacy"
+                )
+                self._upsert_phase_fit_history(connection, {
+                    "Run_ID": run_id,
+                    "Sim_Table": table,
+                    "Method": old.get("Phase_Fit_Method"),
+                    "Method_Version": str(old_version),
+                    "Status": old.get("Phase_Fit_Status") or "Unknown",
+                    "Attempt_Count": 0,
+                    "Completed_At": utc_now(),
+                    **{
+                        field: old.get(field)
+                        for field in (
+                            "rho_liquid",
+                            "rho_liquid_unc",
+                            "rho_gas",
+                            "rho_gas_unc",
+                            "V_liquid",
+                            "V_liquid_unc",
+                            "V_gas",
+                            "V_gas_unc",
+                        )
+                    },
+                })
+                assignments = ", ".join(
+                    f'"{column}" = ?' for column in active_values
+                )
+                connection.execute(
+                    f'UPDATE "{escaped}" SET {assignments} WHERE Run_ID = ?',
+                    [*active_values.values(), run_id],
+                )
+                self._upsert_phase_fit_history(connection, {
+                    **history_values,
+                    "Run_ID": run_id,
+                    "Sim_Table": table,
+                })
+                updated.append(table)
+        if not updated:
+            raise KeyError(f"Run_ID was not found in any phase-fit table: {run_id}")
+        return updated
+
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(
@@ -895,6 +1197,7 @@ class SQLiteRunDatabase:
         run_id: str,
         thermalization: dict[str, Any],
         master: dict[str, Any],
+        phase_fit_history: dict[str, Any] | None = None,
     ) -> None:
         """Insert results and mark Master complete in one transaction."""
 
@@ -938,6 +1241,12 @@ class SQLiteRunDatabase:
                 """,
                 list(thermalization.values()),
             )
+            if phase_fit_history is not None:
+                self._upsert_phase_fit_history(connection, {
+                    **phase_fit_history,
+                    "Run_ID": str(run_id),
+                    "Sim_Table": "Thermalization",
+                })
             clone_run_id = thermalization.get("Clone_Run_ID")
             if clone_run_id is not None and str(clone_run_id) != str(run_id):
                 connection.execute(
@@ -964,6 +1273,7 @@ class SQLiteRunDatabase:
         run_id: str,
         cavitation: dict[str, Any],
         master: dict[str, Any],
+        phase_fit_history: dict[str, Any] | None = None,
     ) -> None:
         """Insert cavitation results and mark Master complete atomically."""
 
@@ -998,6 +1308,12 @@ class SQLiteRunDatabase:
                 f"VALUES ({placeholders})",
                 list(cavitation.values()),
             )
+            if phase_fit_history is not None:
+                self._upsert_phase_fit_history(connection, {
+                    **phase_fit_history,
+                    "Run_ID": str(run_id),
+                    "Sim_Table": "Cavitation",
+                })
             connection.execute(
                 """
                 INSERT OR IGNORE INTO Run_Dependencies (

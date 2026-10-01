@@ -16,6 +16,7 @@ from .analysis import (
 )
 from .database import SQLiteRunDatabase, utc_now
 from .paths import ProjectPaths, RunPaths
+from .phase_fit_backfill import phase_fit_history_values
 from .signatures import canonical_json, create_run_signature
 from .storage import RunStorage, StateData, update_hdf5_metadata
 from .thermalization import (
@@ -697,6 +698,15 @@ def run_cavitation(
                 "Stop_Reason": None,
                 "Status_Message": None,
             },
+            phase_fit_history=(
+                phase_fit_history_values(
+                    phase_fit,
+                    attempt_count=1,
+                    started_at=end_time,
+                )
+                if phase_fit.get("status") == "Complete"
+                else None
+            ),
         )
         return {
             "skipped": False,

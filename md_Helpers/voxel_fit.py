@@ -10,8 +10,10 @@ import numpy as np
 from .analysis import voxel_bins_for_ncells
 
 
-PHASE_FIT_METHOD = "averaged_voxel_histogram_mixture"
-PHASE_FIT_METHOD_VERSION = "terminal_5_saved_frames_log_stride_10_v2"
+NORMAL_PHASE_FIT_METHOD = "averaged_voxel_histogram_mixture"
+NORMAL_PHASE_FIT_METHOD_VERSION = "terminal_5_saved_frames_log_stride_10_v2"
+PHASE_FIT_METHOD = "averaged_voxel_skew_liquid_mixture"
+PHASE_FIT_METHOD_VERSION = "terminal_5_saved_frames_skew_liquid_v1"
 PHASE_FIT_NUM_FRAMES = 5
 
 PHASE_FIT_SQL_FIELDS = (
@@ -380,8 +382,8 @@ def fit_averaged_voxel_mixture(
     return {
         "success": bool(optimum.success),
         "message": str(optimum.message),
-        "method": PHASE_FIT_METHOD,
-        "method_version": PHASE_FIT_METHOD_VERSION,
+        "method": NORMAL_PHASE_FIT_METHOD,
+        "method_version": NORMAL_PHASE_FIT_METHOD_VERSION,
         "voxel_nbins": int(nbins),
         "frames_used": int(len(histograms)),
         "frame_indices": list(frame_indices) if frame_indices is not None else None,
@@ -570,7 +572,7 @@ def fit_averaged_voxel_gaussian(
         "success": bool(optimum.success),
         "message": str(optimum.message),
         "method": "averaged_voxel_histogram_single_gaussian",
-        "method_version": PHASE_FIT_METHOD_VERSION,
+        "method_version": NORMAL_PHASE_FIT_METHOD_VERSION,
         "voxel_nbins": int(nbins),
         "frames_used": int(len(histograms)),
         "frame_indices": list(frame_indices) if frame_indices is not None else None,
@@ -638,6 +640,99 @@ def fit_trajectory_voxel_gaussian(
     return fit
 
 
+def fit_averaged_voxel_skew_mixture(
+    positions_by_frame: Sequence[np.ndarray],
+    boxes_by_frame: Sequence[np.ndarray],
+    n_cells: int,
+    frame_indices: Sequence[int] | None = None,
+    interface_void_fraction: float = 0.5,
+    interface_points: int = 40,
+    max_iterations: int = 500,
+    nbins: int | None = None,
+) -> dict[str, Any]:
+    """Fit the default Poisson-vapor/skew-liquid/interface mixture.
+
+    The ordinary Gaussian mixture supplies a stable nested-model starting
+    point. Voxel resolution still comes exclusively from
+    :func:`voxel_bins_for_ncells` unless an explicit analysis-only override is
+    supplied.
+    """
+
+    import pandas as pd
+
+    normal_fit = fit_averaged_voxel_mixture(
+        positions_by_frame,
+        boxes_by_frame,
+        n_cells,
+        frame_indices=frame_indices,
+        interface_void_fraction=interface_void_fraction,
+        interface_points=interface_points,
+        max_iterations=max_iterations,
+        nbins=nbins,
+    )
+    from .nbins_tuning import refit_skewed_phase_nbins
+
+    skew_fit = refit_skewed_phase_nbins(
+        pd.DataFrame([{"Run_ID": "in_memory", **normal_fit}]),
+        interface_points=interface_points,
+        max_iterations=max_iterations,
+    ).iloc[0].to_dict()
+    skew_fit.pop("Run_ID", None)
+    skew_fit.update({
+        "frame_indices": list(frame_indices) if frame_indices is not None else None,
+        "trajectory_frame_selection": "terminal_saved_frames",
+        "histogram_aggregation": "arithmetic_mean",
+        "individual_histograms": normal_fit["individual_histograms"],
+        "n_voxel_samples": normal_fit["n_voxel_samples"],
+        "normal_model_AIC": normal_fit["AIC"],
+        "normal_model_BIC": normal_fit["BIC"],
+        "alpha_lower_bound": -10.0,
+        "alpha_upper_bound": 10.0,
+        "max_iterations": int(max_iterations),
+    })
+    return skew_fit
+
+
+def fit_trajectory_voxel_skew_mixture(
+    trajectory_path: str | Path,
+    n_cells: int,
+    num_frames: int = PHASE_FIT_NUM_FRAMES,
+    frame_indices: Sequence[int] | None = None,
+    **fit_options: Any,
+) -> dict[str, Any]:
+    """Read selected frames and fit the default skew-liquid phase mixture."""
+
+    import gsd.hoomd
+
+    with gsd.hoomd.open(name=str(trajectory_path), mode="r") as trajectory:
+        indices = (
+            phase_fit_frame_indices(len(trajectory), num_frames)
+            if frame_indices is None
+            else [int(index) for index in frame_indices]
+        )
+        if not indices:
+            raise ValueError("At least one phase-fit frame is required")
+        if any(index < 0 or index >= len(trajectory) for index in indices):
+            raise IndexError("A phase-fit frame index is outside the trajectory")
+        positions = []
+        boxes = []
+        for index in indices:
+            frame = trajectory[index]
+            positions.append(np.asarray(frame.particles.position, dtype=np.float64))
+            boxes.append(np.asarray(frame.configuration.box, dtype=np.float64))
+    fit = fit_averaged_voxel_skew_mixture(
+        positions,
+        boxes,
+        n_cells,
+        frame_indices=indices,
+        **fit_options,
+    )
+    fit["requested_frames"] = (
+        int(num_frames) if frame_indices is None else len(indices)
+    )
+    return fit
+
+
 def conditional_phase_fit(
     voxel_classification: dict[str, Any],
     trajectory_path: str | Path,
@@ -661,7 +756,7 @@ def conditional_phase_fit(
         }
 
     try:
-        fit = fit_trajectory_voxel_mixture(
+        fit = fit_trajectory_voxel_skew_mixture(
             trajectory_path,
             n_cells,
             **fit_options,

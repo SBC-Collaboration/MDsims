@@ -336,6 +336,36 @@ transient. Clone runs retain every sample. Pass
 `open_run` itself performs only the SQL lookup and path resolution. GSD and
 HDF5 data are loaded lazily by the individual inspection methods.
 
+## Skew-liquid phase-fit migration
+
+Separated states now use the same `round(0.3 * N_Cells + 3)` voxel rule and
+the same final five saved frames as before, but the liquid component is a
+skew-normal distribution. The vapor remains Poisson and the interface retains
+the existing fractional convolution. Legacy fits are retained in the
+`Phase_Fit_History` SQL table and under
+`mdsims/analysis/phase_fit_history/<method-version>` in each `run.hdf5`.
+
+Preview the resumable backfill without writing anything:
+
+```bash
+python -m examples.backfill_skew_phase_fits --limit 10
+```
+
+Apply a small canary batch only after choosing a new backup filename:
+
+```bash
+python -m examples.backfill_skew_phase_fits \
+  --apply \
+  --backup /path/to/backups/mdsims-before-skew.sqlite3 \
+  --limit 10
+```
+
+Repeat the command with a fresh backup filename to continue. Completed runs
+are skipped, each run is committed independently, and a run present in more
+than one result table is fitted once and updated in every matching table in a
+single SQL transaction. Failed runs remain recorded and are retried only with
+`--retry-failed`.
+
 Query Master independently:
 
 ```python

@@ -30,6 +30,7 @@ from .expanded_clone import (
     run_expanded_clone,
 )
 from .paths import ProjectPaths
+from .phase_fit_backfill import backfill_skew_phase_fits
 from .run_analysis import RunAnalysis, open_run
 from .run_management import delete_run
 from .seitz import (
@@ -74,6 +75,7 @@ __all__ = [
     "cavitation_dataframe",
     "calculate_cavitation_seitz",
     "build_expanded_fcc_lattice",
+    "backfill_skew_phase_fits",
     "build_expanded_clone_state",
     "expanded_fcc_frame_schedule",
     "cavitations_with_nbins_fit",

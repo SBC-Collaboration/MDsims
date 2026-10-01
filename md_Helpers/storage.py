@@ -295,3 +295,47 @@ def update_hdf5_metadata(
                 if value is None:
                     continue
                 group.attrs[str(key)] = _attribute_value(value)
+
+
+def replace_versioned_phase_fit_metadata(
+    path: str | Path,
+    fit: dict[str, Any],
+) -> None:
+    """Archive the active phase fit and atomically replace its attributes.
+
+    History is keyed by method version inside the run HDF5 file. Repeating the
+    operation is idempotent and never removes a different model version.
+    """
+
+    import h5py
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    active_path = "mdsims/analysis/phase_fit"
+    history_root = "mdsims/analysis/phase_fit_history"
+
+    def write_attributes(group, values):
+        group.attrs.clear()
+        for key, value in values.items():
+            if value is None:
+                continue
+            group.attrs[str(key)] = _attribute_value(value)
+
+    with h5py.File(path, mode="a") as hdf5:
+        active = hdf5.require_group(active_path)
+        existing = {key: value for key, value in active.attrs.items()}
+        existing_version = existing.get("method_version")
+        if isinstance(existing_version, bytes):
+            existing_version = existing_version.decode()
+        if existing and existing_version:
+            safe_version = str(existing_version).replace("/", "_")
+            archived = hdf5.require_group(f"{history_root}/{safe_version}")
+            if not archived.attrs:
+                write_attributes(archived, existing)
+
+        new_version = str(fit["method_version"]).replace("/", "_")
+        versioned = hdf5.require_group(f"{history_root}/{new_version}")
+        write_attributes(versioned, fit)
+        write_attributes(active, fit)
+        hdf5.flush()
