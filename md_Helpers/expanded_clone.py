@@ -849,6 +849,11 @@ def run_expanded_clone(
             if recenter_now:
                 com_before_recenter.append(_recenter_simulation_com(simulation))
                 recenter_steps.append(current_step)
+                # set_snapshot invalidates HOOMD's cached thermodynamic
+                # quantities. Refresh the compute graph before logging this
+                # recentered state; otherwise pressure and temperature can
+                # contain an undefined, extremely large sample.
+                simulation.run(0)
                 while next_recenter <= current_step:
                     next_recenter += int(request.com_recenter_period)
             final_now = current_step == int(config.nsteps)
