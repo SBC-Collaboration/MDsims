@@ -27,8 +27,8 @@ from .thermalization import (
 )
 
 
-EXPANDED_CLONE_METHOD_VERSION = "thermalized_box_clone_expansion_v1"
-EXPANDED_CLONE_STATE_VERSION = "whole_box_tiles_independent_vapor_thinning_v1"
+EXPANDED_CLONE_METHOD_VERSION = "thermalized_box_clone_expansion_v2"
+EXPANDED_CLONE_STATE_VERSION = "whole_box_tiles_optional_linear_interface_v2"
 EXPANDED_CLONE_TRAJECTORY_VERSION = "post_preparation_recenter_phase_final_v1"
 
 
@@ -45,6 +45,7 @@ class ExpandedCloneConfig:
     preparation_steps: int = 50_000
     seed: int | None = None
     com_recenter_period: int = 10_000
+    interface: str = "None"
     notes: str | None = None
 
     def validate(self) -> None:
@@ -68,6 +69,8 @@ class ExpandedCloneConfig:
             raise ValueError("com_recenter_period must be positive")
         if self.seed is not None and int(self.seed) < 0:
             raise ValueError("seed cannot be negative")
+        if str(self.interface).strip().lower() not in {"none", "linear"}:
+            raise ValueError("interface must be 'None' or 'Linear'")
 
     def signature_parameters(
         self,
@@ -83,6 +86,12 @@ class ExpandedCloneConfig:
             "liquid_scale": int(self.liquid_scale),
             "vapor_scale_per_side": int(self.vapor_scale),
             "vapor_density_divisor": float(self.vapor_density_divisor),
+            "interface": str(self.interface).strip().title(),
+            "interface_width": (
+                "one_inherited_source_box"
+                if str(self.interface).strip().lower() == "linear"
+                else 0
+            ),
             "kT": float(self.kT),
             "production_nsteps": int(self.nsteps),
             "preparation_steps": int(self.preparation_steps),
@@ -113,6 +122,8 @@ class ExpandedCloneState:
     source_particles: int
     particles_per_vapor_tile: int
     liquid_particles: int
+    full_liquid_particles: int
+    interface_particles_per_side: tuple[int, int]
     vapor_particles_per_side: int
     n_particles: int
     source_density: float
@@ -120,6 +131,8 @@ class ExpandedCloneState:
     liquid_scale: int
     vapor_scale: int
     vapor_density_divisor: float
+    interface: str
+    interface_width: float
 
     @property
     def volume(self) -> float:
@@ -132,7 +145,9 @@ class ExpandedCloneState:
     @property
     def center_length(self) -> float:
         source_length = self.box[0] / (
-            self.liquid_scale + 2 * self.vapor_scale
+            self.liquid_scale
+            + 2 * self.vapor_scale
+            + (2 if self.interface == "Linear" else 0)
         )
         return self.liquid_scale * source_length
 
@@ -143,19 +158,30 @@ def build_expanded_clone_state(
     vapor_scale: int,
     vapor_density_divisor: float,
     seed: int,
+    interface: str = "None",
 ) -> ExpandedCloneState:
-    """Tile a whole source box and independently thin every vapor tile."""
+    """Tile a source box into liquid, optional interface, and vapor regions.
+
+    ``interface='Linear'`` inserts one complete source-box-sized tile on each
+    side of the liquid. Those two tiles are independently thinned from full
+    liquid retention at the liquid-facing edge to the vapor retention fraction
+    at the vapor-facing edge. The midpoint of each tile is consequently the
+    half-density point of the linear transition.
+    """
 
     liquid_scale = int(liquid_scale)
     vapor_scale = int(vapor_scale)
     vapor_density_divisor = float(vapor_density_divisor)
     seed = int(seed)
+    interface = str(interface).strip().lower()
     if liquid_scale <= 0 or vapor_scale <= 0:
         raise ValueError("liquid_scale and vapor_scale must be positive")
     if vapor_density_divisor < 1:
         raise ValueError("vapor_density_divisor must be at least 1")
     if seed < 0:
         raise ValueError("seed cannot be negative")
+    if interface not in {"none", "linear"}:
+        raise ValueError("interface must be 'None' or 'Linear'")
 
     source_box = np.asarray(source_frame.configuration.box, dtype=np.float64)
     if source_box.shape != (6,) or np.any(source_box[:3] <= 0):
@@ -201,22 +227,55 @@ def build_expanded_clone_state(
             "tile"
         )
 
-    total_tiles = liquid_scale + 2 * vapor_scale
+    interface_tiles = 1 if interface == "linear" else 0
+    total_tiles = liquid_scale + 2 * (vapor_scale + interface_tiles)
     new_lx = total_tiles * lx
-    rng = np.random.default_rng(seed)
+    tile_sequences = np.random.SeedSequence(seed).spawn(total_tiles)
     position_tiles = []
     type_id_tiles = []
     mass_tiles = []
+    interface_counts = []
+    liquid_particles = 0
     for tile in range(total_tiles):
-        is_vapor = tile < vapor_scale or tile >= vapor_scale + liquid_scale
+        rng = np.random.default_rng(tile_sequences[tile])
+        liquid_start = vapor_scale + interface_tiles
+        liquid_stop = liquid_start + liquid_scale
+        is_vapor = tile < vapor_scale or tile >= total_tiles - vapor_scale
+        is_left_interface = interface_tiles and tile == vapor_scale
+        is_right_interface = interface_tiles and tile == liquid_stop
         if is_vapor:
             selected = np.sort(rng.choice(
                 source_particles,
                 size=particles_per_vapor_tile,
                 replace=False,
             ))
+        elif is_left_interface or is_right_interface:
+            local_fraction = (
+                source_positions[:, 0] + lx / 2.0
+            ) / lx
+            vapor_fraction = 1.0 / vapor_density_divisor
+            if is_left_interface:
+                keep_probability = (
+                    vapor_fraction
+                    + (1.0 - vapor_fraction) * local_fraction
+                )
+            else:
+                keep_probability = (
+                    1.0
+                    - (1.0 - vapor_fraction) * local_fraction
+                )
+            selected = np.flatnonzero(
+                rng.random(source_particles) < keep_probability
+            )
+            if not len(selected):
+                raise RuntimeError(
+                    "linear interface thinning removed every particle from "
+                    "an interface tile"
+                )
+            interface_counts.append(int(len(selected)))
         else:
             selected = np.arange(source_particles)
+            liquid_particles += source_particles
         translated = source_positions[selected].copy()
         translated[:, 0] += (tile + 0.5) * lx - new_lx / 2.0
         position_tiles.append(translated)
@@ -226,9 +285,13 @@ def build_expanded_clone_state(
     positions = np.concatenate(position_tiles, axis=0)
     expanded_type_ids = np.concatenate(type_id_tiles)
     expanded_masses = np.concatenate(mass_tiles)
-    liquid_particles = liquid_scale * source_particles
+    full_liquid_particles = liquid_scale * source_particles
     vapor_particles_per_side = vapor_scale * particles_per_vapor_tile
-    n_particles = liquid_particles + 2 * vapor_particles_per_side
+    n_particles = (
+        liquid_particles
+        + sum(interface_counts)
+        + 2 * vapor_particles_per_side
+    )
     source_volume = float(lx * ly * lz)
     return ExpandedCloneState(
         positions=positions,
@@ -239,6 +302,12 @@ def build_expanded_clone_state(
         source_particles=source_particles,
         particles_per_vapor_tile=particles_per_vapor_tile,
         liquid_particles=liquid_particles,
+        full_liquid_particles=full_liquid_particles,
+        interface_particles_per_side=(
+            tuple(interface_counts)
+            if interface == "linear"
+            else (0, 0)
+        ),
         vapor_particles_per_side=vapor_particles_per_side,
         n_particles=n_particles,
         source_density=source_particles / source_volume,
@@ -246,6 +315,8 @@ def build_expanded_clone_state(
         liquid_scale=liquid_scale,
         vapor_scale=vapor_scale,
         vapor_density_divisor=vapor_density_divisor,
+        interface=interface.title(),
+        interface_width=float(lx) if interface == "linear" else 0.0,
     )
 
 
@@ -313,7 +384,8 @@ def _source_context(
         f"Expanded final frame {source_frame_id} from Thermalization Run_ID "
         f"{request.source_run_id}: {int(request.liquid_scale)} liquid tile(s), "
         f"{int(request.vapor_scale)} vapor tile(s) per side, vapor density "
-        f"divided by {float(request.vapor_density_divisor):g}; regenerated "
+        f"divided by {float(request.vapor_density_divisor):g}; interface "
+        f"{str(request.interface).strip().title()}; regenerated "
         f"momenta at kT={float(request.kT):g}; prepared for "
         f"{int(request.preparation_steps)} steps then evolved for "
         f"{int(request.nsteps)} production steps."
@@ -436,6 +508,18 @@ def _metadata(
             "Liquid_Scale": int(request.liquid_scale),
             "Vapor_Scale_Per_Side": int(request.vapor_scale),
             "Vapor_Density_Divisor": float(request.vapor_density_divisor),
+            "Interface": constructed.interface,
+            "Interface_Width": float(constructed.interface_width),
+            "Interface_Placement": (
+                "one_dedicated_tile_per_side"
+                if constructed.interface == "Linear"
+                else "none"
+            ),
+            "Interface_Half_Density_Location": (
+                "interface_tile_midpoint"
+                if constructed.interface == "Linear"
+                else "none"
+            ),
             "Center_Length": float(constructed.center_length),
             "Center_Density_Actual": float(constructed.source_density),
             "Side_Density_Actual": float(constructed.vapor_density),
@@ -472,6 +556,13 @@ def _metadata(
                 constructed.particles_per_vapor_tile
             ),
             "Liquid_Particles": int(constructed.liquid_particles),
+            "Full_Liquid_Particles": int(constructed.full_liquid_particles),
+            "Interface_Particles_Left": int(
+                constructed.interface_particles_per_side[0]
+            ),
+            "Interface_Particles_Right": int(
+                constructed.interface_particles_per_side[1]
+            ),
             "Vapor_Particles_Per_Side": int(
                 constructed.vapor_particles_per_side
             ),
@@ -481,6 +572,11 @@ def _metadata(
             "Velocity_Initialization": "regenerated_maxwell_boltzmann",
             "Vapor_Selection": (
                 "independent_fixed_count_without_replacement"
+            ),
+            "Interface_Selection": (
+                "independent_bernoulli_linear_retention_by_x"
+                if constructed.interface == "Linear"
+                else "none"
             ),
         },
         "mdsims/time": {
@@ -570,6 +666,7 @@ def run_expanded_clone(
             request.vapor_scale,
             request.vapor_density_divisor,
             effective_seed,
+            request.interface,
         )
         frame = make_expanded_clone_frame(constructed)
         simulation, thermo, device_name = _make_simulation_from_frame(
@@ -814,6 +911,14 @@ def run_expanded_clone(
             "hdf5_path": run_paths.hdf5,
             "n_particles": constructed.n_particles,
             "liquid_particles": constructed.liquid_particles,
+            "interface": constructed.interface,
+            "interface_width": constructed.interface_width,
+            "interface_particles_left": (
+                constructed.interface_particles_per_side[0]
+            ),
+            "interface_particles_right": (
+                constructed.interface_particles_per_side[1]
+            ),
             "vapor_particles_per_side": constructed.vapor_particles_per_side,
             "particles_per_vapor_tile": (
                 constructed.particles_per_vapor_tile

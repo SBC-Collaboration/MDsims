@@ -537,6 +537,9 @@ class RunAnalysis:
             interface_width = metadata.get(
                 "mdsims/protocol/Interface_Width", 0.0
             )
+            interface_placement = str(_decode(metadata.get(
+                "mdsims/protocol/Interface_Placement", ""
+            ))).strip().lower()
             if center_length is not None:
                 half = float(center_length) / 2.0
                 plot_axis.axvline(
@@ -563,8 +566,11 @@ class RunAnalysis:
                 x = profile[center_column].to_numpy(dtype=float)
                 half = float(center_length) / 2.0
                 width = float(interface_width)
-                inner_edge = half - width
                 distance = np.abs(x)
+                dedicated_tile = (
+                    interface_placement == "one_dedicated_tile_per_side"
+                )
+                inner_edge = half if dedicated_tile else half - width
                 progress = np.clip(
                     (distance - inner_edge) / width,
                     0.0,
@@ -584,16 +590,24 @@ class RunAnalysis:
                         f"(width {width:g})"
                     ),
                 )
+                marker = (
+                    half + width / 2.0 if dedicated_tile else inner_edge
+                )
+                marker_label = (
+                    "Initial interface midpoints (half transition)"
+                    if dedicated_tile
+                    else "Initial linear-interface inner edges"
+                )
                 plot_axis.axvline(
-                    -inner_edge,
+                    -marker,
                     color="tab:purple",
                     linestyle="-.",
                     linewidth=1.0,
                     alpha=0.75,
-                    label="Initial linear-interface inner edges",
+                    label=marker_label,
                 )
                 plot_axis.axvline(
-                    inner_edge,
+                    marker,
                     color="tab:purple",
                     linestyle="-.",
                     linewidth=1.0,

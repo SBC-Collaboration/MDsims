@@ -167,6 +167,12 @@ inherited. Velocities are regenerated at the requested temperature and net
 momentum is removed. A preparation interval runs before the production clock
 and production logging begin.
 
+With `interface="Linear"`, one additional complete source-box tile is inserted
+between the liquid and vapor tiles on each side. The interface tile is thinned
+linearly from liquid density at its liquid-facing edge to vapor density at its
+vapor-facing edge. Its midpoint is exactly the half-transition location. With
+`interface="None"`, no extra tiles are inserted and the boundary is sharp.
+
 ```python
 from md_Helpers import (
     ExpandedCloneConfig,
@@ -187,6 +193,7 @@ config = ExpandedCloneConfig(
     preparation_steps=50_000,
     seed=17,
     com_recenter_period=10_000,
+    interface="Linear",
 )
 
 result = run_expanded_clone(config, project_paths=paths)

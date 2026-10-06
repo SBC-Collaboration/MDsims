@@ -368,10 +368,88 @@ class LatticeTests(unittest.TestCase):
         config.validate()
         signature = config.run_signature(source_frame_id=5, effective_seed=7)
         self.assertEqual(len(signature), 64)
+        linear = ExpandedCloneConfig(
+            source_run_id="20260923000000",
+            liquid_scale=3,
+            vapor_scale=1,
+            vapor_density_divisor=25,
+            kT=0.9,
+            nsteps=41_000,
+            interface="Linear",
+        )
+        linear.validate()
+        self.assertNotEqual(
+            signature,
+            linear.run_signature(source_frame_id=5, effective_seed=7),
+        )
         with self.assertRaisesRegex(ValueError, "positive integer"):
             ExpandedCloneConfig(
                 "20260923000000", 1.5, 1, 25, 0.9, 41_000
             ).validate()
+        with self.assertRaisesRegex(ValueError, "None.*Linear"):
+            ExpandedCloneConfig(
+                "20260923000000",
+                3,
+                1,
+                25,
+                0.9,
+                41_000,
+                interface="curved",
+            ).validate()
+
+    def test_expanded_clone_linear_interface_uses_dedicated_tiles(self):
+        particle_count = 400
+        x = np.linspace(-1.995, 1.995, particle_count)
+        positions = np.column_stack((x, np.zeros((particle_count, 2))))
+        frame = SimpleNamespace(
+            configuration=SimpleNamespace(
+                box=np.array([4.0, 2.0, 2.0, 0.0, 0.0, 0.0])
+            ),
+            particles=SimpleNamespace(
+                N=particle_count,
+                types=["A"],
+                position=positions,
+                typeid=np.zeros(particle_count, dtype=np.uint32),
+                mass=np.ones(particle_count),
+            ),
+        )
+        state = build_expanded_clone_state(
+            frame,
+            liquid_scale=2,
+            vapor_scale=1,
+            vapor_density_divisor=4.0,
+            seed=23,
+            interface="Linear",
+        )
+
+        self.assertEqual(state.interface, "Linear")
+        self.assertAlmostEqual(state.interface_width, 4.0)
+        self.assertAlmostEqual(state.center_length, 8.0)
+        np.testing.assert_allclose(state.box, [24, 2, 2, 0, 0, 0])
+        self.assertEqual(state.full_liquid_particles, 800)
+        self.assertEqual(state.liquid_particles, 800)
+        self.assertTrue(all(
+            100 < count < 400
+            for count in state.interface_particles_per_side
+        ))
+
+        # Layout is vapor, left interface, two liquid tiles, right interface,
+        # vapor. Retention rises across the left interface and falls across
+        # the right, with the halfway point at x=-6 and x=+6 respectively.
+        left_interface = state.positions[
+            (state.positions[:, 0] >= -8) & (state.positions[:, 0] < -4)
+        ]
+        right_interface = state.positions[
+            (state.positions[:, 0] >= 4) & (state.positions[:, 0] < 8)
+        ]
+        self.assertGreater(
+            np.count_nonzero(left_interface[:, 0] >= -6),
+            np.count_nonzero(left_interface[:, 0] < -6),
+        )
+        self.assertGreater(
+            np.count_nonzero(right_interface[:, 0] < 6),
+            np.count_nonzero(right_interface[:, 0] >= 6),
+        )
 
     def test_expanded_center_length_is_independently_scalable(self):
         lattice = build_expanded_fcc_lattice(
@@ -728,6 +806,49 @@ class RunPlotPolicyTests(unittest.TestCase):
             reference.get_ydata(),
             [0.1, 0.4, 0.7, 0.7, 0.7, 0.4, 0.1],
         )
+        plt.close(figure)
+
+    @patch("matplotlib.pyplot.show")
+    def test_density_plot_centers_dedicated_clone_interface(self, _show):
+        import pandas as pd
+        import matplotlib.pyplot as plt
+
+        run = RunAnalysis.__new__(RunAnalysis)
+        run.sim_type = "Expanded_Clone"
+        x = np.array([-8.0, -7.0, -5.0, -3.0, 0.0, 3.0, 5.0, 7.0, 8.0])
+        profile = pd.DataFrame({
+            "x_center": x,
+            "number_density": np.zeros(len(x)),
+        })
+        run.density_profile = lambda **_kwargs: profile
+        run.metadata = lambda: {
+            "mdsims/protocol/Center_Length": 6.0,
+            "mdsims/protocol/Center_Density_Actual": 0.7,
+            "mdsims/protocol/Side_Density_Actual": 0.1,
+            "mdsims/protocol/Interface": "Linear",
+            "mdsims/protocol/Interface_Width": 4.0,
+            "mdsims/protocol/Interface_Placement": (
+                "one_dedicated_tile_per_side"
+            ),
+        }
+
+        figure, _ = run.plot_density_profile(frame=-1, num_slices=len(x))
+        reference = next(
+            line
+            for line in figure.axes[0].lines
+            if line.get_label().startswith("Initial linear density profile")
+        )
+        np.testing.assert_allclose(
+            reference.get_ydata(),
+            [0.1, 0.1, 0.4, 0.7, 0.7, 0.7, 0.4, 0.1, 0.1],
+        )
+        midpoint_lines = [
+            line
+            for line in figure.axes[0].lines
+            if "half transition" in line.get_label()
+        ]
+        self.assertEqual(len(midpoint_lines), 1)
+        np.testing.assert_allclose(midpoint_lines[0].get_xdata(), [-5.0, -5.0])
         plt.close(figure)
 
 
