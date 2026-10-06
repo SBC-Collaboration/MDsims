@@ -376,6 +376,7 @@ class LatticeTests(unittest.TestCase):
             kT=0.9,
             nsteps=41_000,
             interface="Linear",
+            interface_width=1.0,
         )
         linear.validate()
         self.assertNotEqual(
@@ -395,6 +396,16 @@ class LatticeTests(unittest.TestCase):
                 0.9,
                 41_000,
                 interface="curved",
+            ).validate()
+        with self.assertRaisesRegex(ValueError, "interface_width"):
+            ExpandedCloneConfig(
+                "20260923000000",
+                3,
+                1,
+                25,
+                0.9,
+                41_000,
+                interface="Linear",
             ).validate()
 
     def test_expanded_clone_linear_interface_uses_dedicated_tiles(self):
@@ -420,35 +431,37 @@ class LatticeTests(unittest.TestCase):
             vapor_density_divisor=4.0,
             seed=23,
             interface="Linear",
+            interface_width=1.0,
         )
 
         self.assertEqual(state.interface, "Linear")
-        self.assertAlmostEqual(state.interface_width, 4.0)
+        self.assertAlmostEqual(state.interface_width, 1.0)
         self.assertAlmostEqual(state.center_length, 8.0)
-        np.testing.assert_allclose(state.box, [24, 2, 2, 0, 0, 0])
+        np.testing.assert_allclose(state.box, [18, 2, 2, 0, 0, 0])
         self.assertEqual(state.full_liquid_particles, 800)
         self.assertEqual(state.liquid_particles, 800)
         self.assertTrue(all(
-            100 < count < 400
+            10 < count < 100
             for count in state.interface_particles_per_side
         ))
 
-        # Layout is vapor, left interface, two liquid tiles, right interface,
-        # vapor. Retention rises across the left interface and falls across
-        # the right, with the halfway point at x=-6 and x=+6 respectively.
+        # Layout is one vapor box, a width-1 left sliver, two liquid boxes, a
+        # width-1 right sliver, and one vapor box. Retention rises across the
+        # left interface and falls across the right, with halfway points at
+        # x=-4.5 and x=+4.5 respectively.
         left_interface = state.positions[
-            (state.positions[:, 0] >= -8) & (state.positions[:, 0] < -4)
+            (state.positions[:, 0] >= -5) & (state.positions[:, 0] < -4)
         ]
         right_interface = state.positions[
-            (state.positions[:, 0] >= 4) & (state.positions[:, 0] < 8)
+            (state.positions[:, 0] >= 4) & (state.positions[:, 0] < 5)
         ]
         self.assertGreater(
-            np.count_nonzero(left_interface[:, 0] >= -6),
-            np.count_nonzero(left_interface[:, 0] < -6),
+            np.count_nonzero(left_interface[:, 0] >= -4.5),
+            np.count_nonzero(left_interface[:, 0] < -4.5),
         )
         self.assertGreater(
-            np.count_nonzero(right_interface[:, 0] < 6),
-            np.count_nonzero(right_interface[:, 0] >= 6),
+            np.count_nonzero(right_interface[:, 0] < 4.5),
+            np.count_nonzero(right_interface[:, 0] >= 4.5),
         )
 
     def test_expanded_center_length_is_independently_scalable(self):
@@ -828,7 +841,7 @@ class RunPlotPolicyTests(unittest.TestCase):
             "mdsims/protocol/Interface": "Linear",
             "mdsims/protocol/Interface_Width": 4.0,
             "mdsims/protocol/Interface_Placement": (
-                "one_dedicated_tile_per_side"
+                "one_source_derived_sliver_per_side"
             ),
         }
 

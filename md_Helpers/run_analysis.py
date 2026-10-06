@@ -567,10 +567,11 @@ class RunAnalysis:
                 half = float(center_length) / 2.0
                 width = float(interface_width)
                 distance = np.abs(x)
-                dedicated_tile = (
-                    interface_placement == "one_dedicated_tile_per_side"
-                )
-                inner_edge = half if dedicated_tile else half - width
+                centered_interface = interface_placement in {
+                    "one_dedicated_tile_per_side",
+                    "one_source_derived_sliver_per_side",
+                }
+                inner_edge = half if centered_interface else half - width
                 progress = np.clip(
                     (distance - inner_edge) / width,
                     0.0,
@@ -591,11 +592,11 @@ class RunAnalysis:
                     ),
                 )
                 marker = (
-                    half + width / 2.0 if dedicated_tile else inner_edge
+                    half + width / 2.0 if centered_interface else inner_edge
                 )
                 marker_label = (
                     "Initial interface midpoints (half transition)"
-                    if dedicated_tile
+                    if centered_interface
                     else "Initial linear-interface inner edges"
                 )
                 plot_axis.axvline(
