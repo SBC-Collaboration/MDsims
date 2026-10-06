@@ -16,7 +16,6 @@ from .analysis import (
 )
 from .database import SQLiteRunDatabase, utc_now
 from .paths import ProjectPaths, RunPaths
-from .phase_fit_backfill import phase_fit_history_values
 from .signatures import canonical_json, create_run_signature
 from .storage import RunStorage, StateData, update_hdf5_metadata
 from .thermalization import (
@@ -31,7 +30,11 @@ from .thermalization import (
     thermalization_log_steps,
     thermalization_phase_frame_schedule,
 )
-from .voxel_fit import conditional_phase_fit, phase_fit_sql_values
+from .voxel_fit import (
+    conditional_phase_fit,
+    phase_fit_history_values,
+    phase_fit_sql_values,
+)
 
 
 CAVITATION_METHOD_VERSION = "cavitation_spherical_mask_v1"

@@ -30,7 +30,6 @@ from .expanded_clone import (
     run_expanded_clone,
 )
 from .paths import ProjectPaths
-from .phase_fit_backfill import backfill_skew_phase_fits
 from .run_analysis import RunAnalysis, open_run
 from .run_management import delete_run
 from .seitz import (
@@ -76,6 +75,7 @@ __all__ = [
     "calculate_cavitation_seitz",
     "build_expanded_fcc_lattice",
     "backfill_skew_phase_fits",
+    "create_skew_staging_database",
     "build_expanded_clone_state",
     "expanded_fcc_frame_schedule",
     "cavitations_with_nbins_fit",
@@ -92,6 +92,7 @@ __all__ = [
     "plot_liquid_nbins_gaussians",
     "plot_phase_liquid_density_vs_nbins",
     "plot_phase_nbins_mixtures",
+    "promote_skew_phase_fits",
     "plot_nbins_phase_fits",
     "plot_nbins_seitz",
     "query_seitz_eos_states",
@@ -110,3 +111,27 @@ __all__ = [
     "run_expanded_fcc",
     "run_expanded_clone",
 ]
+
+
+def backfill_skew_phase_fits(*args, **kwargs):
+    """Load the optional migration machinery only when it is requested."""
+
+    from .phase_fit_backfill import backfill_skew_phase_fits as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def create_skew_staging_database(*args, **kwargs):
+    """Lazily create a shadow database for phase-fit migration."""
+
+    from .phase_fit_backfill import create_skew_staging_database as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def promote_skew_phase_fits(*args, **kwargs):
+    """Lazily promote validated shadow-database fits into production."""
+
+    from .phase_fit_backfill import promote_skew_phase_fits as implementation
+
+    return implementation(*args, **kwargs)

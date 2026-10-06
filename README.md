@@ -341,30 +341,44 @@ HDF5 data are loaded lazily by the individual inspection methods.
 Separated states now use the same `round(0.3 * N_Cells + 3)` voxel rule and
 the same final five saved frames as before, but the liquid component is a
 skew-normal distribution. The vapor remains Poisson and the interface retains
-the existing fractional convolution. Legacy fits are retained in the
-`Phase_Fit_History` SQL table and under
-`mdsims/analysis/phase_fit_history/<method-version>` in each `run.hdf5`.
+the existing fractional convolution. The migration runs against a complete
+shadow copy of the SQLite database. Production SQL and HDF5 metadata remain
+unchanged while fits are accumulated and checked. The shadow database stores
+a compressed fit payload for each completed run, so promotion does not rerun
+the optimizer.
 
-Preview the resumable backfill without writing anything:
+Preview the resumable backfill. The first invocation creates a shadow database
+beside the production database:
 
 ```bash
 python -m examples.backfill_skew_phase_fits --limit 10
 ```
 
-Apply a small canary batch only after choosing a new backup filename:
+Fit a small canary batch into the shadow database only:
 
 ```bash
 python -m examples.backfill_skew_phase_fits \
   --apply \
-  --backup /path/to/backups/mdsims-before-skew.sqlite3 \
   --limit 10
 ```
 
-Repeat the command with a fresh backup filename to continue. Completed runs
-are skipped, each run is committed independently, and a run present in more
-than one result table is fitted once and updated in every matching table in a
-single SQL transaction. Failed runs remain recorded and are retried only with
-`--retry-failed`.
+Repeat with `--apply` to continue. Completed runs are skipped, each run is
+committed independently, and a run present in more than one result table is
+fitted once and updated in every matching shadow table in one SQL transaction.
+Failed runs remain recorded and are retried only with `--retry-failed`.
+
+After inspecting the completed shadow results, promote them using a new backup
+filename. Promotion archives the legacy values in `Phase_Fit_History`, updates
+every production table containing the run, and versions the HDF5 metadata:
+
+```bash
+python -m examples.backfill_skew_phase_fits \
+  --promote \
+  --backup /path/to/backups/mdsims-before-skew.sqlite3
+```
+
+Use `--staging-database /path/to/shadow.sqlite3` to choose another shadow file.
+`--run-id` and `--limit` can also restrict promotion to a canary set.
 
 Query Master independently:
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -789,3 +791,79 @@ def phase_fit_sql_values(fit: dict[str, Any]) -> dict[str, Any]:
         "Phase_Fit_Method": fit.get("method"),
         "Phase_Fit_Method_Version": fit.get("method_version"),
     }
+
+
+def phase_fit_history_values(
+    fit: dict[str, Any],
+    *,
+    attempt_count: int,
+    started_at: str,
+    completed_at: str | None = None,
+) -> dict[str, Any]:
+    """Map a completed skew fit onto the versioned SQL history schema."""
+
+    if completed_at is None:
+        from .database import utc_now
+
+        completed_at = utc_now()
+    return {
+        "Method": PHASE_FIT_METHOD,
+        "Method_Version": PHASE_FIT_METHOD_VERSION,
+        "Status": "Complete",
+        "Attempt_Count": int(attempt_count),
+        "Started_At": started_at,
+        "Completed_At": completed_at,
+        "Error_Message": None,
+        "N_Bins": int(fit["voxel_nbins"]),
+        "Frame_Indices": json.dumps([int(value) for value in fit["frame_indices"]]),
+        "Frames_Used": int(fit["frames_used"]),
+        "Interface_Points": int(fit["interface_points"]),
+        "Interface_Void_Fraction": float(fit["interface_void_fraction"]),
+        "Alpha_Lower_Bound": float(fit["alpha_lower_bound"]),
+        "Alpha_Upper_Bound": float(fit["alpha_upper_bound"]),
+        "rho_liquid": float(fit["rho_liquid"]),
+        "rho_liquid_unc": float(fit["rho_liquid_unc"]),
+        "rho_gas": float(fit["rho_gas"]),
+        "rho_gas_unc": float(fit["rho_gas_unc"]),
+        "V_liquid": float(fit["V_liquid"]),
+        "V_liquid_unc": float(fit["V_liquid_unc"]),
+        "V_gas": float(fit["V_gas"]),
+        "V_gas_unc": float(fit["V_gas_unc"]),
+        "Liquid_Scale_Density": float(fit["liquid_scale_density"]),
+        "Liquid_Shape_Alpha": float(fit["liquid_shape_alpha"]),
+        "Liquid_Shape_Alpha_Unc": float(fit["liquid_shape_alpha_unc"]),
+        "Gas_Weight": float(fit["gas_weight"]),
+        "Liquid_Weight": float(fit["liquid_weight"]),
+        "Interface_Weight": float(fit["interface_weight"]),
+        "Log_Likelihood": float(fit["log_likelihood"]),
+        "AIC": float(fit["AIC"]),
+        "BIC": float(fit["BIC"]),
+        "Fit_Payload": serialize_phase_fit_payload(fit),
+    }
+
+
+def serialize_phase_fit_payload(fit: dict[str, Any]) -> bytes:
+    """Serialize a fit without pickle so staging results remain portable."""
+
+    payload = {}
+    for key, value in fit.items():
+        if value is None or isinstance(value, dict):
+            continue
+        array = np.asarray(value)
+        if array.dtype.kind == "O":
+            continue
+        payload[str(key)] = array
+    buffer = BytesIO()
+    np.savez_compressed(buffer, **payload)
+    return buffer.getvalue()
+
+
+def deserialize_phase_fit_payload(payload: bytes) -> dict[str, Any]:
+    """Restore a fit payload produced by :func:`serialize_phase_fit_payload`."""
+
+    with np.load(BytesIO(payload), allow_pickle=False) as archive:
+        result = {}
+        for key in archive.files:
+            value = archive[key]
+            result[key] = value.item() if value.ndim == 0 else value.copy()
+    return result

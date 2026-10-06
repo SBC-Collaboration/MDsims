@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -16,7 +15,9 @@ from .storage import replace_versioned_phase_fit_metadata
 from .voxel_fit import (
     PHASE_FIT_METHOD,
     PHASE_FIT_METHOD_VERSION,
+    deserialize_phase_fit_payload,
     fit_trajectory_voxel_skew_mixture,
+    phase_fit_history_values,
     phase_fit_sql_values,
 )
 
@@ -89,47 +90,6 @@ def _validate_fit(fit: dict[str, Any], n_cells: int) -> None:
         raise ValueError("fitted phase volumes do not sum to the box volume")
 
 
-def phase_fit_history_values(
-    fit: dict[str, Any],
-    *,
-    attempt_count: int,
-    started_at: str,
-) -> dict[str, Any]:
-    return {
-        "Method": PHASE_FIT_METHOD,
-        "Method_Version": PHASE_FIT_METHOD_VERSION,
-        "Status": "Complete",
-        "Attempt_Count": int(attempt_count),
-        "Started_At": started_at,
-        "Completed_At": utc_now(),
-        "Error_Message": None,
-        "N_Bins": int(fit["voxel_nbins"]),
-        "Frame_Indices": json.dumps([int(value) for value in fit["frame_indices"]]),
-        "Frames_Used": int(fit["frames_used"]),
-        "Interface_Points": int(fit["interface_points"]),
-        "Interface_Void_Fraction": float(fit["interface_void_fraction"]),
-        "Alpha_Lower_Bound": float(fit["alpha_lower_bound"]),
-        "Alpha_Upper_Bound": float(fit["alpha_upper_bound"]),
-        "rho_liquid": float(fit["rho_liquid"]),
-        "rho_liquid_unc": float(fit["rho_liquid_unc"]),
-        "rho_gas": float(fit["rho_gas"]),
-        "rho_gas_unc": float(fit["rho_gas_unc"]),
-        "V_liquid": float(fit["V_liquid"]),
-        "V_liquid_unc": float(fit["V_liquid_unc"]),
-        "V_gas": float(fit["V_gas"]),
-        "V_gas_unc": float(fit["V_gas_unc"]),
-        "Liquid_Scale_Density": float(fit["liquid_scale_density"]),
-        "Liquid_Shape_Alpha": float(fit["liquid_shape_alpha"]),
-        "Liquid_Shape_Alpha_Unc": float(fit["liquid_shape_alpha_unc"]),
-        "Gas_Weight": float(fit["gas_weight"]),
-        "Liquid_Weight": float(fit["liquid_weight"]),
-        "Interface_Weight": float(fit["interface_weight"]),
-        "Log_Likelihood": float(fit["log_likelihood"]),
-        "AIC": float(fit["AIC"]),
-        "BIC": float(fit["BIC"]),
-    }
-
-
 def backfill_skew_phase_fits(
     database: SQLiteRunDatabase,
     *,
@@ -140,6 +100,7 @@ def backfill_skew_phase_fits(
     retry_failed: bool = False,
     max_attempts: int = 3,
     fit_options: dict[str, Any] | None = None,
+    write_hdf5_metadata: bool = True,
 ):
     """Refit separated runs safely, continuing past per-run failures.
 
@@ -277,7 +238,8 @@ def backfill_skew_phase_fits(
             )
             _validate_fit(fit, next(iter(n_cells_values)))
             fit = {"status": "Complete", **fit, "backfilled_at": utc_now()}
-            replace_versioned_phase_fit_metadata(hdf5_path, fit)
+            if write_hdf5_metadata:
+                replace_versioned_phase_fit_metadata(hdf5_path, fit)
             active_values = phase_fit_sql_values(fit)
             updated_tables = database.apply_phase_fit_everywhere(
                 run_id,
@@ -318,3 +280,111 @@ def backfill_skew_phase_fits(
         results,
         columns=["Run_ID", "Tables", "Status", "Message"],
     )
+
+
+def create_skew_staging_database(
+    production_database: SQLiteRunDatabase,
+    staging_path: str | Path,
+) -> SQLiteRunDatabase:
+    """Create a complete shadow copy while production remains active."""
+
+    staging_path = production_database.backup(staging_path)
+    staging = SQLiteRunDatabase(staging_path, timeout=production_database.timeout)
+    staging.initialize()
+    return staging
+
+
+def promote_skew_phase_fits(
+    staging_database: SQLiteRunDatabase,
+    production_database: SQLiteRunDatabase,
+    *,
+    backup_path: str | Path,
+    project_paths: ProjectPaths | None = None,
+    run_ids: Iterable[str] | None = None,
+    limit: int | None = None,
+):
+    """Promote validated staging fits into production SQL and HDF5 metadata."""
+
+    import pandas as pd
+
+    staging_database.initialize()
+    production_database.initialize()
+    backup = production_database.backup(backup_path)
+    paths = project_paths or ProjectPaths()
+    requested = None if run_ids is None else {str(value) for value in run_ids}
+    history = staging_database.query_phase_fit_history(
+        method_version=PHASE_FIT_METHOD_VERSION
+    )
+    completed: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in history:
+        run_id = str(row["Run_ID"])
+        if row["Status"] != "Complete":
+            continue
+        if requested is not None and run_id not in requested:
+            continue
+        completed[run_id].append(row)
+    run_id_order = sorted(completed)
+    if limit is not None:
+        if int(limit) <= 0:
+            raise ValueError("limit must be positive or None")
+        run_id_order = run_id_order[: int(limit)]
+
+    results = []
+    for run_id in run_id_order:
+        rows = completed[run_id]
+        tables = sorted({str(row["Sim_Table"]) for row in rows})
+        try:
+            payload = next(
+                row["Fit_Payload"]
+                for row in rows
+                if row.get("Fit_Payload") is not None
+            )
+            fit = deserialize_phase_fit_payload(payload)
+            targets = production_database.phase_fit_targets(
+                run_ids=[run_id], separated_only=True
+            )
+            if not targets:
+                raise KeyError("run is not a separated state in production")
+            n_cells_values = {int(row["N_Cells"]) for row in targets}
+            locations = {
+                str(_trajectory_and_hdf5(row, paths)[0].parent.resolve())
+                for row in targets
+            }
+            if len(n_cells_values) != 1 or len(locations) != 1:
+                raise ValueError(
+                    "production duplicate rows disagree on N_Cells or File_Location"
+                )
+            _validate_fit(fit, next(iter(n_cells_values)))
+            _, hdf5_path = _trajectory_and_hdf5(targets[0], paths)
+            replace_versioned_phase_fit_metadata(hdf5_path, fit)
+            source_history = rows[0]
+            history_values = phase_fit_history_values(
+                fit,
+                attempt_count=int(source_history.get("Attempt_Count") or 1),
+                started_at=source_history.get("Started_At") or utc_now(),
+                completed_at=source_history.get("Completed_At") or utc_now(),
+            )
+            updated = production_database.apply_phase_fit_everywhere(
+                run_id,
+                active_values=phase_fit_sql_values(fit),
+                history_values=history_values,
+            )
+            results.append({
+                "Run_ID": run_id,
+                "Tables": ",".join(updated),
+                "Status": "Promoted",
+                "Message": None,
+            })
+        except Exception as error:
+            results.append({
+                "Run_ID": run_id,
+                "Tables": ",".join(tables),
+                "Status": "Promotion_Failed",
+                "Message": f"{type(error).__name__}: {error}",
+            })
+    result = pd.DataFrame.from_records(
+        results,
+        columns=["Run_ID", "Tables", "Status", "Message"],
+    )
+    result.attrs["production_backup"] = str(backup)
+    return result

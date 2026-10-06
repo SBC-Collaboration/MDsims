@@ -9,12 +9,17 @@ import h5py
 
 from md_Helpers.database import SQLiteRunDatabase
 from md_Helpers.paths import ProjectPaths
-from md_Helpers.phase_fit_backfill import backfill_skew_phase_fits
+from md_Helpers.phase_fit_backfill import (
+    backfill_skew_phase_fits,
+    create_skew_staging_database,
+)
 from md_Helpers.storage import replace_versioned_phase_fit_metadata
 from md_Helpers.voxel_fit import (
     PHASE_FIT_METHOD,
     PHASE_FIT_METHOD_VERSION,
     conditional_phase_fit,
+    deserialize_phase_fit_payload,
+    serialize_phase_fit_payload,
 )
 
 
@@ -141,6 +146,44 @@ class PhaseFitHistoryTests(unittest.TestCase):
         self.assertEqual(result.iloc[0]["Status"], "Planned")
         self.assertEqual(result.iloc[0]["Tables"], "Results_A,Results_B")
         self.assertEqual(result.iloc[0]["Message"], "nbins=15")
+
+    def test_shadow_database_is_independent_complete_copy(self):
+        staging_path = self.root / "runs-skew-staging.sqlite3"
+        staging = create_skew_staging_database(self.database, staging_path)
+        with staging.connection() as connection:
+            connection.execute(
+                "UPDATE Results_A SET rho_liquid = 0.77 "
+                "WHERE Run_ID = '20261001000001'"
+            )
+        with staging.connection() as connection:
+            staged = connection.execute(
+                "SELECT rho_liquid FROM Results_A "
+                "WHERE Run_ID = '20261001000001'"
+            ).fetchone()[0]
+        with self.database.connection() as connection:
+            production = connection.execute(
+                "SELECT rho_liquid FROM Results_A "
+                "WHERE Run_ID = '20261001000001'"
+            ).fetchone()[0]
+        self.assertAlmostEqual(staged, 0.77)
+        self.assertAlmostEqual(production, 0.6)
+
+    def test_fit_payload_round_trip_is_pickle_free(self):
+        fit = {
+            "method": PHASE_FIT_METHOD,
+            "method_version": PHASE_FIT_METHOD_VERSION,
+            "success": True,
+            "rho_liquid": 0.61,
+            "frame_indices": [40, 50, 60, 70, 80],
+            "histogram_counts": [1.0, 4.0, 2.0],
+            "optional": None,
+        }
+        restored = deserialize_phase_fit_payload(serialize_phase_fit_payload(fit))
+        self.assertEqual(restored["method_version"], PHASE_FIT_METHOD_VERSION)
+        self.assertTrue(restored["success"])
+        self.assertAlmostEqual(restored["rho_liquid"], 0.61)
+        self.assertEqual(restored["frame_indices"].tolist(), [40, 50, 60, 70, 80])
+        self.assertNotIn("optional", restored)
 
 
 class PhaseFitMetadataTests(unittest.TestCase):

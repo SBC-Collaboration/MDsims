@@ -173,6 +173,7 @@ PHASE_FIT_HISTORY_COLUMN_ORDER = (
     "Log_Likelihood",
     "AIC",
     "BIC",
+    "Fit_Payload",
 )
 PHASE_FIT_HISTORY_COLUMNS = set(PHASE_FIT_HISTORY_COLUMN_ORDER)
 PHASE_FIT_SQL_FIELDS_FOR_DATABASE = {
@@ -409,6 +410,7 @@ CREATE TABLE IF NOT EXISTS Phase_Fit_History (
     Log_Likelihood REAL,
     AIC REAL,
     BIC REAL,
+    Fit_Payload BLOB,
     PRIMARY KEY (Run_ID, Sim_Table, Method_Version),
     FOREIGN KEY (Run_ID) REFERENCES MD_Master (Run_ID),
     CHECK (Attempt_Count >= 0),
@@ -525,6 +527,16 @@ class SQLiteRunDatabase:
                 )
                 connection.execute("PRAGMA foreign_keys = ON")
             connection.executescript(SQLITE_SCHEMA)
+            phase_history_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(Phase_Fit_History)"
+                ).fetchall()
+            }
+            if "Fit_Payload" not in phase_history_columns:
+                connection.execute(
+                    "ALTER TABLE Phase_Fit_History ADD COLUMN Fit_Payload BLOB"
+                )
             thermalization_columns = {
                 row["name"]
                 for row in connection.execute(
