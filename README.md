@@ -173,7 +173,9 @@ randomly retained with a probability that decreases linearly from one at its
 liquid-facing edge to `1 / vapor_density_divisor` at its vapor-facing edge. Its
 midpoint is exactly the half-transition location. With `interface="None"`, no
 slivers are inserted and the boundary is sharp. The width must be positive and
-cannot exceed the inherited source box x-length.
+cannot exceed the inherited source box x-length. Before integration, interface
+particles that would lie within `0.9 * sigma_LJ` of an adjacent vapor particle
+across a splice are removed to prevent rare high-force seam overlaps.
 
 ```python
 from md_Helpers import (

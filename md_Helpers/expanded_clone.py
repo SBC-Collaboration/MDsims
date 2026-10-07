@@ -27,8 +27,8 @@ from .thermalization import (
 )
 
 
-EXPANDED_CLONE_METHOD_VERSION = "thermalized_box_clone_expansion_v3"
-EXPANDED_CLONE_STATE_VERSION = "whole_box_tiles_variable_linear_interface_v3"
+EXPANDED_CLONE_METHOD_VERSION = "thermalized_box_clone_expansion_v4"
+EXPANDED_CLONE_STATE_VERSION = "overlap_safe_variable_linear_interface_v4"
 EXPANDED_CLONE_TRAJECTORY_VERSION = "post_preparation_recenter_phase_final_v1"
 
 
@@ -142,6 +142,7 @@ class ExpandedCloneState:
     interface: str
     interface_width: float
     source_box_length: float
+    interface_overlap_removals_per_side: tuple[int, int]
 
     @property
     def volume(self) -> float:
@@ -164,6 +165,7 @@ def build_expanded_clone_state(
     seed: int,
     interface: str = "None",
     interface_width: float = 0.0,
+    minimum_separation: float = 0.0,
 ) -> ExpandedCloneState:
     """Tile a source box into liquid, optional interface, and vapor regions.
 
@@ -180,6 +182,7 @@ def build_expanded_clone_state(
     seed = int(seed)
     interface = str(interface).strip().lower()
     interface_width = float(interface_width)
+    minimum_separation = float(minimum_separation)
     if liquid_scale <= 0 or vapor_scale <= 0:
         raise ValueError("liquid_scale and vapor_scale must be positive")
     if vapor_density_divisor < 1:
@@ -194,6 +197,8 @@ def build_expanded_clone_state(
         )
     if interface == "none" and interface_width < 0:
         raise ValueError("interface_width cannot be negative")
+    if minimum_separation < 0:
+        raise ValueError("minimum_separation cannot be negative")
 
     source_box = np.asarray(source_frame.configuration.box, dtype=np.float64)
     if source_box.shape != (6,) or np.any(source_box[:3] <= 0):
@@ -254,16 +259,19 @@ def build_expanded_clone_state(
     type_id_tiles = []
     mass_tiles = []
     interface_counts = []
+    interface_overlap_removals = []
     cursor = -new_lx / 2.0
 
-    def append_region(selected: np.ndarray, x_translation: float) -> None:
+    def append_region(selected: np.ndarray, x_translation: float) -> int:
         translated = source_positions[selected].copy()
         translated[:, 0] += x_translation
         position_tiles.append(translated)
         type_id_tiles.append(type_ids[selected])
         mass_tiles.append(masses[selected])
+        return len(position_tiles) - 1
 
     # Integer number of complete vapor boxes on the left.
+    left_vapor_tile = None
     for _ in range(vapor_scale):
         rng = np.random.default_rng(next(region_sequences))
         selected = np.sort(rng.choice(
@@ -271,7 +279,7 @@ def build_expanded_clone_state(
             size=particles_per_vapor_tile,
             replace=False,
         ))
-        append_region(selected, cursor + lx / 2.0)
+        left_vapor_tile = append_region(selected, cursor + lx / 2.0)
         cursor += lx
 
     vapor_fraction = 1.0 / vapor_density_divisor
@@ -286,7 +294,8 @@ def build_expanded_clone_state(
         selected = candidates[rng.random(len(candidates)) < probability]
         if not len(selected):
             raise RuntimeError("left linear interface contains no particles")
-        append_region(selected, cursor - lower)
+        left_interface_tile = append_region(selected, cursor - lower)
+        left_seam = cursor
         interface_counts.append(int(len(selected)))
         cursor += interface_width
 
@@ -310,11 +319,13 @@ def build_expanded_clone_state(
         selected = candidates[rng.random(len(candidates)) < probability]
         if not len(selected):
             raise RuntimeError("right linear interface contains no particles")
-        append_region(selected, cursor + lx / 2.0)
+        right_interface_tile = append_region(selected, cursor + lx / 2.0)
         interface_counts.append(int(len(selected)))
         cursor += interface_width
+        right_seam = cursor
 
     # Integer number of complete vapor boxes on the right.
+    right_vapor_tile = None
     for _ in range(vapor_scale):
         rng = np.random.default_rng(next(region_sequences))
         selected = np.sort(rng.choice(
@@ -322,11 +333,78 @@ def build_expanded_clone_state(
             size=particles_per_vapor_tile,
             replace=False,
         ))
-        append_region(selected, cursor + lx / 2.0)
+        tile_index = append_region(selected, cursor + lx / 2.0)
+        if right_vapor_tile is None:
+            right_vapor_tile = tile_index
         cursor += lx
 
     if not np.isclose(cursor, new_lx / 2.0):
         raise RuntimeError("expanded clone regions do not fill the new box")
+
+    def remove_interface_seam_overlaps(
+        interface_tile: int,
+        vapor_tile: int,
+        seam: float,
+        interface_is_right_of_seam: bool,
+    ) -> int:
+        """Remove interface particles that overlap the adjacent vapor tile."""
+
+        if minimum_separation <= 0:
+            return 0
+        interface_positions = position_tiles[interface_tile]
+        vapor_positions = position_tiles[vapor_tile]
+        if interface_is_right_of_seam:
+            interface_near = np.flatnonzero(
+                interface_positions[:, 0] - seam < minimum_separation
+            )
+            vapor_near = np.flatnonzero(
+                seam - vapor_positions[:, 0] < minimum_separation
+            )
+        else:
+            interface_near = np.flatnonzero(
+                seam - interface_positions[:, 0] < minimum_separation
+            )
+            vapor_near = np.flatnonzero(
+                vapor_positions[:, 0] - seam < minimum_separation
+            )
+        keep = np.ones(len(interface_positions), dtype=bool)
+        cutoff_squared = minimum_separation**2
+        neighboring_vapor = vapor_positions[vapor_near]
+        for particle_index in interface_near:
+            delta = neighboring_vapor - interface_positions[particle_index]
+            delta[:, 1] -= np.rint(delta[:, 1] / ly) * ly
+            delta[:, 2] -= np.rint(delta[:, 2] / lz) * lz
+            if np.any(np.einsum("ij,ij->i", delta, delta) < cutoff_squared):
+                keep[particle_index] = False
+        removed = int(np.count_nonzero(~keep))
+        if removed:
+            position_tiles[interface_tile] = interface_positions[keep]
+            type_id_tiles[interface_tile] = type_id_tiles[interface_tile][keep]
+            mass_tiles[interface_tile] = mass_tiles[interface_tile][keep]
+        return removed
+
+    if interface == "linear":
+        left_removed = remove_interface_seam_overlaps(
+            left_interface_tile,
+            left_vapor_tile,
+            left_seam,
+            True,
+        )
+        right_removed = remove_interface_seam_overlaps(
+            right_interface_tile,
+            right_vapor_tile,
+            right_seam,
+            False,
+        )
+        interface_overlap_removals = [left_removed, right_removed]
+        interface_counts = [
+            interface_counts[0] - left_removed,
+            interface_counts[1] - right_removed,
+        ]
+        if any(count < 1 for count in interface_counts):
+            raise RuntimeError(
+                "interface overlap removal left an empty interface sliver"
+            )
 
     positions = np.concatenate(position_tiles, axis=0)
     expanded_type_ids = np.concatenate(type_id_tiles)
@@ -364,6 +442,11 @@ def build_expanded_clone_state(
         interface=interface.title(),
         interface_width=actual_interface_width,
         source_box_length=float(lx),
+        interface_overlap_removals_per_side=(
+            tuple(interface_overlap_removals)
+            if interface == "linear"
+            else (0, 0)
+        ),
     )
 
 
@@ -560,6 +643,11 @@ def _metadata(
             "Vapor_Density_Divisor": float(request.vapor_density_divisor),
             "Interface": constructed.interface,
             "Interface_Width": float(constructed.interface_width),
+            "Interface_Seam_Minimum_Separation": (
+                0.9 * float(config.sigma_LJ)
+                if constructed.interface == "Linear"
+                else 0.0
+            ),
             "Interface_Placement": (
                 "one_source_derived_sliver_per_side"
                 if constructed.interface == "Linear"
@@ -612,6 +700,12 @@ def _metadata(
             ),
             "Interface_Particles_Right": int(
                 constructed.interface_particles_per_side[1]
+            ),
+            "Interface_Overlap_Removals_Left": int(
+                constructed.interface_overlap_removals_per_side[0]
+            ),
+            "Interface_Overlap_Removals_Right": int(
+                constructed.interface_overlap_removals_per_side[1]
             ),
             "Vapor_Particles_Per_Side": int(
                 constructed.vapor_particles_per_side
@@ -718,6 +812,7 @@ def run_expanded_clone(
             effective_seed,
             request.interface,
             request.interface_width,
+            0.9 * float(config.sigma_LJ),
         )
         frame = make_expanded_clone_frame(constructed)
         simulation, thermo, device_name = _make_simulation_from_frame(
@@ -974,6 +1069,12 @@ def run_expanded_clone(
             ),
             "interface_particles_right": (
                 constructed.interface_particles_per_side[1]
+            ),
+            "interface_overlap_removals_left": (
+                constructed.interface_overlap_removals_per_side[0]
+            ),
+            "interface_overlap_removals_right": (
+                constructed.interface_overlap_removals_per_side[1]
             ),
             "vapor_particles_per_side": constructed.vapor_particles_per_side,
             "particles_per_vapor_tile": (

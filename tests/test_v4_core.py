@@ -464,6 +464,37 @@ class LatticeTests(unittest.TestCase):
             np.count_nonzero(right_interface[:, 0] >= 4.5),
         )
 
+    def test_expanded_clone_removes_interface_vapor_seam_overlaps(self):
+        positions = np.column_stack((
+            np.array([-1.8, -1.1, 1.1, 1.8]),
+            np.zeros((4, 2)),
+        ))
+        frame = SimpleNamespace(
+            configuration=SimpleNamespace(
+                box=np.array([4.0, 2.0, 2.0, 0.0, 0.0, 0.0])
+            ),
+            particles=SimpleNamespace(
+                N=4,
+                types=["A"],
+                position=positions,
+                typeid=np.zeros(4, dtype=np.uint32),
+                mass=np.ones(4),
+            ),
+        )
+        state = build_expanded_clone_state(
+            frame,
+            liquid_scale=1,
+            vapor_scale=1,
+            vapor_density_divisor=1.0,
+            seed=9,
+            interface="Linear",
+            interface_width=1.0,
+            minimum_separation=0.6,
+        )
+
+        self.assertEqual(state.interface_overlap_removals_per_side, (1, 1))
+        self.assertEqual(state.interface_particles_per_side, (1, 1))
+
     def test_expanded_center_length_is_independently_scalable(self):
         lattice = build_expanded_fcc_lattice(
             n_cells=3,
